@@ -1,0 +1,61 @@
+{
+  "name": "@leanez/sdk",
+  "version": "1.0.0",
+  "description": "LeanEZ Plugin SDK for distributed plugin development",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "leanez": "./bin/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "leanez",
+    "plugin",
+    "sdk",
+    "distributed",
+    "ai",
+    "automation"
+  ],
+  "author": "LeanEZ Team",
+  "license": "MIT",
+  "dependencies": {
+    "@redis/client": "^1.5.0",
+    "axios": "^1.6.0",
+    "bull": "^4.16.3",
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "inquirer": "^8.2.6",
+    "redis": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/bull": "^4.10.0",
+    "@types/express": "^4.17.21",
+    "@types/inquirer": "^9.0.8",
+    "@types/node": "^20.10.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.3.0"
+  },
+  "files": [
+    "dist/**/*",
+    "bin/**/*",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leanez/leanez-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/leanez/leanez-sdk/issues"
+  },
+  "homepage": "https://github.com/leanez/leanez-sdk#readme"
+}

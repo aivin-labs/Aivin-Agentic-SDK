@@ -1,0 +1,37 @@
+# Development files
+tsconfig.json
+.eslintrc.*
+jest.config.*
+*.test.*
+*.spec.*
+
+# Build artifacts
+examples/
+tests/
+
+# IDE
+.vscode/
+.idea/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# Cache
+.cache/
+.tmp/
+dist/
+
+
+# Environment
+.env
+.env.*
