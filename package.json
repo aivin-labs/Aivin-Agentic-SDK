@@ -1,6 +1,6 @@
 {
   "name": "@leanez/sdk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "LeanEZ Plugin SDK for distributed plugin development",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
