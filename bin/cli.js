@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 
-const { Command } = require('commander');
-const chalk = require('chalk');
-const fs = require('fs');
-const path = require('path');
-const inquirer = require('inquirer');
-const { spawn } = require('child_process');
-const axios = require('axios');
+import { Command } from 'commander';
+import chalk from 'chalk';
+import fs from 'fs';
+import path from 'path';
+import inquirer from 'inquirer';
+import { spawn } from 'child_process';
+import axios from 'axios';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+// ES6 equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const program = new Command();
 
@@ -16,7 +22,7 @@ program
   .version('1.0.0');
 
 // Stack configurations
-const AVAILABLE_STACKS = [
+const DEFAULT_STACKS = [
   {
     name: 'AI_LLM',
     description: 'Large Language Models and AI capabilities',
@@ -25,6 +31,18 @@ const AVAILABLE_STACKS = [
     dockerServices: [],
     imports: ['LLMIO']
   },
+  {
+    name: 'REALTIME_COMMUNICATION',
+    description: 'Real-time messaging and notifications',
+    dependencies: ['redis'],
+    envVars: ['REDIS_URL'],
+    dockerServices: ['redis'],
+    imports: ['PubSubIO'],
+    requires: ['REDIS_CACHE']
+  }
+];
+
+const OPTIONAL_STACKS = [
   {
     name: 'REDIS_CACHE',
     description: 'In-memory caching and session storage',
@@ -49,17 +67,11 @@ const AVAILABLE_STACKS = [
     dockerServices: ['redis'],
     imports: ['BullIO'],
     requires: ['REDIS_CACHE']
-  },
-  {
-    name: 'REALTIME_COMMUNICATION',
-    description: 'Real-time messaging and notifications',
-    dependencies: ['redis'],
-    envVars: ['REDIS_URL'],
-    dockerServices: ['redis'],
-    imports: ['PubSubIO'],
-    requires: ['REDIS_CACHE']
   }
 ];
+
+// Combined stacks for compatibility
+const AVAILABLE_STACKS = [...DEFAULT_STACKS, ...OPTIONAL_STACKS];
 
 // Helper function to get package version
 function getPackageVersion(packageName) {
@@ -175,7 +187,8 @@ async function createFromJSON(jsonConfig, options) {
       throw new Error(`Validation failed: ${validationResult.errors.join(', ')}`);
     }
 
-    const selectedStacks = config.stacks.map(stackName => {
+    // Always include default stacks, then add any specified additional stacks
+    const configuredStacks = config.stacks.map(stackName => {
       const stack = AVAILABLE_STACKS.find(s => s.name === stackName);
       if (!stack) {
         throw new Error(`Unknown stack: ${stackName}`);
@@ -183,9 +196,14 @@ async function createFromJSON(jsonConfig, options) {
       return stack;
     });
 
+    // Combine default stacks with configured stacks (avoid duplicates)
+    const selectedStacks = [...DEFAULT_STACKS, ...configuredStacks.filter(stack => 
+      !DEFAULT_STACKS.some(defaultStack => defaultStack.name === stack.name)
+    )];
+
     const resolvedStacks = resolveStackDependencies(selectedStacks);
 
-    const pluginDir = path.join(process.cwd(), options.outputDir, config.name);
+    const pluginDir = path.join(process.cwd(), options.outputDir || '', config.name);
 
     if (fs.existsSync(pluginDir) && !config.overwrite) {
       throw new Error(`Directory exists: ${pluginDir}`);
@@ -193,6 +211,10 @@ async function createFromJSON(jsonConfig, options) {
 
     if (!options.silent) {
       console.log(chalk.blue('🤖 Creating plugin:'), config.name);
+      console.log(chalk.cyan('📦 Including default stacks: AI_LLM, REALTIME_COMMUNICATION'));
+      if (config.stacks.length > 0) {
+        console.log(chalk.blue('📦 Additional stacks:'), config.stacks.join(', '));
+      }
     }
 
     await createPluginProject(pluginDir, config.name, config.description || 'AI plugin', resolvedStacks, config);
@@ -206,7 +228,7 @@ async function createFromJSON(jsonConfig, options) {
       pluginDir,
       name: config.name,
       description: config.description,
-      stacks: config.stacks,
+      stacks: selectedStacks.map(s => s.name),
       timestamp: new Date().toISOString()
     };
 
@@ -228,8 +250,14 @@ function validatePluginConfig(config) {
     errors.push('Invalid name format');
   }
   
-  if (!config.stacks || !Array.isArray(config.stacks) || config.stacks.length === 0) {
-    errors.push('Invalid stacks');
+  // Allow empty stacks array since default stacks will be added automatically
+  if (config.stacks && !Array.isArray(config.stacks)) {
+    errors.push('Stacks must be array');
+  }
+  
+  // Set default empty array if stacks not provided
+  if (!config.stacks) {
+    config.stacks = [];
   }
   
   if (config.functions && !Array.isArray(config.functions)) {
@@ -331,24 +359,32 @@ async function createInteractive(options) {
     },
     {
       type: 'checkbox',
-      name: 'stacks',
-      message: 'Select required stacks:',
-      choices: AVAILABLE_STACKS.map(stack => ({
+      name: 'optionalStacks',
+      message: 'Select additional stacks (AI_LLM & REALTIME_COMMUNICATION are included by default):',
+      choices: OPTIONAL_STACKS.map(stack => ({
         name: `${stack.name} - ${stack.description}`,
         value: stack,
-        checked: stack.name === 'AI_LLM'
+        checked: false
       })),
-      validate: (choices) => {
-        if (choices.length === 0) return 'Must select at least 1 stack';
-        return true;
-      }
+      validate: () => true // Optional stacks, so no validation needed
     }
   ]);
 
   pluginName = answers.name;
   
+  // Combine default stacks with selected optional stacks
+  const selectedStacks = [...DEFAULT_STACKS, ...answers.optionalStacks];
+  
+  // Show which stacks are included
+  console.log(chalk.cyan('\n📦 Included stacks:'));
+  console.log(chalk.green('   • AI_LLM (default)'));
+  console.log(chalk.green('   • REALTIME_COMMUNICATION (default)'));
+  answers.optionalStacks.forEach(stack => {
+    console.log(chalk.blue(`   • ${stack.name}`));
+  });
+  
   // Resolve stack dependencies
-  const resolvedStacks = resolveStackDependencies(answers.stacks);
+  const resolvedStacks = resolveStackDependencies(selectedStacks);
   
   await createPluginProject(pluginDir, pluginName, answers.description, resolvedStacks, null, currentPackageJson);
   console.log(chalk.green(`\n✅ Plugin files created successfully!`));
@@ -545,53 +581,48 @@ export async function main(input) {
 
 async function createPackageJson(pluginDir, name, description, stacks, currentPackageJson = null) {
   const dependencies = [...new Set(stacks.flatMap(s => s.dependencies))];
-  const depObject = {};
-  
-  // Always include essential packages
-  depObject['@leanez/sdk'] = '^1.0.0';  // From npm registry
-  depObject['dotenv'] = getPackageVersion('dotenv');
+  const newDeps = {
+    '@leanez/sdk': 'latest',
+    'dotenv': getPackageVersion('dotenv')
+  };
   
   dependencies.forEach(dep => {
-    depObject[dep] = getPackageVersion(dep);
+    newDeps[dep] = getPackageVersion(dep);
   });
 
-  const packageJson = {
+  const newPackageJson = {
     name: `@leanez/plugin-${name}`,
     version: '1.0.0',
     description,
     main: 'handler.js',
     type: 'module',
     scripts: {
-      start: 'docker-compose up -d && node handler.js',
+      start: 'docker-compose up -d && leanez start',
       test: 'echo "No tests specified"',
       'docker:down': 'docker-compose down',
       'docker:logs': 'docker-compose logs -f',
       clean: 'rm -rf node_modules package-lock.json && npm install'
     },
-    dependencies: depObject,
+    dependencies: newDeps,
     devDependencies: {
       '@types/node': '^20.10.0'
     },
-    keywords: [
-      'leanez',
-      'plugin',
-      ...stacks.map(s => s.name.toLowerCase())
-    ],
-    engines: {
-      node: '>=16.0.0'
-    }
+    keywords: ['leanez', 'plugin', ...stacks.map(s => s.name.toLowerCase())],
+    engines: { node: '>=16.0.0' }
   };
 
+  // Merge with existing package.json if exists
   if (currentPackageJson) {
-    packageJson.name = currentPackageJson.name || `@leanez/plugin-${name}`;
-    packageJson.scripts = currentPackageJson.scripts || packageJson.scripts;
-    packageJson.dependencies = { ...currentPackageJson.dependencies, ...packageJson.dependencies };
+    const merged = { ...currentPackageJson, ...newPackageJson };
+    merged.scripts = { ...newPackageJson.scripts, ...currentPackageJson.scripts };
+    merged.dependencies = { ...currentPackageJson.dependencies, ...newDeps };
+    merged.devDependencies = { ...newPackageJson.devDependencies, ...currentPackageJson.devDependencies };
+    merged.keywords = [...new Set([...(currentPackageJson.keywords || []), ...newPackageJson.keywords])];
+    
+    fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify(merged, null, 2));
+  } else {
+    fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify(newPackageJson, null, 2));
   }
-
-  fs.writeFileSync(
-    path.join(pluginDir, 'package.json'),
-    JSON.stringify(packageJson, null, 2)
-  );
 }
 
 async function createDockerCompose(pluginDir, stacks) {
@@ -750,7 +781,7 @@ program
       
       // Read all files in current directory (exclude node_modules, .git, etc.)
       const excludeDirs = ['node_modules', '.git', '.tmp', 'dist', 'build'];
-      const excludeFiles = ['.env', '.gitignore', 'package-lock.json', 'yarn.lock'];
+      const excludeFiles = ['.gitignore', 'package-lock.json', 'yarn.lock'];
       
       function readDirectoryRecursive(dir, basePath = '') {
         const files = {};
@@ -959,13 +990,17 @@ program
   });
 
 // Export programmatic API for backend usage
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    createPlugin: createPluginProject,
-    validateConfig: validatePluginConfig,
-    getAvailableStacks: () => AVAILABLE_STACKS
-  };
-}
+export {
+  createPluginProject as createPlugin,
+  validatePluginConfig as validateConfig,
+  AVAILABLE_STACKS,
+  DEFAULT_STACKS,
+  OPTIONAL_STACKS
+};
+
+export const getAvailableStacks = () => AVAILABLE_STACKS;
+export const getDefaultStacks = () => DEFAULT_STACKS;
+export const getOptionalStacks = () => OPTIONAL_STACKS;
 
 // Parse command line arguments
 program.parse(process.argv); 

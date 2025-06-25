@@ -230,8 +230,6 @@ Manifest file (`manifest.json`) định nghĩa cấu hình và metadata của pl
 | `BACKGROUND_JOBS` | Queue system | `bull`, `redis` |
 | `REALTIME_COMMUNICATION` | Real-time messaging | `redis` |
 
-**Lưu ý**: Stacks chỉ dùng trong CLI để generate code và dependencies. Manifest.json KHÔNG chứa stacks.
-
 📋 **Chi tiết về Manifest**: Xem [MANIFEST.md](docs/MANIFEST.md) để hiểu đầy đủ về cấu trúc, properties và examples.
 
 📚 **Chi tiết và ví dụ nâng cao**: Xem [EXAMPLES.md](docs/EXAMPLES.md)

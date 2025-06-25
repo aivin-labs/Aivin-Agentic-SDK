@@ -1,6 +1,5 @@
 import { EventEmitter } from 'events';
 import { PubSubIO } from './services/PubSubIO';
-import { BullIO } from './services/BullIO';
 import { LocalTestServer } from './LocalTestServer';
 import { LLMIO } from './services/LLMIO';
 import * as fs from 'fs';
@@ -188,9 +187,11 @@ export class PluginServer extends EventEmitter {
       const manifestContent = fs.readFileSync(manifestPath, 'utf8');
       const manifest: PluginManifest = JSON.parse(manifestContent);
 
-      // Load handler
-      delete require.cache[require.resolve(handlerPath)];
-      const handler = require(handlerPath);
+      // Load handler using dynamic import to support ES modules
+      // Use eval to prevent TypeScript from transforming the dynamic import
+      const importPath = `file://${path.resolve(handlerPath)}`;
+      const handlerModule = await eval(`import("${importPath}")`);
+      const handler = handlerModule.default || handlerModule;
 
       // Store loaded plugin
       this.plugin = {
@@ -329,36 +330,23 @@ export class PluginServer extends EventEmitter {
     callbackQueue: string
   ): Promise<void> {
     try {
-      await PubSubIO.emit(`plugin-execution-result-${callbackQueue}`, {
+      // Send result via PubSub to LeanEZ server
+      await PubSubIO.emit(callbackQueue, {
         execution_id: executionId,
         server_id: this.serverId,
         result,
         timestamp: new Date().toISOString()
       }, { sender: this.serverId });
       
-      console.log(`📤 Result sent via PubSub: ${executionId}`);
+      console.log(`✅ Result sent to LeanEZ via queue: ${callbackQueue}`);
       
     } catch (error) {
       const err = error as Error;
-      console.error(`Failed to send result to LeanEZ: ${err.message}`);
+      console.error(`❌ Failed to send result to LeanEZ: ${err.message}`);
+      console.error('Make sure PubSub/Redis connection is working properly');
       
-      try {
-        await BullIO.emit({
-          name: `plugin-execution-result-${callbackQueue}`,
-          data: {
-            execution_id: executionId,
-            server_id: this.serverId,
-            result,
-            timestamp: new Date().toISOString()
-          },
-          handler: (data: any) => {
-            console.log('Fallback: Result sent via BullIO:', data);
-            return { success: true };
-          }
-        });
-      } catch (fallbackError) {
-        console.error('Both PubSub and Bull delivery failed:', fallbackError);
-      }
+      // Re-throw the error so caller knows delivery failed
+      throw new Error(`Failed to deliver result to LeanEZ: ${err.message}`);
     }
   }
 

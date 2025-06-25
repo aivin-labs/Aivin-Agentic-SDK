@@ -5,7 +5,7 @@ export const VERSION = '1.0.0';
 export { AutomationClient } from './AutomationClient';
 
 // Types
-export * from './types';
+export * from './src/types';
 
 // Utilities
 export { Logger } from './Logger'; 

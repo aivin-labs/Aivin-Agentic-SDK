@@ -1,9 +1,15 @@
 #!/usr/bin/env node
 
-const { PluginServer } = require('../dist/PluginServer');
-const { LocalTestServer } = require('../dist/LocalTestServer');
-const path = require('path');
-const fs = require('fs');
+import { PluginServer } from '../dist/PluginServer.js';
+import { LocalTestServer } from '../dist/LocalTestServer.js';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+// ES6 equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 /**
  * Plugin Server Entry Point
