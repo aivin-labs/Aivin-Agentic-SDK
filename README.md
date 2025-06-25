@@ -14,39 +14,39 @@ LeanEZ Plugin SDK cho phép developers xây dựng AI-powered plugins với Java
 - 🛠️ **Type-safe** - Full TypeScript support
 - 🚀 **CLI Tools** - Tạo, test, và deploy plugins dễ dàng
 
-## 🚀 Quick Start
+## 🚀 **Quick Start**
 
-### Cài đặt
+### Cài đặt LeanEZ SDK
+
 ```bash
-npm install @leanez/sdk
+# Cài đặt global để có command ngắn gọn
+npm install -g @leanez/sdk
 ```
 
-### Tạo plugin Hello World
+### Tạo Plugin đầu tiên
+
 ```bash
-# Tạo plugin đơn giản
-leanez create hello-world
+# Tạo plugin mới
+leanez create my-awesome-plugin
 
 # Di chuyển vào thư mục plugin
-cd examples/hello-world
+cd my-awesome-plugin
 
-# Start plugin server
+# Chạy plugin
 leanez start
-
-# Deploy plugin
-leanez deploy
 ```
 
 ## 🛠️ **CLI Commands**
 
 ### `leanez create` - Tạo plugin mới
 
-| Option | Mô tả | Mặc định | Ví dụ |
-|--------|-------|----------|-------|
-| `--json <config>` | Tạo từ JSON config (AI mode) | - | `leanez create --json '{"name":"hello","stacks":["AI_LLM"]}'` |
-| `--stdin` | Đọc config từ stdin | - | `echo '{"name":"test"}' \| leanez create --stdin` |
-| `--output-dir <dir>` | Thư mục output | `examples` | `leanez create --output-dir plugins` |
-| `--silent` | Mode im lặng | - | `leanez create --silent` |
-| `--json-output` | Output JSON format | - | `leanez create --json-output` |
+| Option | Mô tả | Ví dụ |
+|--------|-------|-------|
+| `--json <config>` | Tạo từ JSON config (AI mode) | `leanez create --json '{"name":"hello","stacks":["AI_LLM"]}'` |
+| `--stdin` | Đọc config từ stdin | `echo '{"name":"test"}' \| leanez create --stdin` |
+| `--name <name>` | Plugin name (nếu không có sẽ prompt) | `leanez create --name my-plugin` |
+| `--silent` | Mode im lặng | `leanez create --silent` |
+| `--json-output` | Output JSON format | `leanez create --json-output` |
 
 **Ví dụ sử dụng:**
 ```bash
@@ -80,36 +80,19 @@ cat manifest.json | leanez validate --stdin
 leanez validate --json manifest.json --json-output
 ```
 
-### `leanez list-stacks` - Liệt kê available stacks
-
-| Option | Mô tả | Ví dụ |
-|--------|-------|-------|
-| `--json` | Output JSON format | `leanez list-stacks --json` |
-
-**Ví dụ sử dụng:**
-```bash
-# Hiển thị danh sách stacks
-leanez list-stacks
-
-# Output JSON format
-leanez list-stacks --json
-```
-
 ### `leanez start` - Start plugin server
 
-**Không có options**
+Không có options - chạy plugin server trong thư mục hiện tại.
 
 ```bash
-# Start server trong thư mục plugin
 leanez start
 ```
 
 ### `leanez deploy` - Deploy plugin lên server
 
-**Không có options**
+Không có options - deploy plugin từ thư mục hiện tại.
 
 ```bash
-# Deploy plugin hiện tại
 leanez deploy
 ```
 
@@ -135,7 +118,7 @@ leanez login --api-key YOUR_API_KEY
 **Bước 1: Tạo plugin**
 ```bash
 leanez create hello-world
-cd examples/hello-world
+cd hello-world
 ```
 
 **Bước 2: Code được tạo tự động**

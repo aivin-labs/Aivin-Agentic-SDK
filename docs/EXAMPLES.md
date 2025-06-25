@@ -48,18 +48,42 @@ export async function textSummarizer(input) {
 ```json
 {
   "name": "text-summarizer",
-  "description": "Tóm tắt văn bản thông minh với AI",
-  "stacks": ["AI_LLM"],
+  "version": "1.0.0",
+  "description": "AI text summarization plugin",
+  "author": "LeanEZ Team",
+  "email": "support@leanez.app",
+  "agent_specialized": ["content", "writing", "*"],
+  "agent_designated": [],
   "functions": [
     {
       "name": "textSummarizer",
-      "inputs": {
-        "text": "string"
-      },
-      "outputs": {
-        "summary": "string",
-        "original_length": "number"
-      }
+      "triggers": ["manual", "api", "chat"],
+      "description": "Tóm tắt văn bản thành 3 câu chính",
+      "inputs": [
+        {
+          "field": "text",
+          "required": true,
+          "description": "Văn bản cần tóm tắt",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "field": "success",
+          "description": "Trạng thái thành công",
+          "type": "boolean"
+        },
+        {
+          "field": "summary",
+          "description": "Văn bản đã tóm tắt",
+          "type": "string"
+        },
+        {
+          "field": "original_length",
+          "description": "Độ dài văn bản gốc",
+          "type": "number"
+        }
+      ]
     }
   ]
 }
@@ -67,7 +91,7 @@ export async function textSummarizer(input) {
 
 **Cách sử dụng**:
 ```bash
-npx leanez create text-summarizer --json manifest.json
+leanez create text-summarizer --json manifest.json
 ```
 
 ---
@@ -130,20 +154,53 @@ export async function todoManager(input) {
 ```json
 {
   "name": "todo-manager",
+  "version": "1.0.0",
   "description": "Quản lý tasks cơ bản",
-  "stacks": ["MONGODB"],
+  "author": "LeanEZ Team",
+  "email": "support@leanez.app",
+  "agent_specialized": ["productivity", "task-management", "*"],
+  "agent_designated": ["productivity-agent"],
   "functions": [
     {
       "name": "todoManager",
-      "inputs": {
-        "action": "string",
-        "task": "string?"
-      },
-      "outputs": {
-        "success": "boolean",
-        "message": "string",
-        "todos": "array?"
-      }
+      "triggers": ["manual", "api", "chat"],
+      "description": "Thêm và liệt kê công việc",
+      "inputs": [
+        {
+          "field": "action",
+          "required": true,
+          "description": "Hành động: 'add' hoặc 'list'",
+          "type": "string"
+        },
+        {
+          "field": "task",
+          "required": false,
+          "description": "Nội dung task (chỉ cần khi action=add)",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "field": "success",
+          "description": "Trạng thái thành công",
+          "type": "boolean"
+        },
+        {
+          "field": "message",
+          "description": "Thông báo kết quả",
+          "type": "string"
+        },
+        {
+          "field": "todos",
+          "description": "Danh sách todos (chỉ khi action=list)",
+          "type": "array"
+        },
+        {
+          "field": "todoId",
+          "description": "ID của todo vừa tạo (chỉ khi action=add)",
+          "type": "string"
+        }
+      ]
     }
   ]
 }
@@ -185,6 +242,69 @@ export async function weatherNotifier(input) {
     message: `Đã cập nhật thời tiết ${input.city}: ${input.temperature}°C, ${input.condition}`,
     cached: true
   };
+}
+```
+
+**Manifest.json**:
+```json
+{
+  "name": "weather-notifier",
+  "version": "1.0.0",
+  "description": "Cache thông tin thời tiết và gửi notifications real-time",
+  "author": "Weather Team",
+  "email": "weather@leanez.app",
+  "agent_specialized": ["weather", "notifications", "*"],
+  "agent_designated": [],
+  "functions": [
+    {
+      "name": "weatherNotifier",
+      "triggers": ["manual", "api", "webhook"],
+      "description": "Cập nhật và thông báo thời tiết",
+      "inputs": [
+        {
+          "field": "city",
+          "required": true,
+          "description": "Tên thành phố",
+          "type": "string"
+        },
+        {
+          "field": "temperature",
+          "required": true,
+          "description": "Nhiệt độ (°C)",
+          "type": "number"
+        },
+        {
+          "field": "condition",
+          "required": true,
+          "description": "Tình trạng thời tiết",
+          "type": "string"
+        },
+        {
+          "field": "humidity",
+          "required": false,
+          "description": "Độ ẩm (%)",
+          "type": "number"
+        }
+      ],
+      "outputs": [
+        {
+          "field": "success",
+          "description": "Trạng thái thành công",
+          "type": "boolean"
+        },
+        {
+          "field": "message",
+          "description": "Thông báo kết quả",
+          "type": "string"
+        },
+        {
+          "field": "cached",
+          "description": "Đã cache thành công",
+          "type": "boolean"
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -236,6 +356,63 @@ export async function emailSender(input) {
 }
 ```
 
+**Manifest.json**:
+```json
+{
+  "name": "email-sender",
+  "version": "1.0.0",
+  "description": "Gửi email trong background sử dụng queue system",
+  "author": "Communication Team",
+  "email": "comm@leanez.app", 
+  "agent_specialized": ["communication", "email", "*"],
+  "agent_designated": ["email-agent"],
+  "functions": [
+    {
+      "name": "emailSender",
+      "triggers": ["manual", "api", "chat"],
+      "description": "Gửi email bất đồng bộ",
+      "inputs": [
+        {
+          "field": "email",
+          "required": true,
+          "description": "Email người nhận",
+          "type": "string"
+        },
+        {
+          "field": "subject",
+          "required": true,
+          "description": "Tiêu đề email",
+          "type": "string"
+        },
+        {
+          "field": "message",
+          "required": true,
+          "description": "Nội dung email",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "field": "success",
+          "description": "Trạng thái thành công",
+          "type": "boolean"
+        },
+        {
+          "field": "message",
+          "description": "Thông báo kết quả",
+          "type": "string"
+        },
+        {
+          "field": "emailResult",
+          "description": "Kết quả gửi email từ background job",
+          "type": "object"
+        }
+      ]
+    }
+  ]
+}
+```
+
 ---
 
 ## 5. Smart Search với Embeddings
@@ -281,6 +458,56 @@ export async function smartSearch(input) {
     results: results.slice(0, 3), // Top 3 results
     embeddingSize: queryEmbedding.length
   };
+}
+```
+
+**Manifest.json**:
+```json
+{
+  "name": "smart-search",
+  "version": "1.0.0",
+  "description": "Tìm kiếm thông minh sử dụng AI embeddings và cache Redis",
+  "author": "AI Search Team",
+  "email": "search@leanez.app",
+  "agent_specialized": ["search", "ai", "knowledge", "*"],
+  "agent_designated": ["search-agent"],
+  "functions": [
+    {
+      "name": "smartSearch",
+      "triggers": ["manual", "api", "chat"],
+      "description": "Tìm kiếm semantic với AI embeddings",
+      "inputs": [
+        {
+          "field": "query",
+          "required": true,
+          "description": "Từ khóa tìm kiếm",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "field": "success",
+          "description": "Trạng thái thành công",
+          "type": "boolean"
+        },
+        {
+          "field": "query",
+          "description": "Query đã xử lý",
+          "type": "string"
+        },
+        {
+          "field": "results",
+          "description": "Kết quả tìm kiếm",
+          "type": "array"
+        },
+        {
+          "field": "embeddingSize",
+          "description": "Kích thước vector embedding",
+          "type": "number"
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -469,29 +696,89 @@ export async function workReminder(input) {
 ```json
 {
   "name": "work-reminder",
-  "description": "Plugin nhắc nhở công việc thông minh với AI",
   "version": "1.0.0",
-  "stacks": ["AI_LLM", "MONGODB", "BACKGROUND_JOBS", "REALTIME_COMMUNICATION", "REDIS_CACHE"],
+  "description": "Plugin nhắc nhở công việc thông minh với AI",
+  "author": "Productivity Team",
+  "email": "productivity@leanez.app",
+  "agent_specialized": ["productivity", "task-management", "reminders", "*"],
+  "agent_designated": ["productivity-agent", "task-manager"],
   "functions": [
     {
       "name": "workReminder",
+      "triggers": ["manual", "api", "chat", "schedule"],
       "description": "Quản lý và nhắc nhở công việc tự động",
-      "inputs": {
-        "action": "string",
-        "title": "string?",
-        "assignedTo": "array?",
-        "dueDate": "string?",
-        "priority": "string?",
-        "reminderTime": "string?",
-        "taskId": "string?"
-      },
-      "outputs": {
-        "success": "boolean",
-        "message": "string",
-        "taskId": "string?",
-        "tasks": "array?",
-        "smartDescription": "string?"
-      }
+      "inputs": [
+        {
+          "field": "action",
+          "required": true,
+          "description": "Hành động: 'create', 'list', hoặc 'complete'",
+          "type": "string"
+        },
+        {
+          "field": "title",
+          "required": false,
+          "description": "Tiêu đề task",
+          "type": "string"
+        },
+        {
+          "field": "assignedTo",
+          "required": false,
+          "description": "Danh sách user IDs được assign",
+          "type": "array"
+        },
+        {
+          "field": "dueDate",
+          "required": false,
+          "description": "Ngày hết hạn (ISO string)",
+          "type": "string"
+        },
+        {
+          "field": "priority",
+          "required": false,
+          "description": "Mức ưu tiên: low, medium, high",
+          "type": "string",
+          "default": "medium"
+        },
+        {
+          "field": "reminderTime",
+          "required": false,
+          "description": "Thời gian nhắc nhở (ISO string)",
+          "type": "string"
+        },
+        {
+          "field": "taskId",
+          "required": false,
+          "description": "ID của task (cho action complete)",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "field": "success",
+          "description": "Trạng thái thành công",
+          "type": "boolean"
+        },
+        {
+          "field": "message",
+          "description": "Thông báo kết quả",
+          "type": "string"
+        },
+        {
+          "field": "taskId",
+          "description": "ID của task (khi tạo mới)",
+          "type": "string"
+        },
+        {
+          "field": "tasks",
+          "description": "Danh sách tasks (khi action=list)",
+          "type": "array"
+        },
+        {
+          "field": "smartDescription",
+          "description": "Mô tả thông minh được tạo bởi AI",
+          "type": "string"
+        }
+      ]
     }
   ],
   "permissions": [
@@ -499,11 +786,7 @@ export async function workReminder(input) {
     "workspace:notify",
     "user:notify",
     "background:jobs"
-  ],
-  "dependencies": {
-    "mongoose": "^7.0.0",
-    "bull": "^4.0.0"
-  }
+  ]
 }
 ```
 
@@ -514,29 +797,22 @@ export async function workReminder(input) {
 ### 1. Tạo plugin từ ví dụ
 ```bash
 # Tạo plugin từ manifest
-npx leanez create my-plugin --json ./manifest.json
+leanez create my-plugin --json ./manifest.json
 
 # Hoặc tạo interactive
-npx leanez create my-plugin
+leanez create my-plugin
 ```
 
 ### 2. Development
 ```bash
 cd my-plugin
 npm install
-npx leanez dev
+leanez start
 ```
 
-### 3. Test
+### 3. Deploy
 ```bash
-# Test với input cụ thể
-npx leanez test --input '{"action":"create","title":"Họp team"}'
-```
-
-### 4. Deploy
-```bash
-npx leanez build
-npx leanez deploy
+leanez deploy
 ```
 
 ---

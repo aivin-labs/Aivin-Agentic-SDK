@@ -61,6 +61,12 @@ const AVAILABLE_STACKS = [
   }
 ];
 
+// Helper function to get package version
+function getPackageVersion(packageName) {
+  // Use latest for all packages to avoid version conflicts
+  return 'latest';
+}
+
 // Helper functions
 function generateRandomPassword() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -101,7 +107,7 @@ program
   .description('Create new plugin')
   .option('--json <config>', 'JSON config (AI mode)')
   .option('--stdin', 'Read from stdin')
-  .option('--output-dir <dir>', 'Output directory', 'examples')
+  .option('--name <name>', 'Plugin name (if not specified, will prompt)')
   .option('--silent', 'Silent mode')
   .option('--json-output', 'JSON output')
   .action(async (options) => {
@@ -292,11 +298,25 @@ program
 async function createInteractive(options) {
   console.log(chalk.blue('🚀 LeanEZ Plugin Creator\n'));
 
+  const pluginDir = process.cwd();
+  let pluginName = options.name;
+
+  // Check if package.json exists to get plugin name
+  let currentPackageJson = null;
+  const packageJsonPath = path.join(process.cwd(), 'package.json');
+  if (fs.existsSync(packageJsonPath)) {
+    currentPackageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    pluginName = pluginName || currentPackageJson.name?.replace('@leanez/plugin-', '') || path.basename(process.cwd());
+  } else {
+    pluginName = pluginName || path.basename(process.cwd());
+  }
+
   const answers = await inquirer.prompt([
     {
       type: 'input',
       name: 'name',
       message: 'Plugin name:',
+      default: pluginName,
       validate: (input) => {
         if (!input.trim()) return 'Plugin name cannot be empty';
         if (!/^[a-z0-9-]+$/.test(input)) return 'Plugin name must contain only lowercase letters, numbers, and hyphens';
@@ -307,7 +327,7 @@ async function createInteractive(options) {
       type: 'input',
       name: 'description',
       message: 'Plugin description:',
-      default: 'New LeanEZ plugin'
+      default: currentPackageJson?.description || 'New LeanEZ plugin'
     },
     {
       type: 'checkbox',
@@ -325,28 +345,25 @@ async function createInteractive(options) {
     }
   ]);
 
-  const { name, description, stacks } = answers;
-  const pluginDir = path.join(process.cwd(), options.outputDir, name);
-
-  try {
-    // Resolve stack dependencies
-    const resolvedStacks = resolveStackDependencies(stacks);
-    
-    await createPluginProject(pluginDir, name, description, resolvedStacks);
-    console.log(chalk.green(`\n✅ Plugin "${name}" created successfully!`));
-    console.log(`📁 Directory: ${pluginDir}`);
-    console.log(chalk.cyan(`\n🔧 Next steps:`));
-    console.log(`   cd ${options.outputDir}/${name}`);
-    console.log(`   docker-compose up -d  # Start selected services`);
-    console.log(`   npm install`);
-    console.log(`   npm run dev`);
-  } catch (error) {
-    console.error(chalk.red('❌ Error creating plugin:'), error.message);
-    process.exit(1);
+  pluginName = answers.name;
+  
+  // Resolve stack dependencies
+  const resolvedStacks = resolveStackDependencies(answers.stacks);
+  
+  await createPluginProject(pluginDir, pluginName, answers.description, resolvedStacks, null, currentPackageJson);
+  console.log(chalk.green(`\n✅ Plugin files created successfully!`));
+  console.log(`📁 Directory: ${pluginDir}`);
+  console.log(chalk.cyan(`\n🔧 Next steps:`));
+  if (resolvedStacks.some(s => s.dockerServices.length > 0)) {
+    console.log(`   npm install  # Install dependencies`);
+    console.log(`   npm start    # Start plugin (Docker will auto-start)`);
+  } else {
+    console.log(`   npm install  # Install dependencies`);
+    console.log(`   npm start    # Start plugin`);
   }
 }
 
-async function createPluginProject(pluginDir, name, description, stacks, aiConfig = null) {
+async function createPluginProject(pluginDir, name, description, stacks, aiConfig = null, currentPackageJson = null) {
   // Create directory
   if (!fs.existsSync(pluginDir)) {
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -362,7 +379,7 @@ async function createPluginProject(pluginDir, name, description, stacks, aiConfi
   await Promise.all([
     createManifest(pluginDir, name, description, aiConfig),
     createHandler(pluginDir, stacks, aiConfig),
-    createPackageJson(pluginDir, name, description, stacks),
+    createPackageJson(pluginDir, name, description, stacks, currentPackageJson),
     createDockerCompose(pluginDir, stacks),
     createEnv(pluginDir, stacks)
   ]);
@@ -373,16 +390,40 @@ async function createManifest(pluginDir, name, description, aiConfig) {
   let functions = [
     {
       name: 'main',
+      triggers: ['manual', 'api', 'chat'],
       description: 'Main plugin function',
-      inputs: {
-        data: { type: 'object', description: 'Input data for processing' },
-        options: { type: 'object', description: 'Processing options', optional: true }
-      },
-      outputs: {
-        success: { type: 'boolean' },
-        data: { type: 'object' },
-        message: { type: 'string' }
-      }
+      inputs: [
+        {
+          field: 'data',
+          required: false,
+          description: 'Input data for processing',
+          type: 'object'
+        },
+        {
+          field: 'options',
+          required: false,
+          description: 'Processing options',
+          type: 'object',
+          default: {}
+        }
+      ],
+      outputs: [
+        {
+          field: 'success',
+          description: 'Operation success status',
+          type: 'boolean'
+        },
+        {
+          field: 'data',
+          description: 'Processed data result',
+          type: 'object'
+        },
+        {
+          field: 'message',
+          description: 'Result message',
+          type: 'string'
+        }
+      ]
     }
   ];
 
@@ -406,6 +447,10 @@ async function createManifest(pluginDir, name, description, aiConfig) {
   if (aiConfig?.email) {
     manifest.email = aiConfig.email;
   }
+
+  // Add agent configuration
+  manifest.agent_specialized = aiConfig?.agent_specialized || [];
+  manifest.agent_designated = aiConfig?.agent_designated || [];
 
   fs.writeFileSync(
     path.join(pluginDir, 'manifest.json'),
@@ -498,17 +543,16 @@ export async function main(input) {
   fs.writeFileSync(path.join(pluginDir, 'handler.js'), handlerContent);
 }
 
-async function createPackageJson(pluginDir, name, description, stacks) {
+async function createPackageJson(pluginDir, name, description, stacks, currentPackageJson = null) {
   const dependencies = [...new Set(stacks.flatMap(s => s.dependencies))];
   const depObject = {};
   
+  // Always include essential packages
+  depObject['@leanez/sdk'] = '^1.0.0';  // From npm registry
+  depObject['dotenv'] = getPackageVersion('dotenv');
+  
   dependencies.forEach(dep => {
-    switch (dep) {
-      case 'mongoose': depObject[dep] = 'latest'; break;
-      case 'redis': depObject[dep] = 'latest'; break;
-      case 'bull': depObject[dep] = 'latest'; break;
-      default: depObject[dep] = 'latest';
-    }
+    depObject[dep] = getPackageVersion(dep);
   });
 
   const packageJson = {
@@ -516,15 +560,33 @@ async function createPackageJson(pluginDir, name, description, stacks) {
     version: '1.0.0',
     description,
     main: 'handler.js',
+    type: 'module',
     scripts: {
-      dev: 'node handler.js',
-      test: 'echo "No tests specified"'
+      start: 'docker-compose up -d && node handler.js',
+      test: 'echo "No tests specified"',
+      'docker:down': 'docker-compose down',
+      'docker:logs': 'docker-compose logs -f',
+      clean: 'rm -rf node_modules package-lock.json && npm install'
     },
-    dependencies: {
-      '@leanez/sdk': 'file:../../',
-      ...depObject
+    dependencies: depObject,
+    devDependencies: {
+      '@types/node': '^20.10.0'
+    },
+    keywords: [
+      'leanez',
+      'plugin',
+      ...stacks.map(s => s.name.toLowerCase())
+    ],
+    engines: {
+      node: '>=16.0.0'
     }
   };
+
+  if (currentPackageJson) {
+    packageJson.name = currentPackageJson.name || `@leanez/plugin-${name}`;
+    packageJson.scripts = currentPackageJson.scripts || packageJson.scripts;
+    packageJson.dependencies = { ...currentPackageJson.dependencies, ...packageJson.dependencies };
+  }
 
   fs.writeFileSync(
     path.join(pluginDir, 'package.json'),
@@ -635,27 +697,6 @@ async function createEnv(pluginDir, stacks) {
     envContent.join('\n')
   );
 }
-
-// Command: List available stacks
-program
-  .command('list-stacks')
-  .description('List available stacks')
-  .option('--json', 'Output as JSON')
-  .action((options) => {
-    if (options.json) {
-      console.log(JSON.stringify(AVAILABLE_STACKS, null, 2));
-    } else {
-      console.log(chalk.blue('📦 Available Stacks:\n'));
-      AVAILABLE_STACKS.forEach(stack => {
-        console.log(chalk.green(`• ${stack.name}`));
-        console.log(`  ${stack.description}`);
-        if (stack.dependencies.length > 0) {
-          console.log(`  Dependencies: ${stack.dependencies.join(', ')}`);
-        }
-        console.log();
-      });
-    }
-  });
 
 // Command: start plugin server
 program

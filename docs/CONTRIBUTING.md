@@ -122,7 +122,7 @@ Chúng tôi tin rằng **những người sáng tạo xứng đáng nhận phầ
 ```bash
 # Tạo AI Agent của bạn
 leanez create my-awesome-agent
-cd examples/my-awesome-agent
+cd my-awesome-agent
 
 # Triển khai và bắt đầu kiếm tiền
 leanez deploy
@@ -140,7 +140,7 @@ leanez deploy
 ### 1. **Thiết lập Môi trường Phát triển**
 ```bash
 # Cài đặt dependencies
-npm install leanez
+npm install -g @leanez/sdk
 ```
 
 ### 2. **Tạo Plugin đầu tiên của bạn**
@@ -229,14 +229,13 @@ leanez deploy
 
 **Sẵn sàng xây dựng tương lai của AI?** 
 
-[🚀 Bắt đầu Đóng góp Hôm nay](https://github.com/leanez/leanez-sdk/issues/good-first-issue)
+[🚀 Bắt đầu Đóng góp Hôm nay](https://github.com/leanez-ai/sdk/issues/good-first-issue)
 
 ---
 
 **💰 Bắt đầu kiếm tiền với AI. Tham gia Cộng đồng LeanEZ:**
 - 🌐 **Website**: https://leanez.app
 - 💬 **Discord**: https://discord.gg/leanez
-- 📧 **Email**: developers@leanez.app
-- 🐦 **Twitter**: @LeanEZPlatform
+- 📧 **Email**: system@gmvbgroup.com
 
 **Tương lai của phát triển AI là hợp tác, có lợi nhuận và dễ tiếp cận. Hãy tham gia cùng chúng tôi! 🚀** 

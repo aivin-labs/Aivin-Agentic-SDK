@@ -11,6 +11,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
   "version": "1.0.0",
   "description": "Plugin description",
   "author": "Author Name",
+  "email": "author@example.com",
   "agent_specialized": ["*"],
   "agent_designated": [],
   "functions": [
@@ -35,6 +36,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
 | `version` | `string` | ✅ | Phiên bản plugin (semantic versioning) | `"1.0.0"` |
 | `description` | `string` | ✅ | Mô tả ngắn gọn về plugin | `"Summarize text using AI"` |
 | `author` | `string` | ❌ | Tên tác giả hoặc tổ chức | `"LeanEZ Team"` |
+| `email` | `string` | ❌ | Email để gửi/nhận thông báo về plugin | `"support@leanez.app"` |
 | `agent_specialized` | `string[]` | ❌ | Danh sách agents được chuyên biệt hóa | `["*"]` hoặc `["sales", "support"]` |
 | `agent_designated` | `string[]` | ❌ | Danh sách agents được chỉ định cụ thể | `["agent-1", "agent-2"]` |
 | `functions` | `PluginFunction[]` | ✅ | Danh sách các functions của plugin | `[{...}]` |
@@ -135,6 +137,9 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
   "version": "1.0.0",
   "description": "Simple greeting plugin",
   "author": "Developer",
+  "email": "dev@example.com",
+  "agent_specialized": ["*"],
+  "agent_designated": [],
   "functions": [
     {
       "name": "main",
