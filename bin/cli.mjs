@@ -224,6 +224,9 @@ async function createFromJSON(jsonConfig, options) {
 
     if (!options.silent) {
       console.log(chalk.green('✅ Created:'), pluginDir);
+      console.log(chalk.cyan('\n🔧 Next steps:'));
+      console.log(`   npm install     # Install dependencies`);
+      console.log(`   npm start       # Start plugin`);
     }
 
     return {
@@ -393,12 +396,11 @@ async function createInteractive(options) {
   console.log(chalk.green(`\n✅ Plugin files created successfully!`));
   console.log(`📁 Directory: ${pluginDir}`);
   console.log(chalk.cyan(`\n🔧 Next steps:`));
+  console.log(`   npm install     # Install dependencies`);
+  console.log(`   npm start       # Start plugin (with Docker services)`);
+  console.log(`   npm run dev     # Start plugin only (development)`);
   if (resolvedStacks.some(s => s.dockerServices.length > 0)) {
-    console.log(`   npm install  # Install dependencies`);
-    console.log(`   npm start    # Start plugin (Docker will auto-start)`);
-  } else {
-    console.log(`   npm install  # Install dependencies`);
-    console.log(`   npm start    # Start plugin`);
+    console.log(chalk.gray(`\n🐳 Docker services will auto-start with 'npm start'`));
   }
 }
 
@@ -419,8 +421,10 @@ async function createPluginProject(pluginDir, name, description, stacks, aiConfi
     createManifest(pluginDir, name, description, aiConfig),
     createHandler(pluginDir, stacks, aiConfig),
     createPackageJson(pluginDir, name, description, stacks, currentPackageJson),
+    createTsConfig(pluginDir),
     createDockerCompose(pluginDir, stacks),
-    createEnv(pluginDir, stacks)
+    createEnv(pluginDir, stacks),
+    copyAIGuide(pluginDir)
   ]);
 }
 
@@ -477,6 +481,8 @@ async function createManifest(pluginDir, name, description, aiConfig) {
   const newManifest = {
     // Defaults
     id: randomBytes(16).toString('hex'),
+    name,
+    description,
     version: '1.0.0',
     functions: defaultFunctions,
     agent_specialized: [],
@@ -486,8 +492,6 @@ async function createManifest(pluginDir, name, description, aiConfig) {
     ...currentManifest,
     
     // New values (override everything)
-    name,
-    description,
     ...(aiConfig || {})
   };
 
@@ -576,7 +580,7 @@ export async function main(input) {
 `;
   }
 
-  fs.writeFileSync(path.join(pluginDir, 'handler.js'), handlerContent);
+  fs.writeFileSync(path.join(pluginDir, 'handler.ts'), handlerContent);
 }
 
 async function createPackageJson(pluginDir, name, description, stacks, currentPackageJson = null) {
@@ -591,21 +595,18 @@ async function createPackageJson(pluginDir, name, description, stacks, currentPa
   });
 
   const newPackageJson = {
-    name: `@leanez/plugin-${name}`,
+    name,
     version: '1.0.0',
     description,
-    main: 'handler.js',
     type: 'module',
     scripts: {
       start: 'docker-compose up -d && leanez start',
-      test: 'echo "No tests specified"',
-      'docker:down': 'docker-compose down',
-      'docker:logs': 'docker-compose logs -f',
       clean: 'rm -rf node_modules package-lock.json && npm install'
     },
     dependencies: newDeps,
     devDependencies: {
-      '@types/node': '^20.10.0'
+      '@types/node': 'latest',
+      'typescript': 'latest'
     },
     keywords: ['leanez', 'plugin', ...stacks.map(s => s.name.toLowerCase())],
     engines: { node: '>=16.0.0' }
@@ -623,6 +624,45 @@ async function createPackageJson(pluginDir, name, description, stacks, currentPa
   } else {
     fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify(newPackageJson, null, 2));
   }
+}
+
+async function createTsConfig(pluginDir) {
+  const tsConfig = {
+    compilerOptions: {
+      target: "ES2022",
+      lib: ["ES2022"],
+      module: "ESNext",
+      moduleResolution: "node",
+      allowSyntheticDefaultImports: true,
+      esModuleInterop: true,
+      strict: true,
+      skipLibCheck: true,
+      forceConsistentCasingInFileNames: true,
+      resolveJsonModule: true,
+      allowImportingTsExtensions: true,
+      noEmit: true,
+      noImplicitAny: false,
+      noImplicitReturns: false,
+      noImplicitThis: false,
+      noUnusedLocals: false,
+      noUnusedParameters: false,
+      useUnknownInCatchVariables: false
+    },
+    include: [
+      "*.ts",
+      "src/**/*"
+    ],
+    exclude: [
+      "node_modules",
+      "**/*.test.ts",
+      "**/*.spec.ts"
+    ]
+  };
+
+  fs.writeFileSync(
+    path.join(pluginDir, 'tsconfig.json'),
+    JSON.stringify(tsConfig, null, 2)
+  );
 }
 
 async function createDockerCompose(pluginDir, stacks) {
@@ -666,7 +706,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - ./data/redis:/data
+      - ./.data/redis:/data
     restart: unless-stopped
 `;
     }
@@ -682,7 +722,7 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${services.mongodb.environment.MONGO_INITDB_ROOT_PASSWORD}
       MONGO_INITDB_DATABASE: leanez_plugins
     volumes:
-      - ./data/mongodb:/data/db
+      - ./.data/mongodb:/data/db
     restart: unless-stopped
 `;
     }
@@ -724,6 +764,15 @@ async function createEnv(pluginDir, stacks) {
     path.join(pluginDir, '.env'),
     envContent.join('\n')
   );
+}
+
+async function copyAIGuide(pluginDir) {
+  const guidePath = path.join(__dirname, '..', 'AI-Plugin-Guide.md');
+  const destPath = path.join(pluginDir, 'AI-Plugin-Guide.md');
+  
+  if (fs.existsSync(guidePath)) {
+    fs.copyFileSync(guidePath, destPath);
+  }
 }
 
 // Command: start plugin server

@@ -160,7 +160,7 @@ cd hello-world
 }
 ```
 
-**handler.js:**
+**handler.ts:**
 ```javascript
 import { LLMIO } from '@leanez/sdk';
 
@@ -340,7 +340,7 @@ cd my-plugin
 ```
 
 ### 3. Development
-- Code logic trong `handler.js`
+- Code logic trong `handler.ts`
 - Mô tả plugins trong `manifest.json`
 - Start server với `leanez start`
 - Validate config với `leanez validate`

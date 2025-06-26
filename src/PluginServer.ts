@@ -82,7 +82,7 @@ export class PluginServer extends EventEmitter {
       await this.loadPlugin();
       
       if (!this.plugin) {
-        throw new Error('No plugin loaded. Make sure manifest.json and handler.js exist.');
+        throw new Error('No plugin loaded. Make sure manifest.json and handler.ts exist.');
       }
       
       console.log(`✅ Loaded plugin: ${this.plugin.manifest.id} v${this.plugin.manifest.version}`);
@@ -178,10 +178,10 @@ export class PluginServer extends EventEmitter {
     try {
       const pluginsPath = this.config.plugins_path!;
       const manifestPath = path.join(pluginsPath, 'manifest.json');
-      const handlerPath = path.join(pluginsPath, 'handler.js');
+      const handlerPath = path.join(pluginsPath, 'handler.ts');
       
       if (!fs.existsSync(manifestPath) || !fs.existsSync(handlerPath)) {
-        throw new Error(`Plugin files not found. Expected manifest.json and handler.js in: ${pluginsPath}`);
+        throw new Error(`Plugin files not found. Expected manifest.json and handler.ts in: ${pluginsPath}`);
       }
       
       // Load manifest

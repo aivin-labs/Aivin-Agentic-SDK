@@ -1,552 +1,377 @@
-# 🤖 LLMIO - AI Operations
+# 🤖 LLMIO - AI Operations Documentation
 
-**LLMIO** cung cấp complete AI capabilities bao gồm chat, embeddings, assistants, và token calculation.
+**LLMIO** cung cấp complete AI capabilities với focus mạnh vào structured outputs, embeddings, assistants, và advanced AI operations.
 
-## 🚀 Tính năng chính
+## 🚀 Core Features
 
-| Tính năng | Mô tả |
-|-----------|-------|
-| **AI Chat** | Tương tác với các AI models (GPT-4, Claude, etc.) |
-| **Embeddings** | Generate vector embeddings cho semantic search |
-| **AI Assistants** | Quản lý conversations với memory/context |
-| **Token Management** | Calculate tokens và cost tracking |
-| **Media Support** | Hỗ trợ images, files trong AI prompts |
+| Feature | Description | Use Cases |
+|---------|-------------|-----------|
+| **Structured AI Chat** | AI responses với JSON schema validation | Data extraction, form generation, API responses |
+| **Vector Embeddings** | High-dimensional vector representations | Semantic search, similarity matching, clustering |
+| **AI Assistants** | Persistent conversations với memory | Customer support, tutoring, complex workflows |
+| **Token Management** | Cost calculation và optimization | Budget control, usage analytics |
+| **Multimodal Support** | Images, files, audio trong AI prompts | Vision analysis, document processing |
 
-## 📖 API Reference
+## 📖 Complete API Reference
 
-### Basic Chat Operations
+### Core Chat Operations
 
 #### `LLMIO.prompt(message, options?)`
-Gửi prompt tới AI model
+**Primary method** cho tất cả AI interactions với full customization
 
 ##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `message` | `string` | ✅ | - | Nội dung prompt gửi tới AI |
-| `options` | `PromptOptions` | ❌ | `{}` | Tùy chọn cho AI request |
-| `options.model` | `string` | ❌ | `'gpt-3.5-turbo'` | AI model sử dụng |
-| `options.temperature` | `number` | ❌ | `0.7` | Creativity level (0.0 - 1.0) |
-| `options.maxTokens` | `number` | ❌ | `1000` | Maximum tokens in response |
-| `options.ttl` | `number` | ❌ | `undefined` | Cache TTL (seconds) |
-| `options.lang` | `string` | ❌ | `'en'` | Response language |
-| `options.emoji` | `boolean` | ❌ | `false` | Include emojis in response |
-| `options.style` | `string` | ❌ | `'normal'` | Response style |
-| `options.provider` | `string` | ❌ | `'openai'` | AI provider |
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `message` | `string` | - | Prompt content gửi tới AI model |
+| `model?` | `string` | `'gpt-3.5-turbo'` | AI model selection |
+| `temperature?` | `number` | `0.7` | Creativity level (0.0-1.0) |
+| `maxTokens?` | `number` | `1000` | Maximum response tokens |
+| `ttl?` | `number` | `undefined` | Cache duration (seconds) |
+| `lang?` | `string` | `'en'` | Response language code |
+| `emoji?` | `boolean` | `false` | Include emojis in response |
+| `style?` | `string` | `'normal'` | Response tone/style |
+| `provider?` | `string` | `'openai'` | AI service provider |
+| `seed?` | `number` | `undefined` | Reproducible output seed |
+| `schema?` | `object` | `undefined` | **JSON Schema cho structured responses** |
+| `images?` | `MediaItem[]` | `undefined` | Image files for vision models |
+| `files?` | `MediaItem[]` | `undefined` | Document files (PDF, docs) |
+| `audio?` | `MediaItem` | `undefined` | Audio input for speech models |
+| `video?` | `MediaItem` | `undefined` | Video input for multimodal |
+| `reference?` | `string` | `undefined` | Context reference string |
+| `role?` | `string` | `undefined` | User role in conversation |
+| `context?` | `any` | `undefined` | Additional context data |
+| `instructions?` | `string` | `undefined` | System-level instructions |
+| `threadId?` | `string` | `undefined` | Conversation thread ID |
+
+##### Available Models
+
+**Supported Providers:**
+- **OpenAI** (`provider: 'openai'`) 🔗 [platform.openai.com](https://platform.openai.com)
+- **Anthropic** (`provider: 'anthropic'`) 🔗 [console.anthropic.com](https://console.anthropic.com)
+- **Google Gemini** (`provider: 'google'`) 🔗 [aistudio.google.com](https://aistudio.google.com)
+
+**Provider Configuration:**
+```javascript
+// Default OpenAI
+const response = await LLMIO.prompt("Hello", {
+  model: "gpt-4o" // provider defaults to 'openai'
+});
+
+// Explicit provider specification
+const response = await LLMIO.prompt("Hello", {
+  model: "claude-3-5-sonnet-20241022",
+  provider: "anthropic"
+});
+
+const response = await LLMIO.prompt("Hello", {
+  model: "gemini-1.5-pro",
+  provider: "gemini"
+});
+```
+
+##### Language Codes
+| Code | Language | Code | Language |
+|------|----------|------|----------|
+| `'vi'` | Tiếng Việt | `'en'` | English |
+| `'ja'` | Japanese | `'ko'` | Korean |
+| `'zh'` | Chinese | `'fr'` | French |
+| `'de'` | German | `'es'` | Spanish |
+
+##### Response Styles
+| Style | Description | Use Case |
+|-------|-------------|----------|
+| `'normal'` | Balanced, informative | General purpose |
+| `'casual'` | Friendly, conversational | Customer chat |
+| `'formal'` | Professional, structured | Business docs |
+| `'technical'` | Detailed, precise | Documentation |
+| `'creative'` | Imaginative, expressive | Content creation |
 
 ##### Return Value
 | Type | Description |
 |------|-------------|
-| `Promise<string>` | AI response content |
+| `Promise<string>` | AI response (text or JSON string if schema used) |
 
-##### Example
+##### Schema Structure Guide
+
+**Schema là object tự do với format:**
 ```javascript
-import { LLMIO } from '@leanez/sdk';
+schema: {
+  field_name: "type - description, default_value"
+}
+```
 
-// Basic prompt
-const response = await LLMIO.prompt("Hello AI!");
+**Supported Data Types:**
+- `string` - Text data
+- `number` - Numeric values  
+- `boolean` - True/false values
+- `array` - Lists of items
+- `object` - Nested structures
 
-// With options
-const response = await LLMIO.prompt("Explain quantum computing", {
-  model: 'gpt-4',
+**Schema Examples:**
+
+**1. Simple Data Extraction:**
+```javascript
+schema: {
+  name: "string - Person's full name",
+  age: "number - Age in years, 0",
+  email: "string - Email address",
+  active: "boolean - Account status, true",
+  status: "string - Current status, active"
+}
+```
+
+**2. Array Structures:**
+```javascript
+schema: {
+  products: [{
+    name: "string - Product name",
+    price: "number - Price in USD, 0",
+    category: "string - Product category, general",
+    inStock: "boolean - Availability, true"
+  }],
+  total: "number - Total value, 0",
+  currency: "string - Currency code, USD"
+}
+```
+
+**3. Nested Objects:**
+```javascript
+schema: {
+  user: {
+    personal: {
+      name: "string - Full name",
+      age: "number - Age in years, 0",
+      gender: "string - Gender, unknown"
+    },
+    contact: {
+      email: "string - Email address",
+      phone: "string - Phone number, N/A",
+      verified: "boolean - Email verified, false"
+    }
+  },
+  preferences: {
+    notifications: "boolean - Email notifications enabled, true",
+    theme: "string - UI theme preference, light",
+    language: "string - Preferred language, en"
+  }
+}
+```
+
+**4. Complex Analysis Schema:**
+```javascript
+schema: {
+  analysis: {
+    summary: "string - Executive summary",
+    confidence: "number - Analysis confidence 0-100, 50",
+    risk_assessment: {
+      level: "string - Risk level (low/medium/high), medium",
+      score: "number - Risk score 1-10, 5",
+      factors: ["string - List of risk factors"]
+    },
+    recommendations: [{
+      action: "string - Recommended action",
+      priority: "number - Priority score 1-10, 5",
+      timeline: "string - Implementation timeframe, 1 month",
+      cost: "number - Estimated cost, 0"
+    }]
+  },
+  financial_data: {
+    current_metrics: {
+      revenue: "number - Annual revenue, 0",
+      profit_margin: "number - Profit margin percentage, 0",
+      growth_rate: "number - Growth rate percentage, 0"
+    },
+    projections: [{
+      year: "number - Projection year",
+      revenue: "number - Projected revenue, 0",
+      growth_rate: "number - Growth rate percentage, 0",
+      confidence: "number - Projection confidence 0-100, 50"
+    }]
+  }
+}
+```
+
+##### Usage Examples
+
+**Basic Prompt:**
+```javascript
+const response = await LLMIO.prompt("Explain quantum computing");
+```
+
+**Structured Data Extraction:**
+```javascript
+const userData = await LLMIO.prompt("John Doe, 30 years old, john@example.com", {
+  model: "gpt-4o",
+  schema: {
+    name: "string - Full name",
+    age: "number - Age in years, 0",
+    email: "string - Email address",
+    verified: "boolean - Email verified, false"
+  }
+});
+// Returns: {"name": "John Doe", "age": 30, "email": "john@example.com", "verified": false}
+```
+
+**Advanced Configuration:**
+```javascript
+const analysis = await LLMIO.prompt("Analyze market trends", {
+  model: "claude-3-5-sonnet-20241022",
   temperature: 0.3,
-  maxTokens: 1000,
-  lang: 'vi',
-  emoji: true
+  maxTokens: 2000,
+  lang: "vi",
+  provider: "anthropic",
+  schema: {
+    trends: [{
+      sector: "string - Market sector",
+      direction: "string - Trend direction (up/down/stable), stable",
+      confidence: "number - Confidence level 0-100, 50"
+    }],
+    summary: "string - Overall market summary",
+    last_updated: "string - Analysis date, today"
+  }
 });
 ```
 
 ---
 
-### Embeddings Operations
+### Vector Embeddings
 
 #### `LLMIO.getEmbedding(text, options?)`
-Generate vector embedding cho text
+Generate high-dimensional vector representations cho semantic operations
 
 ##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `text` | `string` | ✅ | - | Text cần tạo embedding |
-| `options` | `EmbeddingOptions` | ❌ | `{}` | Tùy chọn embedding |
-| `options.model` | `string` | ❌ | `'text-embedding-ada-002'` | Embedding model |
-| `options.provider` | `string` | ❌ | `'openai'` | AI provider |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `text` | `string` | - | Text content to embed |
+| `model?` | `string` | `'text-embedding-ada-002'` | Embedding model |
+| `provider?` | `string` | `'openai'` | Service provider |
+
+##### Available Embedding Models
+
+**Supported Providers:**
+- **OpenAI** (`provider: 'openai'`) 🔗 [platform.openai.com](https://platform.openai.com)
+- **Google Gemini** (`provider: 'gemini'`) 🔗 [aistudio.google.com](https://aistudio.google.com)
+- **Cohere** (`provider: 'cohere'`) 🔗 [dashboard.cohere.com](https://dashboard.cohere.com)
+
+**Embedding Usage Examples:**
+```javascript
+// Default OpenAI
+const embedding = await LLMIO.getEmbedding("Hello world", {
+  model: "text-embedding-3-large" // provider defaults to 'openai'
+});
+
+// Explicit provider
+const embedding = await LLMIO.getEmbedding("Hello world", {
+  model: "text-embedding-004",
+  provider: "google"
+});
+
+const embedding = await LLMIO.getEmbedding("Hello world", {
+  model: "embed-english-v3.0",
+  provider: "cohere"
+});
+```
 
 ##### Return Value
 | Type | Description |
 |------|-------------|
-| `Promise<number[]>` | Vector embedding array |
+| `Promise<number[]>` | Vector array (dimensionality varies by model) |
 
-##### Example
+##### Semantic Search Implementation
 ```javascript
-// Simple embedding
-const embedding = await LLMIO.getEmbedding("Text to embed");
-
-// With options
-const embedding = await LLMIO.getEmbedding("Advanced text", {
-  model: 'text-embedding-ada-002',
-  provider: 'openai'
+// Generate query embedding
+const queryEmbedding = await LLMIO.getEmbedding("search term", {
+  model: "text-embedding-3-large"
 });
 
-// Semantic search example
-const queryEmbedding = await LLMIO.getEmbedding("search query");
+// Generate document embeddings
 const docEmbeddings = await Promise.all([
   LLMIO.getEmbedding("Document 1 content"),
   LLMIO.getEmbedding("Document 2 content"),
   LLMIO.getEmbedding("Document 3 content")
 ]);
-```
 
----
-
-### AI Assistants
-
-#### `LLMIO.newAssistantThread()`
-Tạo conversation thread mới
-
-##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| *Không có parameters* | - | - | - | - |
-
-##### Return Value
-| Type | Description |
-|------|-------------|
-| `Promise<string>` | Thread ID cho conversation |
-
-##### Example
-```javascript
-const threadId = await LLMIO.newAssistantThread();
-console.log('New thread created:', threadId);
-```
-
----
-
-#### `LLMIO.getAssistantThread(threadId)`
-Lấy thông tin conversation thread
-
-##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `threadId` | `string` | ✅ | - | Thread ID cần lấy |
-
-##### Return Value
-| Type | Description |
-|------|-------------|
-| `Promise<ThreadInfo>` | Thông tin thread và message history |
-
-##### Example
-```javascript
-const thread = await LLMIO.getAssistantThread(threadId);
-console.log('Thread info:', thread);
-// Output: { id: 'thread_123', messages: [...], createdAt: '2024-01-01' }
-```
-
----
-
-#### `LLMIO.promptAssistant(threadId, model, message, options?)`
-Chat trong thread với memory
-
-##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `threadId` | `string` | ✅ | - | Thread ID |
-| `model` | `string` | ✅ | - | AI model sử dụng |
-| `message` | `string` | ✅ | - | Message gửi tới assistant |
-| `options` | `AssistantOptions` | ❌ | `{}` | Tùy chọn assistant |
-| `options.temperature` | `number` | ❌ | `0.7` | Creativity level |
-| `options.maxTokens` | `number` | ❌ | `1000` | Maximum response tokens |
-
-##### Return Value
-| Type | Description |
-|------|-------------|
-| `Promise<string>` | Assistant response |
-
-##### Example
-```javascript
-// Create conversation thread
-const threadId = await LLMIO.newAssistantThread();
-
-// Chat with memory
-await LLMIO.promptAssistant(
-  threadId,
-  'gpt-4',
-  'I need help with React hooks',
-  { temperature: 0.7 }
-);
-
-await LLMIO.promptAssistant(
-  threadId,
-  'gpt-4',
-  'Can you show me an example?',
-  { temperature: 0.7 }
-);
-```
-
----
-
-#### `LLMIO.getAssistant(assistantId)`
-Lấy thông tin assistant
-
-##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `assistantId` | `string` | ✅ | - | Assistant ID |
-
-##### Return Value
-| Type | Description |
-|------|-------------|
-| `Promise<AssistantInfo>` | Thông tin assistant |
-
-##### Example
-```javascript
-const assistant = await LLMIO.getAssistant('assistant-id');
-console.log('Assistant info:', assistant);
-```
-
----
-
-#### `LLMIO.updateAssistant(assistantId, config)`
-Cập nhật assistant configuration
-
-##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `assistantId` | `string` | ✅ | - | Assistant ID |
-| `config` | `AssistantConfig` | ✅ | - | Cấu hình mới |
-| `config.name` | `string` | ❌ | - | Tên assistant |
-| `config.instructions` | `string` | ❌ | - | System instructions |
-| `config.model` | `string` | ❌ | - | AI model |
-| `config.tools` | `Tool[]` | ❌ | - | Available tools |
-
-##### Return Value
-| Type | Description |
-|------|-------------|
-| `Promise<AssistantInfo>` | Assistant info đã cập nhật |
-
-##### Example
-```javascript
-await LLMIO.updateAssistant('assistant-id', {
-  name: 'Code Helper',
-  instructions: 'You are a helpful coding assistant',
-  model: 'gpt-4',
-  tools: [{ type: 'code_interpreter' }]
-});
-```
-
----
-
-### Token Management
-
-#### `LLMIO.calculateTokens(input)`
-Calculate tokens và cost
-
-##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `input` | `TokenInput` | ✅ | - | Input để calculate tokens |
-| `input.inputText` | `string` | ❌ | - | Text input (cho simple calculation) |
-| `input.messages` | `Message[]` | ❌ | - | Messages array (cho conversations) |
-| `input.model` | `string` | ✅ | - | AI model |
-
-##### Return Value
-| Type | Description |
-|------|-------------|
-| `Promise<TokenInfo>` | Thông tin tokens và cost |
-
-##### Example
-```javascript
-// Simple token calculation
-const tokenInfo = await LLMIO.calculateTokens({
-  inputText: "Hello world",
-  model: "gpt-3.5-turbo"
-});
-console.log(tokenInfo);
-// Output: { tokens: 2, cost: 0.000004 }
-
-// For conversations
-const tokenInfo = await LLMIO.calculateTokens({
-  messages: [
-    { role: 'system', content: 'You are a helpful assistant' },
-    { role: 'user', content: 'Hello!' },
-    { role: 'assistant', content: 'Hi there!' }
-  ],
-  model: "gpt-4"
-});
-```
-
----
-
-### Media Support
-
-#### `LLMIO.prompt()` với Images
-Gửi prompt kèm images
-
-##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `message` | `string` | ✅ | - | Text prompt |
-| `options.model` | `string` | ✅ | - | Vision model (vd: gpt-4-vision-preview) |
-| `options.images` | `ImageInput[]` | ✅ | - | Array of images |
-| `options.images[].id` | `string` | ✅ | - | Image ID |
-| `options.images[].url` | `string` | ✅ | - | Image URL |
-| `options.images[].mime` | `string` | ✅ | - | MIME type |
-
-##### Example
-```javascript
-const response = await LLMIO.prompt("Describe this image", {
-  model: 'gpt-4-vision-preview',
-  images: [{
-    id: 'img1',
-    url: 'https://example.com/image.jpg',
-    mime: 'image/jpeg'
-  }]
-});
-```
-
-#### `LLMIO.prompt()` với Files
-Gửi prompt kèm files
-
-##### Input Parameters
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `message` | `string` | ✅ | - | Text prompt |
-| `options.files` | `FileInput[]` | ✅ | - | Array of files |
-| `options.files[].id` | `string` | ✅ | - | File ID |
-| `options.files[].url` | `string` | ✅ | - | File URL |
-| `options.files[].mime` | `string` | ✅ | - | MIME type |
-| `options.files[].name` | `string` | ✅ | - | File name |
-
-##### Example
-```javascript
-const response = await LLMIO.prompt("Analyze this document", {
-  model: 'gpt-4',
-  files: [{
-    id: 'doc1',
-    url: 'https://example.com/document.pdf',
-    mime: 'application/pdf',
-    name: 'report.pdf'
-  }]
-});
-```
-
-## 💡 Ví dụ thực tế
-
-### Smart Chatbot với Memory
-```javascript
-import { LLMIO, RedisIO } from '@leanez/sdk';
-
-async function smartChatbot(userId, message) {
-  try {
-    // Get or create conversation thread
-    let threadId = await RedisIO.get(`thread:${userId}`);
-    if (!threadId) {
-      threadId = await LLMIO.newAssistantThread();
-      await RedisIO.set(`thread:${userId}`, threadId, 3600 * 24); // 24h
-    }
-    
-    // Chat with context
-    const response = await LLMIO.promptAssistant(
-      threadId,
-      'gpt-4',
-      message,
-      { 
-        temperature: 0.7,
-        maxTokens: 500
-      }
-    );
-    
-    // Get conversation history
-    const thread = await LLMIO.getAssistantThread(threadId);
-    const lastMessage = thread.messages[thread.messages.length - 1];
-    
-    // Calculate cost
-    const tokenInfo = await LLMIO.calculateTokens({
-      inputText: message + response,
-      model: 'gpt-4'
-    });
-    
-    return {
-      response,
-      cost: tokenInfo.cost,
-      tokens: tokenInfo.tokens
-    };
-  } catch (error) {
-    return { error: error.message };
-  }
-}
-```
-
-### Cost Tracking System
-```javascript
-import { LLMIO, RedisIO } from '@leanez/sdk';
-
-async function trackUsage(userId, prompt, response) {
-  const inputTokens = await LLMIO.calculateTokens({
-    inputText: prompt,
-    model: 'gpt-4'
-  });
-  
-  const outputTokens = await LLMIO.calculateTokens({
-    inputText: response,
-    model: 'gpt-4'
-  });
-  
-  const totalCost = inputTokens.cost + outputTokens.cost;
-  
-  // Store usage data
-  await RedisIO.set(`usage:${userId}:${Date.now()}`, {
-    inputTokens: inputTokens.tokens,
-    outputTokens: outputTokens.tokens,
-    totalCost,
-    timestamp: new Date().toISOString()
-  });
-  
-  return { totalCost, totalTokens: inputTokens.tokens + outputTokens.tokens };
-}
-```
-
-### Semantic Search với Embeddings
-```javascript
-import { LLMIO, MongoIO } from '@leanez/sdk';
-
-// Cosine similarity function
+// Calculate cosine similarity for ranking
 function cosineSimilarity(a, b) {
   const dotProduct = a.reduce((sum, val, i) => sum + val * b[i], 0);
-  const magnitudeA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
-  const magnitudeB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
-  return dotProduct / (magnitudeA * magnitudeB);
-}
-
-async function semanticSearch(query, documents) {
-  // Generate embedding for search query
-  const queryEmbedding = await LLMIO.getEmbedding(query);
-  
-  // Generate embeddings for all documents
-  const docEmbeddings = await Promise.all(
-    documents.map(doc => LLMIO.getEmbedding(doc.content))
-  );
-  
-  // Calculate similarities
-  const similarities = docEmbeddings.map((docEmb, index) => ({
-    document: documents[index],
-    similarity: cosineSimilarity(queryEmbedding, docEmb)
-  }));
-  
-  // Sort by similarity (highest first)
-  return similarities
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, 5); // Top 5 results
+  const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
+  const magB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
+  return dotProduct / (magA * magB);
 }
 ```
 
-### AI Content Generator
-```javascript
-import { LLMIO } from '@leanez/sdk';
+---
 
-export default async function generateContent(type, params) {
-  try {
-    let prompt, options;
-    
-    switch (type) {
-      case 'blog_post':
-        prompt = `Write a blog post about "${params.topic}". 
-                 Target audience: ${params.audience}. 
-                 Tone: ${params.tone}. 
-                 Length: ${params.length} words.`;
-        options = {
-          model: 'gpt-4',
-          temperature: 0.8,
-          maxTokens: 2000,
-          lang: 'vi'
-        };
-        break;
-        
-      case 'social_media':
-        prompt = `Create ${params.platform} post about "${params.topic}". 
-                 Include relevant hashtags. Keep it engaging and ${params.style}.`;
-        options = {
-          model: 'gpt-3.5-turbo',
-          temperature: 0.9,
-          maxTokens: 300,
-          emoji: true
-        };
-        break;
-        
-      case 'email':
-        prompt = `Write a ${params.type} email with subject "${params.subject}". 
-                 Recipient: ${params.recipient}. 
-                 Purpose: ${params.purpose}.`;
-        options = {
-          model: 'gpt-4',
-          temperature: 0.6,
-          maxTokens: 1000
-        };
-        break;
-        
-      default:
-        throw new Error('Invalid content type');
+### AI Assistants (Persistent Conversations)
+
+#### `LLMIO.newAssistantThread()`
+Create new conversation thread với persistent memory
+
+##### Return Value
+| Type | Description |
+|------|-------------|
+| `Promise<string>` | Unique thread identifier |
+
+#### `LLMIO.getAssistantThread(threadId)`
+Retrieve conversation history và metadata
+
+##### Input Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `threadId` | `string` | - | Thread identifier |
+
+##### Return Value
+| Type | Description |
+|------|-------------|
+| `Promise<ThreadInfo>` | Complete thread information |
+
+**ThreadInfo Structure:**
+```javascript
+{
+  id: "string - Thread ID",
+  messages: [
+    {
+      role: "user|assistant",
+      content: "string - Message content",
+      timestamp: "string - ISO timestamp"
     }
-    
-    const content = await LLMIO.prompt(prompt, options);
-    
-    return {
-      success: true,
-      content,
-      type,
-      generatedAt: new Date().toISOString()
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message
-    };
-  }
+  ],
+  createdAt: "string - Thread creation time",
+  metadata: "object - Additional thread data"
 }
 ```
 
-## 🔧 Configuration
+#### `LLMIO.promptAssistant(threadId, model, message, options?)`
+Send message trong persistent conversation
 
-### LLMIO Settings
+##### Input Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `threadId` | `string` | - | Thread identifier |
+| `model` | `string` | - | AI model to use |
+| `message` | `string` | - | User message |
+| `temperature?` | `number` | `0.7` | Response creativity |
+| `maxTokens?` | `number` | `1000` | Token limit |
+| `instructions?` | `string` | `undefined` | System instructions |
+| `schema?` | `object` | `undefined` | Structured output schema |
+
+##### Conversation Flow Example
 ```javascript
-// Configure LLMIO settings
-LLMIO.configure({
-  serverChannel: 'custom_llm_channel',
-  pluginId: 'my-plugin-id'
-});
+// Initialize conversation
+const threadId = await LLMIO.newAssistantThread();
+
+// Multi-turn conversation với memory
+await LLMIO.promptAssistant(threadId, "gpt-4", "I need help with React");
+await LLMIO.promptAssistant(threadId, "gpt-4", "Show me useState examples");
+await LLMIO.promptAssistant(threadId, "gpt-4", "What about useEffect?");
+
+// Retrieve full conversation
+const thread = await LLMIO.getAssistantThread(threadId);
 ```
 
-## 🎯 Best Practices
+---
 
-| Practice | Description | Example |
-|----------|-------------|---------|
-| **Error Handling** | Luôn wrap AI calls trong try-catch | `try { await LLMIO.prompt() } catch(e) {}` |
-| **Cost Monitoring** | Track token usage và costs | Calculate tokens before/after requests |
-| **Caching** | Cache responses để tiết kiệm costs | Set TTL cho repeated prompts |
-| **Temperature Control** | Adjust temperature theo use case | 0.3 cho factual, 0.8 cho creative |
-| **Model Selection** | Chọn model phù hợp với task | GPT-4 cho complex, GPT-3.5 cho simple |
+### Token Management & Cost Optimization
 
-### Error Handling Example
-```javascript
-try {
-  const response = await LLMIO.prompt("Hello AI");
-  console.log(response);
-} catch (error) {
-  if (error.message.includes('timeout')) {
-    console.log('Request timed out, try again');
-  } else if (error.message.includes('rate limit')) {
-    console.log('Rate limit exceeded, wait a moment');
-  } else {
-    console.log('AI request failed:', error.message);
-  }
-}
-```
-
-## 🌍 Environment Variables
-
-Các biến môi trường được tự động cấu hình:
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `OPENAI_API_KEY` | OpenAI API key | `sk-...` |
-| `ANTHROPIC_API_KEY` | Anthropic API key | `sk-ant-...` |
-| `LLM_DEFAULT_MODEL` | Default AI model | `gpt-3.5-turbo` |
-| `LLM_DEFAULT_TEMPERATURE` | Default temperature | `0.7` | 
+#### `LLMIO.calculateTokens(params)`

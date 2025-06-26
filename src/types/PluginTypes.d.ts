@@ -142,7 +142,7 @@ export interface PluginFunctionDefinition {
     };
 }
 /**
- * Plugin Handler - exported from handler.js
+ * Plugin Handler - exported from handler.ts
  */
 export interface PluginHandler {
     [functionName: string]: PluginFunction;
