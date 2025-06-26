@@ -2,11 +2,10 @@
   "name": "@leanez/sdk",
   "version": "1.0.2",
   "description": "LeanEZ Plugin SDK for distributed plugin development",
-  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "leanez": "./bin/cli.js"
+    "leanez": "./bin/cli.mjs"
   },
   "scripts": {
     "build": "tsc",

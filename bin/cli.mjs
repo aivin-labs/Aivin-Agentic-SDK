@@ -9,6 +9,7 @@ import { spawn } from 'child_process';
 import axios from 'axios';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { randomUUID, randomBytes } from 'crypto';
 
 // ES6 equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -79,14 +80,16 @@ function getPackageVersion(packageName) {
   return 'latest';
 }
 
+// Helper function to increment version
+function incrementVersion(version) {
+  const parts = version.split('.');
+  const patch = parseInt(parts[2] || '0') + 1;
+  return `${parts[0] || '1'}.${parts[1] || '0'}.${patch}`;
+}
+
 // Helper functions
 function generateRandomPassword() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
-  for (let i = 0; i < 16; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
+  return randomBytes(16).toString('hex');
 }
 
 // Helper function to resolve stack dependencies
@@ -422,8 +425,15 @@ async function createPluginProject(pluginDir, name, description, stacks, aiConfi
 }
 
 async function createManifest(pluginDir, name, description, aiConfig) {
-  // AI-generated functions if provided
-  let functions = [
+  // Check for existing manifest
+  const manifestPath = path.join(pluginDir, 'manifest.json');
+  let currentManifest = null;
+  if (fs.existsSync(manifestPath)) {
+    currentManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  }
+
+  // Default functions if not provided
+  const defaultFunctions = [
     {
       name: 'main',
       triggers: ['manual', 'api', 'chat'],
@@ -463,35 +473,25 @@ async function createManifest(pluginDir, name, description, aiConfig) {
     }
   ];
 
-  if (aiConfig && aiConfig.functions) {
-    functions = aiConfig.functions;
-  }
-
-  const manifest = {
-    name,
+  // Merge manifests: current -> defaults -> new config
+  const newManifest = {
+    // Defaults
+    id: randomBytes(16).toString('hex'),
     version: '1.0.0',
+    functions: defaultFunctions,
+    agent_specialized: [],
+    agent_designated: [],
+    
+    // Existing manifest (override defaults)
+    ...currentManifest,
+    
+    // New values (override everything)
+    name,
     description,
-    functions
+    ...(aiConfig || {})
   };
 
-  // Only add author if provided
-  if (aiConfig?.author) {
-    manifest.author = aiConfig.author;
-  }
-
-  // Only add email if provided
-  if (aiConfig?.email) {
-    manifest.email = aiConfig.email;
-  }
-
-  // Add agent configuration
-  manifest.agent_specialized = aiConfig?.agent_specialized || [];
-  manifest.agent_designated = aiConfig?.agent_designated || [];
-
-  fs.writeFileSync(
-    path.join(pluginDir, 'manifest.json'),
-    JSON.stringify(manifest, null, 2)
-  );
+  fs.writeFileSync(manifestPath, JSON.stringify(newManifest, null, 2));
 }
 
 async function createHandler(pluginDir, stacks, aiConfig) {
@@ -656,9 +656,6 @@ async function createDockerCompose(pluginDir, stacks) {
   if (Object.keys(services).length > 0) {
     let yamlContent = `# Docker Compose for plugin: ${stacks.map(s => s.name).join(', ')}
 # Data is persisted in ./data/ directory
-
-version: '3.8'
-
 services:
 `;
 
@@ -734,7 +731,7 @@ program
   .command('start')
   .description('Start plugin server')
   .action(() => {
-    const serverPath = path.join(__dirname, 'server.js');
+    const serverPath = path.join(__dirname, 'server.mjs');
     const child = spawn('node', [serverPath], {
       stdio: 'inherit'
     });
@@ -857,6 +854,12 @@ program
         if (result.message) {
           console.log(chalk.gray(`   Message: ${result.message}`));
         }
+
+        // Auto-increment version after successful deployment
+        const newVersion = incrementVersion(manifest.version);
+        manifest.version = newVersion;
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+        console.log(chalk.blue(`🔄 Version auto-incremented to: ${newVersion}`));
         
       } catch (error) {
         clearInterval(loadingInterval);
@@ -988,15 +991,6 @@ program
       process.exit(1);
     }
   });
-
-// Export programmatic API for backend usage
-export {
-  createPluginProject as createPlugin,
-  validatePluginConfig as validateConfig,
-  AVAILABLE_STACKS,
-  DEFAULT_STACKS,
-  OPTIONAL_STACKS
-};
 
 export const getAvailableStacks = () => AVAILABLE_STACKS;
 export const getDefaultStacks = () => DEFAULT_STACKS;

@@ -28,7 +28,7 @@ export class LocalTestServer {
     constructor(config: LocalTestServerConfig = {}) {
         this.config = {
             port: config.port || 3001,
-            pluginsPath: config.pluginsPath || './plugins',
+            pluginsPath: config.pluginsPath || '.',
             logLevel: config.logLevel || 'info',
             enableCors: config.enableCors ?? true
         };

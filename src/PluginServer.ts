@@ -4,6 +4,7 @@ import { LocalTestServer } from './LocalTestServer';
 import { LLMIO } from './services/LLMIO';
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { 
     PluginExecutionData, 
     PluginExecutionResult, 
@@ -188,8 +189,9 @@ export class PluginServer extends EventEmitter {
       const manifest: PluginManifest = JSON.parse(manifestContent);
 
       // Load handler using dynamic import to support ES modules
-      // Use eval to prevent TypeScript from transforming the dynamic import
-      const importPath = `file://${path.resolve(handlerPath)}`;
+      // Convert Windows path to proper file URL
+      const absolutePath = path.resolve(handlerPath);
+      const importPath = pathToFileURL(absolutePath).href;
       const handlerModule = await eval(`import("${importPath}")`);
       const handler = handlerModule.default || handlerModule;
 

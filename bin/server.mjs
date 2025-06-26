@@ -64,7 +64,12 @@ async function startPluginServer() {
     // Tạo Local Test Server nếu được bật
     let testServer = null;
     if (config.enable_local_testing) {
-      testServer = new LocalTestServer(pluginServer, config.port);
+      testServer = new LocalTestServer({
+        port: config.port,
+        pluginsPath: config.plugins_path, // Sử dụng thư mục hiện tại (plugin directory)
+        logLevel: config.log_level,
+        enableCors: true
+      });
     }
 
     // Handle graceful shutdown
