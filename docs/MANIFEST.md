@@ -17,7 +17,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
   "functions": [
     {
       "name": "functionName",
-      "triggers": ["manual", "api", "chat"],
+      "trigger_type": ["manual", "api", "chat"],
       "description": "Function description",
       "inputs": [...],
       "outputs": [...],
@@ -46,7 +46,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
 | Property | Type | Required | Description | Example |
 |----------|------|----------|-------------|---------|
 | `name` | `string` | ✅ | Tên function (phải match với export trong handler) | `"main"`, `"processData"` |
-| `triggers` | `string[]` | ✅ | Các trigger types được hỗ trợ | `["manual", "api", "chat"]` |
+| `trigger_type` | `string[]` | ✅ | Các trigger types được hỗ trợ | `["manual", "api", "chat"]` |
 | `description` | `string` | ✅ | Mô tả chức năng của function | `"Process user input"` |
 | `inputs` | `PluginInput[]` | ❌ | Danh sách input fields | `[{...}]` |
 | `outputs` | `PluginOutput[]` | ❌ | Schema định nghĩa output structure | `[{...}]` |
@@ -71,6 +71,65 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
 1. AI gọi `main()` để khởi động plugin
 2. Nếu cần, AI gọi các tool functions cụ thể
 3. Plugin có thể chain functions với `next_trigger`
+
+## 🚀 Function Input Format
+
+**Tất cả functions nhận input dưới dạng object với structure sau:**
+
+```typescript
+// Function signature trong handler.ts
+export async function todoManager({
+  ctx,        // MessageContextDTO - context từ LeanEZ
+  title,      // Args từ manifest inputs
+  priority,   // Args từ manifest inputs
+  ...args     // Tất cả args khác từ manifest
+}) {
+  // Function implementation
+}
+```
+
+**Trong đó:**
+- `ctx: MessageContextDTO` - Context thông tin từ LeanEZ system
+- `...args` - Các arguments được định nghĩa trong manifest `inputs`
+
+**Ví dụ manifest inputs:**
+```json
+{
+  "name": "todoManager",
+  "trigger_type": ["chat", "api"],
+  "inputs": [
+    {
+      "field": "title",
+      "required": true,
+      "description": "Task title",
+      "type": "string"
+    },
+    {
+      "field": "priority", 
+      "required": false,
+      "description": "Task priority",
+      "type": "string",
+      "default": "medium"
+    }
+  ]
+}
+```
+
+**Function implementation:**
+```typescript
+export async function todoManager({ ctx, title, priority = "medium" }) {
+  // ctx.session - Session information
+  // ctx.user - Current user
+  // ctx.workspace - Current workspace
+  // title, priority - từ manifest inputs
+  
+  return {
+    success: true,
+    data: { title, priority },
+    message: "Task created successfully"
+  };
+}
+```
 
 ## 📥 PluginInput Properties
 
@@ -143,7 +202,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
   "functions": [
     {
       "name": "main",
-      "triggers": ["manual", "api", "chat"],
+      "trigger_type": ["manual", "api", "chat"],
       "description": "Say hello to user - Entry point cho AI",
       "inputs": [
         {
@@ -186,7 +245,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
     },
     {
       "name": "handleEmptyName",
-      "triggers": ["event"],
+      "trigger_type": ["event"],
       "description": "Handle empty name error case",
       "inputs": [
         {
@@ -231,7 +290,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
     },
     {
       "name": "handleInvalidFormat",
-      "triggers": ["event"],
+      "trigger_type": ["event"],
       "description": "Handle invalid name format error case",
       "inputs": [
         {
@@ -289,7 +348,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
   "functions": [
     {
       "name": "main",
-      "triggers": ["chat", "api", "manual"],
+      "trigger_type": ["chat", "api", "manual"],
       "description": "Main entry point - AI sử dụng để khởi động plugin",
       "inputs": [
         {
@@ -345,7 +404,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
     },
     {
       "name": "createTask",
-      "triggers": ["api", "chat"],
+      "trigger_type": ["api", "chat"],
       "description": "Tool function - AI gọi để tạo task cụ thể",
       "inputs": [
         {
@@ -429,7 +488,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
     },
     {
       "name": "searchTasks",
-      "triggers": ["api", "chat"],
+      "trigger_type": ["api", "chat"],
       "description": "Tool function - AI gọi để tìm kiếm tasks",
       "inputs": [
         {
@@ -485,7 +544,7 @@ File này sẽ định nghĩa cách sử dụng, metadata, functions và input/o
     },
     {
       "name": "sendNotification",
-      "triggers": ["event"],
+      "trigger_type": ["event"],
       "description": "Internal function - Được trigger sau khi tạo task",
       "inputs": [
         {
@@ -701,7 +760,7 @@ export async function handleDataTooLarge(input) {
 | `"name": "My Plugin"` | `"name": "my-plugin"` | Plugin names phải lowercase, hyphen-separated |
 | `"field": "data"` không có description | `"field": "data", "description": "Input data to process"` | Luôn cung cấp description rõ ràng |
 | `"required": "true"` | `"required": true` | Required field phải là boolean, không phải string |
-| Không specify triggers | `"triggers": ["manual", "api"]` | Luôn define triggers cho function |
+| Không specify triggers | `"trigger_type": ["manual", "api"]` | Luôn define triggers cho function |
 | `"outputs": "string"` | `"outputs": {"result": "string"}` | Outputs phải là object hoặc null |
 
 ## 🔗 Related Documentation

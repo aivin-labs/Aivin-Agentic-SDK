@@ -166,10 +166,6 @@ export class PubSubIO {
    * Request-response pattern with LeanEZ backend
    */
   static async request<T = any>(channel: string, data: any, options?: RequestOptions): Promise<T> {
-    if (!this.isInitialized) {
-      this.init();
-    }
-
     const requestId = this.generateId();
     const responseChannel = `response:${requestId}`;
     const message: PubSubMessage = {

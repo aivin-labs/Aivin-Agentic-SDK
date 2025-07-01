@@ -34,7 +34,7 @@
 ```json
 {
   "name": "functionName",               // Tên function trong handler.ts
-  "triggers": ["manual", "api", "chat"], // Các trigger types
+  "trigger_type": ["manual", "api", "chat"], // Các trigger types
   "description": "Mô tả chức năng",     // Giải thích function làm gì
   "inputs": [...],                      // Input parameters
   "outputs": [...],                     // Output structure
@@ -43,14 +43,27 @@
 }
 ```
 
+**Function Input Format:**
+- Tất cả functions nhận input dưới dạng object: `{ ctx, ...args }`
+- `ctx: MessageContextDTO` - Context từ LeanEZ system
+- `...args` - Arguments từ manifest inputs
+
 **Input/Output format:**
 ```json
+// Input field trong manifest
 {
-  "field": "paramName",                 // Tên field
-  "required": true,                     // Bắt buộc hay không
-  "description": "Mô tả parameter",     // Giải thích ý nghĩa
-  "type": "string",                     // Kiểu dữ liệu
-  "default": "defaultValue"             // Giá trị mặc định (optional)
+  "field": "title",        // Tên argument trong function
+  "required": true,        // Bắt buộc hay không
+  "description": "Task title", // Mô tả
+  "type": "string",        // Data type
+  "default": "Untitled"    // Giá trị mặc định (optional)
+}
+
+// Function implementation
+export async function createTask({ ctx, title, priority = "medium" }) {
+  const userId = ctx.user?.id;
+  const workspaceId = ctx.workspace?.id;
+  // ... logic
 }
 ```
 
@@ -58,7 +71,7 @@
 - `name`: Plugin name làm unique identifier
 - `version`: Auto-increment sau deploy (1.0.0 → 1.0.1)  
 - `functions`: Phải match với exports trong handler.ts
-- `triggers`: Định nghĩa cách gọi function (manual, api, chat, schedule, event, webhook)
+- `trigger_type`: Định nghĩa cách gọi function (manual, api, chat, schedule, event, webhook)
 - `agent_specialized`: ["*"] = tất cả agents, hoặc list cụ thể ["sales", "support"]
 
 ## 📋 LLMIO Functions
@@ -984,5 +997,97 @@ export async function processUserData(userData) {
     });
     throw error;
   }
+}
+```
+
+## 🔧 Function Implementation Examples
+
+### Basic Function với Context
+```typescript
+// handler.ts
+export async function main({ ctx, data, options = {} }) {
+  // Access context information
+  const user = ctx.user;
+  const workspace = ctx.workspace;
+  const session = ctx.session;
+  
+  // Use data and options from manifest inputs
+  console.log(`Processing data for user: ${user?.name}`);
+  console.log(`Workspace: ${workspace?.name}`);
+  
+  return {
+    success: true,
+    processedBy: user?.name,
+    workspaceId: workspace?.id,
+    result: data
+  };
+}
+```
+
+### Todo Management Example
+```typescript
+// manifest.json inputs
+{
+  "inputs": [
+    { "field": "action", "required": true, "type": "string" },
+    { "field": "title", "required": false, "type": "string" },
+    { "field": "priority", "required": false, "type": "string", "default": "medium" }
+  ]
+}
+
+// handler.ts
+export async function todoManager({ ctx, action, title, priority = "medium" }) {
+  const user = ctx.user;
+  const workspace = ctx.workspace;
+  
+  if (action === 'create') {
+    // Create new todo with context
+    const todo = await MongoIO.model('Todo').create({
+      title,
+      priority,
+      userId: user?.id,
+      workspaceId: workspace?.id,
+      createdAt: new Date()
+    });
+    
+    return {
+      success: true,
+      message: `Todo "${title}" created with ${priority} priority`,
+      todoId: todo._id,
+      createdBy: user?.name
+    };
+  }
+  
+  // Other actions...
+}
+```
+
+### AI Processing với Context
+```typescript
+export async function smartAnalyzer({ ctx, text, analysisType = "summary" }) {
+  const user = ctx.user;
+  
+  // Personalized AI prompt based on user context
+  const prompt = `
+    Analyze this text for user ${user?.name}:
+    Type: ${analysisType}
+    Text: ${text}
+    
+    Provide analysis in Vietnamese.
+  `;
+  
+  const analysis = await LLMIO.prompt(prompt, {
+    temperature: 0.3,
+    maxTokens: 200,
+    lang: 'vi'
+  });
+  
+  return {
+    success: true,
+    analysis,
+    analysisType,
+    processedFor: user?.name,
+    timestamp: new Date().toISOString()
+  };
 }
 ```

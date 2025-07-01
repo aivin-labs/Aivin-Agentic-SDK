@@ -68,7 +68,7 @@ export interface PluginManifest {
     description?: string;
     author?: string;
     functions: PluginFunction[];
-    triggers?: string[];
+    trigger_type?: string[];
     capabilities?: string[];
     dependencies?: string[];
     config?: Record<string, any>;
@@ -80,7 +80,7 @@ export interface PluginFunction {
     description?: string;
     parameters: PluginParameter[];
     returns?: PluginReturn;
-    triggers?: string[];
+    trigger_type: string[];
 }
 
 export interface PluginParameter {

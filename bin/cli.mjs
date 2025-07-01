@@ -440,7 +440,7 @@ async function createManifest(pluginDir, name, description, aiConfig) {
   const defaultFunctions = [
     {
       name: 'main',
-      triggers: ['manual', 'api', 'chat'],
+      trigger_type: ['manual', 'api', 'chat'],
       description: 'Main plugin function',
       inputs: [
         {

@@ -22,12 +22,12 @@ Tài liệu này chứa các ví dụ thực tế để phát triển plugins v�
 ```javascript
 import { LLMIO, ContextIO } from '@leanez/sdk';
 
-export async function textSummarizer(input) {
-  const user = await ContextIO.getCurrentUser();
+export async function textSummarizer({ ctx, text }) {
+  const user = ctx.user;
   
   // Tóm tắt văn bản bằng AI
   const summary = await LLMIO.prompt(
-    `Hãy tóm tắt văn bản sau thành 3 câu chính:\n\n${input.text}`,
+    `Hãy tóm tắt văn bản sau thành 3 câu chính:\n\n${text}`,
     { 
       temperature: 0.3,
       maxTokens: 150,
@@ -37,9 +37,9 @@ export async function textSummarizer(input) {
   
   return {
     success: true,
-    original_length: input.text.length,
+    original_length: text.length,
     summary,
-    user: user.name
+    user: user?.name
   };
 }
 ```
@@ -57,7 +57,7 @@ export async function textSummarizer(input) {
   "functions": [
     {
       "name": "textSummarizer",
-      "triggers": ["manual", "api", "chat"],
+      "trigger_type": ["manual", "api", "chat"],
       "description": "Tóm tắt văn bản thành 3 câu chính",
       "inputs": [
         {
@@ -105,8 +105,8 @@ leanez create text-summarizer --json manifest.json
 ```javascript
 import { MongoIO, ContextIO } from '@leanez/sdk';
 
-export async function todoManager(input) {
-  const user = await ContextIO.getCurrentUser();
+export async function todoManager({ ctx, action, task }) {
+  const user = ctx.user;
   
   // Tạo Todo model
   const Todo = MongoIO.model('Todo', new MongoIO.Schema({
@@ -116,22 +116,22 @@ export async function todoManager(input) {
     createdAt: { type: Date, default: Date.now }
   }));
   
-  if (input.action === 'add') {
+  if (action === 'add') {
     // Thêm task mới
     const todo = new Todo({
       userId: user.id,
-      task: input.task
+      task: task
     });
     await todo.save();
     
     return {
       success: true,
-      message: `Đã thêm task: ${input.task}`,
+      message: `Đã thêm task: ${task}`,
       todoId: todo._id
     };
   }
   
-  if (input.action === 'list') {
+  if (action === 'list') {
     // Lấy danh sách tasks
     const todos = await Todo.find({ userId: user.id }).sort({ createdAt: -1 });
     
@@ -163,7 +163,7 @@ export async function todoManager(input) {
   "functions": [
     {
       "name": "todoManager",
-      "triggers": ["manual", "api", "chat"],
+      "trigger_type": ["manual", "api", "chat"],
       "description": "Thêm và liệt kê công việc",
       "inputs": [
         {
@@ -217,29 +217,29 @@ export async function todoManager(input) {
 ```javascript
 import { PubSubIO, RedisIO, ContextIO } from '@leanez/sdk';
 
-export async function weatherNotifier(input) {
-  const user = await ContextIO.getCurrentUser();
+export async function weatherNotifier({ ctx, city, temperature, condition, humidity }) {
+  const user = ctx.user;
   
   // Lưu thông tin thời tiết vào cache
-  await RedisIO.update(`weather:${input.city}`, {
-    temperature: input.temperature,
-    condition: input.condition,
-    humidity: input.humidity,
+  await RedisIO.update(`weather:${city}`, {
+    temperature,
+    condition,
+    humidity,
     timestamp: Date.now()
   }, { EX: 3600 }); // Cache 1 giờ
   
   // Gửi thông báo real-time
   await PubSubIO.publish('weather.update', {
-    city: input.city,
-    temperature: input.temperature,
-    condition: input.condition,
-    user: user.name,
+    city,
+    temperature,
+    condition,
+    user: user?.name,
     timestamp: Date.now()
   });
   
   return {
     success: true,
-    message: `Đã cập nhật thời tiết ${input.city}: ${input.temperature}°C, ${input.condition}`,
+    message: `Đã cập nhật thời tiết ${city}: ${temperature}°C, ${condition}`,
     cached: true
   };
 }
@@ -258,7 +258,7 @@ export async function weatherNotifier(input) {
   "functions": [
     {
       "name": "weatherNotifier",
-      "triggers": ["manual", "api", "webhook"],
+      "trigger_type": ["manual", "api", "webhook"],
       "description": "Cập nhật và thông báo thời tiết",
       "inputs": [
         {
@@ -319,17 +319,17 @@ export async function weatherNotifier(input) {
 ```javascript
 import { BullIO, ContextIO } from '@leanez/sdk';
 
-export async function emailSender(input) {
-  const user = await ContextIO.getCurrentUser();
+export async function emailSender({ ctx, email, subject, message }) {
+  const user = ctx.user;
   
   // Gửi email trong background
   const result = await BullIO.emit({
     name: 'send-email',
     data: {
-      to: input.email,
-      subject: input.subject,
-      message: input.message,
-      from: user.email
+      to: email,
+      subject,
+      message,
+      from: user?.email
     },
     handler: async (emailData) => {
       // Giả lập gửi email
@@ -369,7 +369,7 @@ export async function emailSender(input) {
   "functions": [
     {
       "name": "emailSender",
-      "triggers": ["manual", "api", "chat"],
+      "trigger_type": ["manual", "api", "chat"],
       "description": "Gửi email bất đồng bộ",
       "inputs": [
         {
@@ -424,8 +424,8 @@ export async function emailSender(input) {
 ```javascript
 import { LLMIO, RedisIO } from '@leanez/sdk';
 
-export async function smartSearch(input) {
-  const searchQuery = input.query;
+export async function smartSearch({ ctx, query }) {
+  const searchQuery = query;
   
   // Tạo embedding cho search query
   const queryEmbedding = await LLMIO.getEmbedding(searchQuery);
@@ -474,7 +474,7 @@ export async function smartSearch(input) {
   "functions": [
     {
       "name": "smartSearch",
-      "triggers": ["manual", "api", "chat"],
+      "trigger_type": ["manual", "api", "chat"],
       "description": "Tìm kiếm semantic với AI embeddings",
       "inputs": [
         {
@@ -522,9 +522,9 @@ export async function smartSearch(input) {
 ```javascript
 import { LLMIO, MongoIO, BullIO, PubSubIO, ContextIO } from '@leanez/sdk';
 
-export async function workReminder(input) {
-  const user = await ContextIO.getCurrentUser();
-  const workspace = await ContextIO.getCurrentWorkspace();
+export async function workReminder({ ctx, action, title, assignedTo, dueDate, priority, reminderTime, taskId }) {
+  const user = ctx.user;
+  const workspace = ctx.workspace;
   
   // Tạo Task model
   const Task = MongoIO.model('Task', new MongoIO.Schema({
@@ -540,11 +540,11 @@ export async function workReminder(input) {
     createdAt: { type: Date, default: Date.now }
   }));
   
-  if (input.action === 'create') {
+  if (action === 'create') {
     // Tạo task mới với AI-generated smart reminders
     const smartDescription = await LLMIO.prompt(
-      `Tạo mô tả chi tiết và đề xuất thời gian nhắc nhở phù hợp cho task: "${input.title}". 
-       Ưu tiên: ${input.priority}. Deadline: ${input.dueDate}`,
+      `Tạo mô tả chi tiết và đề xuất thời gian nhắc nhở phù hợp cho task: "${title}". 
+       Ưu tiên: ${priority}. Deadline: ${dueDate}`,
       { 
         temperature: 0.4,
         maxTokens: 200,
@@ -554,14 +554,14 @@ export async function workReminder(input) {
     
     // Lưu task vào database
     const task = new Task({
-      workspaceId: workspace.id,
-      title: input.title,
+      workspaceId: workspace?.id,
+      title,
       description: smartDescription,
-      assignedTo: input.assignedTo || [user.id],
-      dueDate: new Date(input.dueDate),
-      priority: input.priority || 'medium',
-      reminderTime: new Date(input.reminderTime || Date.now() + 24 * 60 * 60 * 1000), // Default 1 day
-      createdBy: user.id
+      assignedTo: assignedTo || [user?.id],
+      dueDate: new Date(dueDate),
+      priority: priority || 'medium',
+      reminderTime: new Date(reminderTime || Date.now() + 24 * 60 * 60 * 1000), // Default 1 day
+      createdBy: user?.id
     });
     
     await task.save();
@@ -571,7 +571,7 @@ export async function workReminder(input) {
       name: 'schedule-reminder',
       data: {
         taskId: task._id,
-        workspaceId: workspace.id,
+        workspaceId: workspace?.id,
         reminderTime: task.reminderTime
       },
       delay: task.reminderTime.getTime() - Date.now(), // Delay đến thời gian nhắc nhở
@@ -596,7 +596,7 @@ export async function workReminder(input) {
             message: reminderMessage,
             priority: taskToRemind.priority,
             dueDate: taskToRemind.dueDate,
-            workspaceName: workspace.name,
+            workspaceName: workspace?.name,
             timestamp: Date.now()
           });
         }
@@ -620,19 +620,19 @@ export async function workReminder(input) {
     });
     
     // Thông báo tạo task thành công
-    await PubSubIO.publish(`workspace:${workspace.id}:announcements`, {
+    await PubSubIO.publish(`workspace:${workspace?.id}:announcements`, {
       type: 'task_created',
       taskTitle: task.title,
-      createdBy: user.name,
-      assignedTo: input.assignedTo?.length || 1,
+      createdBy: user?.name,
+      assignedTo: assignedTo?.length || 1,
       dueDate: task.dueDate,
-      message: `📝 Task mới: "${task.title}" đã được tạo bởi ${user.name}`,
+      message: `📝 Task mới: "${task.title}" đã được tạo bởi ${user?.name}`,
       timestamp: Date.now()
     });
     
     return {
       success: true,
-      message: `Task "${input.title}" đã được tạo và lên lịch nhắc nhở`,
+      message: `Task "${title}" đã được tạo và lên lịch nhắc nhở`,
       taskId: task._id,
       reminderScheduled: task.reminderTime,
       assignedUsers: task.assignedTo.length,
@@ -640,16 +640,16 @@ export async function workReminder(input) {
     };
   }
   
-  if (input.action === 'list') {
+  if (action === 'list') {
     // Lấy danh sách tasks trong workspace
     const tasks = await Task.find({ 
-      workspaceId: workspace.id,
+      workspaceId: workspace?.id,
       isCompleted: false 
     }).sort({ dueDate: 1 });
     
     return {
       success: true,
-      workspace: workspace.name,
+      workspace: workspace?.name,
       totalTasks: tasks.length,
       tasks: tasks.map(t => ({
         id: t._id,
@@ -662,21 +662,21 @@ export async function workReminder(input) {
     };
   }
   
-  if (input.action === 'complete') {
+  if (action === 'complete') {
     // Đánh dấu task hoàn thành
     const task = await Task.findByIdAndUpdate(
-      input.taskId,
+      taskId,
       { isCompleted: true },
       { new: true }
     );
     
     if (task) {
       // Thông báo hoàn thành task
-      await PubSubIO.publish(`workspace:${workspace.id}:announcements`, {
+      await PubSubIO.publish(`workspace:${workspace?.id}:announcements`, {
         type: 'task_completed',
         taskTitle: task.title,
-        completedBy: user.name,
-        message: `✅ Task "${task.title}" đã được hoàn thành bởi ${user.name}`,
+        completedBy: user?.name,
+        message: `✅ Task "${task.title}" đã được hoàn thành bởi ${user?.name}`,
         timestamp: Date.now()
       });
     }
@@ -684,144 +684,10 @@ export async function workReminder(input) {
     return {
       success: true,
       message: `Task "${task?.title}" đã được đánh dấu hoàn thành`,
-      taskId: input.taskId
+      taskId: taskId
     };
   }
   
   return { success: false, message: 'Action không hợp lệ' };
 }
 ```
-
-**Manifest.json phức tạp**:
-```json
-{
-  "name": "work-reminder",
-  "version": "1.0.0",
-  "description": "Plugin nhắc nhở công việc thông minh với AI",
-  "author": "Productivity Team",
-  "email": "productivity@leanez.app",
-  "agent_specialized": ["productivity", "task-management", "reminders", "*"],
-  "agent_designated": ["productivity-agent", "task-manager"],
-  "functions": [
-    {
-      "name": "workReminder",
-      "triggers": ["manual", "api", "chat", "schedule"],
-      "description": "Quản lý và nhắc nhở công việc tự động",
-      "inputs": [
-        {
-          "field": "action",
-          "required": true,
-          "description": "Hành động: 'create', 'list', hoặc 'complete'",
-          "type": "string"
-        },
-        {
-          "field": "title",
-          "required": false,
-          "description": "Tiêu đề task",
-          "type": "string"
-        },
-        {
-          "field": "assignedTo",
-          "required": false,
-          "description": "Danh sách user IDs được assign",
-          "type": "array"
-        },
-        {
-          "field": "dueDate",
-          "required": false,
-          "description": "Ngày hết hạn (ISO string)",
-          "type": "string"
-        },
-        {
-          "field": "priority",
-          "required": false,
-          "description": "Mức ưu tiên: low, medium, high",
-          "type": "string",
-          "default": "medium"
-        },
-        {
-          "field": "reminderTime",
-          "required": false,
-          "description": "Thời gian nhắc nhở (ISO string)",
-          "type": "string"
-        },
-        {
-          "field": "taskId",
-          "required": false,
-          "description": "ID của task (cho action complete)",
-          "type": "string"
-        }
-      ],
-      "outputs": [
-        {
-          "field": "success",
-          "description": "Trạng thái thành công",
-          "type": "boolean"
-        },
-        {
-          "field": "message",
-          "description": "Thông báo kết quả",
-          "type": "string"
-        },
-        {
-          "field": "taskId",
-          "description": "ID của task (khi tạo mới)",
-          "type": "string"
-        },
-        {
-          "field": "tasks",
-          "description": "Danh sách tasks (khi action=list)",
-          "type": "array"
-        },
-        {
-          "field": "smartDescription",
-          "description": "Mô tả thông minh được tạo bởi AI",
-          "type": "string"
-        }
-      ]
-    }
-  ],
-  "permissions": [
-    "workspace:read",
-    "workspace:notify",
-    "user:notify",
-    "background:jobs"
-  ]
-}
-```
-
----
-
-## 🚀 Cách chạy ví dụ
-
-### 1. Tạo plugin từ ví dụ
-```bash
-# Tạo plugin từ manifest
-leanez create my-plugin --json ./manifest.json
-
-# Hoặc tạo interactive
-leanez create my-plugin
-```
-
-### 2. Development
-```bash
-cd my-plugin
-npm install
-leanez start
-```
-
-### 3. Deploy
-```bash
-leanez deploy
-```
-
----
-
-## 📚 Tài liệu liên quan
-
-- [README.md](../README.md) - Hướng dẫn cơ bản
-- [LLMIO.md](./LLMIO.md) - Tài liệu LLMIO Service
-- [RedisIO.md](./RedisIO.md) - Tài liệu RedisIO Service
-- [MongoIO.md](./MongoIO.md) - Tài liệu MongoIO Service
-- [BullIO.md](./BullIO.md) - Tài liệu BullIO Service
-- [PubSubIO.md](./PubSubIO.md) - Tài liệu PubSubIO Service 

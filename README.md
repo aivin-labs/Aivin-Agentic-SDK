@@ -132,26 +132,20 @@ cd hello-world
   "functions": [
     {
       "name": "main",
-      "triggers": ["manual", "api", "chat"],
-      "description": "Say hello to user",
+      "trigger_type": ["manual", "api", "chat"],
+      "description": "Main plugin function",
       "inputs": [
         {
-          "field": "name",
-          "required": false,
-          "description": "Name to greet",
-          "type": "string",
-          "default": "World"
+          "field": "text",
+          "required": true,
+          "description": "Text to process",
+          "type": "string"
         }
       ],
       "outputs": [
         {
-          "field": "success",
-          "description": "Operation success status",
-          "type": "boolean"
-        },
-        {
-          "field": "message",
-          "description": "Hello message",
+          "field": "result",
+          "description": "Processed result",
           "type": "string"
         }
       ]
@@ -162,28 +156,27 @@ cd hello-world
 
 **handler.ts:**
 ```javascript
-import { LLMIO } from '@leanez/sdk';
+import { LLMIO, ContextIO } from '@leanez/sdk';
 
-// Main function - AI sẽ gọi để chạy plugin
-export async function main(input) {
-  try {
-    const { name = "World" } = input;
-    
-    // Sử dụng AI để tạo message personalized
-    const greeting = await LLMIO.prompt(
-      `Create a friendly, creative greeting for someone named "${name}". Keep it under 50 words.`
-    );
-    
-    return {
-      success: true,
-      message: greeting || `Hello, ${name}! Welcome to LeanEZ!`
-    };
-  } catch (error) {
-    return {
-      success: false,
-      message: `Error: ${error.message}`
-    };
-  }
+export async function main({ ctx, text }) {
+  const user = ctx.user;
+  const workspace = ctx.workspace;
+  
+  // Sử dụng AI để xử lý text
+  const result = await LLMIO.prompt(`Process this text: ${text}`, {
+    temperature: 0.7,
+    maxTokens: 100
+  });
+  
+  // Log thông tin user và workspace
+  console.log(`User: ${user?.name}, Workspace: ${workspace?.name}`);
+  
+  return {
+    success: true,
+    result: result,
+    processedBy: user?.name,
+    workspace: workspace?.name
+  };
 }
 ```
 
