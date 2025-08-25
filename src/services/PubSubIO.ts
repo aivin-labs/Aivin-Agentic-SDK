@@ -4,18 +4,37 @@ import type { RedisClientType, RedisClientOptions } from 'redis';
 import type { PubSubMessage, RequestOptions } from '../dto/PubSubDTO';
 
 /**
+ * Simple Logger for PubSubIO
+ */
+class Logger {
+  static log(message: string, ...args: any[]): void {
+    console.log(`[${new Date().toISOString()}] ${message}`, ...args);
+  }
+  
+  static error(message: string, ...args: any[]): void {
+    console.error(`[${new Date().toISOString()}] ERROR: ${message}`, ...args);
+  }
+  
+  static warning(message: string, ...args: any[]): void {
+    console.warn(`[${new Date().toISOString()}] WARN: ${message}`, ...args);
+  }
+}
+
+/**
  * PubSubIO - Redis Pub/Sub wrapper optimized for LeanEZ backend communication
  * Supports dual Redis connections:
  * - Local Redis (via RedisIO) for storage/cache
  * - Remote Redis (LeanEZ backend) for communication
+ * 
+ * Enhanced with service registration capabilities from serverpubsub.ts
  */
 export class PubSubIO {
   private static isInitialized = false;
   private static activeRequests = new Map<string, {
     resolve: (value: any) => void;
     reject: (error: Error) => void;
-    timeout: NodeJS.Timeout;
   }>();
+  private static subscriptions = new Map<string, any>();
   
   // Separate Redis client for LeanEZ backend communication
   private static backendClient: RedisClientType;
@@ -36,9 +55,9 @@ export class PubSubIO {
     
     this.setupResponseHandler();
     
-    console.log('[PubSubIO] Initialized');
-    console.log(`  - Local Redis: ${RedisIO.url} (via RedisIO)`);
-    console.log(`  - Backend Redis: ${this.useRemoteBackend ? 'Remote server' : 'Same as local'}`);
+    Logger.log('[PubSubIO] Initialized');
+    Logger.log(`  - Local Redis: ${RedisIO.url} (via RedisIO)`);
+    Logger.log(`  - Backend Redis: ${this.useRemoteBackend ? 'Remote server' : 'Same as local'}`);
     this.isInitialized = true;
   }
 
@@ -167,7 +186,7 @@ export class PubSubIO {
    */
   static async request<T = any>(channel: string, data: any, options?: RequestOptions): Promise<T> {
     const requestId = this.generateId();
-    const responseChannel = `response:${requestId}`;
+    const responseChannel = `callback:${requestId}`;
     const message: PubSubMessage = {
       id: requestId,
       channel,
@@ -178,16 +197,8 @@ export class PubSubIO {
     };
 
     return new Promise<T>(async (resolve, reject) => {
-      // Set timeout
-      const timeout = setTimeout(() => {
-        if (this.activeRequests.has(requestId)) {
-          this.activeRequests.delete(requestId);
-          reject(new Error(`Request timeout after ${options?.timeout || 30000}ms`));
-        }
-      }, options?.timeout || 30000);
-      
-      // Store request for response handling
-      this.activeRequests.set(requestId, { resolve, reject, timeout });
+      // Store request for response handling without timeout
+      this.activeRequests.set(requestId, { resolve, reject });
 
       try {
         // Subscribe to specific response channel
@@ -195,7 +206,6 @@ export class PubSubIO {
         await subscriber.subscribe(responseChannel, (rawMessage: string) => {
           if (this.activeRequests.has(requestId)) {
             const request = this.activeRequests.get(requestId)!;
-            clearTimeout(request.timeout);
             this.activeRequests.delete(requestId);
             
             try {
@@ -217,7 +227,6 @@ export class PubSubIO {
         
       } catch (error) {
         if (this.activeRequests.has(requestId)) {
-          clearTimeout(timeout);
           this.activeRequests.delete(requestId);
           reject(error);
         }
@@ -303,20 +312,33 @@ export class PubSubIO {
     console.log(`[PubSubIO] Backend Redis: ${info.backendRedis}`);
   }
 
+  // Server-only methods removed - plugins chỉ cần request/response pattern
+
   /**
    * Close backend connections
    */
   static async close(): Promise<void> {
     try {
+      // Clear all pending requests
+      for (const [id, pending] of this.activeRequests) {
+        pending.reject(new Error('PubSubIO is closing'));
+      }
+      this.activeRequests.clear();
+      
+      // Clean up subscriptions
+      this.subscriptions.clear();
+      
       if (this.backendSubscriber) {
         await this.backendSubscriber.quit();
       }
       if (this.backendClient) {
         await this.backendClient.quit();
       }
-      console.log('[PubSubIO] Backend Redis connections closed');
+      
+      this.isInitialized = false;
+      Logger.log('[PubSubIO] Backend Redis connections closed');
     } catch (error) {
-      console.error('[PubSubIO] Error closing backend connections:', error);
+      Logger.error('[PubSubIO] Error closing backend connections:', error);
     }
   }
 

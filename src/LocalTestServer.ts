@@ -1,10 +1,9 @@
 import * as http from 'http';
 import express from 'express';
-import {
-    PluginExecutionData,
-    PluginExecutionResult,
+import { 
+    PluginExecutionResult, 
     PluginManifest,
-    LogLevel
+    LogLevel 
 } from './types/PluginTypes';
 
 export interface LocalTestServerConfig {

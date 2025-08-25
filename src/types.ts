@@ -20,54 +20,8 @@ export interface AssistantOptions {
   [key: string]: any;
 }
 
-// Plugin Security Types
-export interface PluginSecurityConfig {
-  maxMemory: string;
-  maxCpus: number;
-  maxProcesses: number;
-  allowedNetworks: string[];
-  allowedVolumes: string[];
-  capabilities: string[];
-  readOnlyRootFilesystem: boolean;
-  noNewPrivileges: boolean;
-  runAsNonRoot: boolean;
-}
+// Plugin Security types removed - this is server-side infrastructure
 
-export interface ManagedPlugin {
-  id: string;
-  name: string;
-  version: string;
-  containerId: string;
-  status: 'starting' | 'running' | 'stopped' | 'error';
-  securityConfig: PluginSecurityConfig;
-  createdAt: Date;
-  lastHealthCheck?: Date;
-  resourceUsage?: {
-    cpuUsage: number;
-    memoryUsage: number;
-    networkIO: { rx: number; tx: number };
-  };
-}
+// ManagedPlugin removed - this is server-side infrastructure, not client SDK
 
-// Plugin Manifest Types
-export interface PluginFunction {
-  name: string;
-  description: string;
-  inputs: Record<string, any>;
-  outputs: Record<string, any>;
-}
-
-export interface PluginManifest {
-  name: string;
-  version: string;
-  description: string;
-  author: string;
-  capabilities?: string[];
-  functions: PluginFunction[];
-}
-
-export interface PluginConfig {
-  manifest: PluginManifest;
-  path: string;
-  env?: Record<string, string>;
-} 
+// Plugin types moved to ./types/PluginTypes.ts for consistency 

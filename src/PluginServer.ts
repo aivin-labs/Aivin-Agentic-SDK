@@ -1,36 +1,25 @@
 import { EventEmitter } from 'events';
-import { PubSubIO } from './services/PubSubIO';
-import { LocalTestServer } from './LocalTestServer';
-import { LLMIO } from './services/LLMIO';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import { 
-    PluginExecutionData, 
-    PluginExecutionResult, 
-    PluginManifest,
-    SDKConfig,
-    LogLevel 
+import { LocalTestServer } from './LocalTestServer';
+import { LLMIO } from './services/LLMIO';
+import { PubSubIO } from './services/PubSubIO';
+import {
+  PluginExecutionResult,
+  PluginManifest,
 } from './types/PluginTypes';
 
-export interface PluginServerConfig extends SDKConfig {
-  server_id?: string;
-  queue_name?: string;
-  enable_local_testing?: boolean;
-  port?: number;
-  plugins_path?: string;
-}
 
+// Single method pattern - simplified job data
 export interface PluginJobData {
-  execution_id: string;
-  plugin_id: string;
-  function_name: string;
-  input_data: any;
-  context: {
-    job_id: string;
-    flow_id: string;
-    workspace_id: string;
-    user_id: string;
+  execution_id?: string; // Optional for direct calls
+  plugin_name?: string; // Plugin name for validation (optional)
+  data: any; // Input data for the single entry point
+  ctx?: {
+    user: any;
+    workspace: any;
+    session: any;
     metadata?: any;
   };
   callback_queue?: string;
@@ -47,20 +36,26 @@ interface LoadedPlugin {
  * Plugin Server - Handles distributed plugin execution
  * Listens to Bull queue events from LeanEZ server and executes plugins
  */
+// Plugin Server config interface (Single method pattern)
+export interface PluginServerConfig {
+  server_id?: string;
+  enable_local_testing?: boolean;
+  port?: number;
+  plugins_path?: string;
+}
+
 export class PluginServer extends EventEmitter {
   private config: PluginServerConfig;
   private isRunning: boolean = false;
   private serverId: string;
-  private queueName: string;
   private testServer: any = null; // LocalTestServer instance
   private plugin: LoadedPlugin | null = null; // Single plugin only
 
   constructor(config: PluginServerConfig = {}) {
     super();
-    
+
     this.config = {
       server_id: config.server_id,
-      queue_name: config.queue_name || 'plugin-execution',
       enable_local_testing: config.enable_local_testing ?? false,
       port: config.port || 8080,
       plugins_path: config.plugins_path || '.',
@@ -68,7 +63,6 @@ export class PluginServer extends EventEmitter {
     };
 
     this.serverId = config.server_id || 'temp-server-id';
-    this.queueName = this.config.queue_name!;
   }
 
   /**
@@ -77,33 +71,34 @@ export class PluginServer extends EventEmitter {
   async start(): Promise<void> {
     try {
       console.log(`🚀 Starting Plugin Server...`);
-      
+
       // Load single plugin first to get manifest
       await this.loadPlugin();
-      
+
       if (!this.plugin) {
         throw new Error('No plugin loaded. Make sure manifest.json and handler.ts exist.');
       }
-      
+
       console.log(`✅ Loaded plugin: ${this.plugin.manifest.id} v${this.plugin.manifest.version}`);
 
-      // Set server ID with "node:" prefix and plugin ID as plain manifest.id
-      this.serverId = `node:${this.plugin.manifest.id}`;
+      // Set server ID with "node:" prefix and plugin name as identifier
+      this.serverId = `node:${this.plugin.manifest.name}`;
       this.config.server_id = this.serverId;
-      
-      // Configure LLMIO with plain plugin ID (without prefix)
-      LLMIO.configure({ pluginId: this.plugin.manifest.id });
-      
+
+      // Configure LLMIO with plugin name
+      LLMIO.configure({ pluginId: this.plugin.manifest.name });
+
       console.log(`📝 Server ID: ${this.serverId}`);
+      console.log(`📝 Plugin Name: ${this.plugin.manifest.name}`);
       console.log(`📝 Plugin ID: ${this.plugin.manifest.id}`);
 
       // Register plugin with LeanEZ
       await this.registerPlugin();
       console.log('✅ Plugin registered with LeanEZ');
-      
-      // Start listening to queue
+
+      // Start listening to plugin channel (single method)
       await this.startQueueListener();
-      console.log(`✅ Listening to queue: ${this.queueName}`);
+      console.log(`✅ Plugin listening on channel: plugin.${this.plugin.manifest.name}`);
 
       // Start local testing server if enabled
       if (this.config.enable_local_testing) {
@@ -113,9 +108,9 @@ export class PluginServer extends EventEmitter {
 
       this.isRunning = true;
       this.emit('server:started', { serverId: this.serverId });
-      
+
       console.log(`🎉 Plugin Server started successfully!`);
-      
+
     } catch (error) {
       const err = error as Error;
       console.error(`❌ Failed to start Plugin Server: ${err.message}`);
@@ -129,17 +124,17 @@ export class PluginServer extends EventEmitter {
   async stop(): Promise<void> {
     try {
       console.log(`🛑 Stopping Plugin Server: ${this.serverId}`);
-      
+
       this.isRunning = false;
-      
+
       // Stop local test server
       if (this.testServer) {
         await this.testServer.stop();
       }
-      
+
       this.emit('server:stopped', { serverId: this.serverId });
       console.log('✅ Plugin Server stopped');
-      
+
     } catch (error) {
       const err = error as Error;
       console.error(`❌ Error stopping server: ${err.message}`);
@@ -147,12 +142,15 @@ export class PluginServer extends EventEmitter {
   }
 
   /**
-   * Start listening to plugin execution requests
+   * Start listening to plugin execution requests (Single method pattern)
    */
   private async startQueueListener(): Promise<void> {
-    await PubSubIO.listen(this.queueName, async (jobData: PluginJobData) => {
-      console.log(`🔄 Received job via PubSub: ${jobData.plugin_id}.${jobData.function_name}`);
-      
+    // Single method registration - plugin chỉ expose một entry point
+    const pluginChannel = `plugin.${this.plugin!.manifest.name}`;
+
+    await PubSubIO.listen(pluginChannel, async (jobData: any) => {
+      console.log(`🔄 Received job for plugin: ${this.plugin!.manifest.name}`);
+
       try {
         const result = await this.executePluginJob(jobData);
         return result;
@@ -161,14 +159,12 @@ export class PluginServer extends EventEmitter {
         console.error(`❌ Job execution failed: ${err.message}`);
         return {
           success: false,
-          error: err.message,
-          execution_time: 0,
-          timestamp: new Date().toISOString()
+          error: err.message
         };
       }
     });
-    
-    console.log(`🎧 Listening on PubSub channel: ${this.queueName}`);
+
+    console.log(`🎧 Single method listening on channel: ${pluginChannel}`);
   }
 
   /**
@@ -179,11 +175,11 @@ export class PluginServer extends EventEmitter {
       const pluginsPath = this.config.plugins_path!;
       const manifestPath = path.join(pluginsPath, 'manifest.json');
       const handlerPath = path.join(pluginsPath, 'handler.ts');
-      
+
       if (!fs.existsSync(manifestPath) || !fs.existsSync(handlerPath)) {
         throw new Error(`Plugin files not found. Expected manifest.json and handler.ts in: ${pluginsPath}`);
       }
-      
+
       // Load manifest
       const manifestContent = fs.readFileSync(manifestPath, 'utf8');
       const manifest: PluginManifest = JSON.parse(manifestContent);
@@ -217,19 +213,21 @@ export class PluginServer extends EventEmitter {
     try {
       const plugin = this.plugin!;
 
+      // Register plugin với single method pattern
       await PubSubIO.emit('plugin-server-register', {
         server_id: this.serverId,
-        queue_name: this.queueName,
-        plugins: [
-          {
-            id: plugin.manifest.id,
-            name: plugin.manifest.name,
-            version: plugin.manifest.version,
-            functions: plugin.manifest.functions
-          }
-        ],
-        timestamp: new Date().toISOString()
+        plugin_channel: `plugin.${plugin.manifest.name}`, // Single channel
+        plugin_info: {
+          id: plugin.manifest.id,
+          name: plugin.manifest.name,
+          version: plugin.manifest.version,
+          description: plugin.manifest.description,
+          author: plugin.manifest.author,
+          method: 'single' // Single method pattern - always 'main' entry point
+        }
       }, { sender: this.serverId });
+
+      // Single method pattern - không cần register multiple functions
 
       console.log(`📡 Registered plugin with LeanEZ`);
     } catch (error) {
@@ -239,86 +237,95 @@ export class PluginServer extends EventEmitter {
   }
 
   /**
-   * Execute plugin job
+   * Execute plugin job (Single method pattern)
    */
-  async executePluginJob(jobData: PluginJobData): Promise<PluginExecutionResult> {
-    const startTime = Date.now();
-    
+  async executePluginJob(jobData: any): Promise<PluginExecutionResult> {
     try {
-      console.log(`🔄 Executing plugin job: ${jobData.plugin_id}.${jobData.function_name}`);
-      
+      console.log(`🔄 Executing single method for plugin: ${this.plugin!.manifest.name}`);
+
       // Validate plugin
       if (!this.plugin) {
         throw new Error('No plugin loaded');
       }
-      
-      if (this.plugin.manifest.id !== jobData.plugin_id) {
-        throw new Error(`Plugin ID mismatch. Expected: ${this.plugin.manifest.id}, Received: ${jobData.plugin_id}`);
+
+      // Single method pattern - always call 'main' or default export
+      let targetFunction;
+
+      // Single method pattern - default to 'main' entry point
+      const entryPoint = 'main';
+
+      // Try to get specified entry point
+      if (this.plugin.handler[entryPoint] && typeof this.plugin.handler[entryPoint] === 'function') {
+        targetFunction = this.plugin.handler[entryPoint];
+        console.log(`📝 Using entry point: ${entryPoint}`);
+      }
+      // Fallback to default export if it's a function
+      else if (typeof this.plugin.handler === 'function') {
+        targetFunction = this.plugin.handler;
+        console.log(`📝 Using default export as entry point`);
+      }
+      // Fallback to any exported function (first one found)
+      else {
+        const functionNames = Object.keys(this.plugin!.handler).filter(key =>
+          typeof this.plugin!.handler[key] === 'function'
+        );
+        if (functionNames.length > 0) {
+          targetFunction = this.plugin.handler[functionNames[0]];
+          console.log(`📝 Using function: ${functionNames[0]} as fallback entry point`);
+        }
       }
 
-      // Get function from handler
-      const targetFunction = this.plugin.handler[jobData.function_name];
-      if (!targetFunction || typeof targetFunction !== 'function') {
-        throw new Error(`Function ${jobData.function_name} not found in plugin ${jobData.plugin_id}`);
+      if (!targetFunction) {
+        throw new Error(`No executable function found in plugin ${this.plugin.manifest.name}`);
       }
 
-      // Execute plugin function
-      const result = await targetFunction(jobData.input_data, jobData.context);
-      
-      // Send result back to LeanEZ
-      if (jobData.callback_queue) {
+      // Execute plugin function với input data
+      const result = await targetFunction(jobData);
+
+      // Send result back to LeanEZ (nếu có callback)
+      if (jobData.callback_queue && jobData.execution_id) {
         await this.sendResultToLeanEZ(jobData.execution_id, {
           success: true,
-          result: result,
-          execution_time: Date.now() - startTime,
-          timestamp: new Date().toISOString()
+          result: result
         }, jobData.callback_queue);
       }
-      
-      const executionTime = Date.now() - startTime;
-      console.log(`✅ Plugin executed successfully in ${executionTime}ms`);
-      
-      this.emit('job:completed', { 
-        executionId: jobData.execution_id,
-        pluginId: jobData.plugin_id,
-        functionName: jobData.function_name,
-        result,
-        executionTime
+
+      console.log(`✅ Plugin executed successfully`);
+
+      this.emit('job:completed', {
+        executionId: jobData.execution_id || 'unknown',
+        pluginName: this.plugin!.manifest.name,
+        entryPoint: 'main', // Single method pattern
+        result
       });
-      
+
       return {
         success: true,
-        result: result,
-        execution_time: executionTime,
-        timestamp: new Date().toISOString()
+        result: result
       };
-      
+
     } catch (error) {
       const err = error as Error;
-      const executionTime = Date.now() - startTime;
-      
+
       console.error(`❌ Plugin execution failed: ${err.message}`);
-      
+
       const errorResult: PluginExecutionResult = {
         success: false,
-        error: err.message,
-        execution_time: executionTime,
-        timestamp: new Date().toISOString()
+        error: err.message
       };
-      
+
       // Send error result back to LeanEZ
       if (jobData.callback_queue) {
         await this.sendResultToLeanEZ(jobData.execution_id, errorResult, jobData.callback_queue);
       }
-      
+
       this.emit('job:failed', {
-        executionId: jobData.execution_id,
-        pluginId: jobData.plugin_id,
-        functionName: jobData.function_name,
-        error: err.message,
-        executionTime
+        executionId: jobData.execution_id || 'unknown',
+        pluginName: this.plugin!.manifest.name,
+        entryPoint: 'main', // Single method pattern
+        error: err.message
       });
-      
+
       return errorResult;
     }
   }
@@ -327,8 +334,8 @@ export class PluginServer extends EventEmitter {
    * Send execution result back to LeanEZ server
    */
   private async sendResultToLeanEZ(
-    executionId: string, 
-    result: PluginExecutionResult, 
+    executionId: string,
+    result: PluginExecutionResult,
     callbackQueue: string
   ): Promise<void> {
     try {
@@ -336,17 +343,16 @@ export class PluginServer extends EventEmitter {
       await PubSubIO.emit(callbackQueue, {
         execution_id: executionId,
         server_id: this.serverId,
-        result,
-        timestamp: new Date().toISOString()
+        result
       }, { sender: this.serverId });
-      
+
       console.log(`✅ Result sent to LeanEZ via queue: ${callbackQueue}`);
-      
+
     } catch (error) {
       const err = error as Error;
       console.error(`❌ Failed to send result to LeanEZ: ${err.message}`);
       console.error('Make sure PubSub/Redis connection is working properly');
-      
+
       // Re-throw the error so caller knows delivery failed
       throw new Error(`Failed to deliver result to LeanEZ: ${err.message}`);
     }
@@ -362,7 +368,7 @@ export class PluginServer extends EventEmitter {
         pluginsPath: this.config.plugins_path
       });
       await this.testServer.start();
-      
+
     } catch (error) {
       const err = error as Error;
       console.error(`Failed to start local test server: ${err.message}`);
@@ -376,7 +382,7 @@ export class PluginServer extends EventEmitter {
   getStatus() {
     return {
       server_id: this.serverId,
-      queue_name: this.queueName,
+      plugin_channel: this.plugin ? `plugin.${this.plugin.manifest.name}` : 'none',
       is_running: this.isRunning,
       uptime: process.uptime(),
       memory_usage: process.memoryUsage()

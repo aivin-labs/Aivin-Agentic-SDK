@@ -38,14 +38,9 @@ export interface MessageMetadata {
   headers?: Record<string, any>;
 }
 
-// PubSub statistics
-export interface PubSubStats {
-  totalMessages: number;
-  activeSubscriptions: number;
-  pendingRequests: number;
-  errors: number;
-  uptime: number;
-}
+// PubSub statistics removed - this is server-side monitoring
+
+// Plugin server-side DTOs removed - client chỉ cần basic PubSub communication
 
 // Error types
 export class PubSubError extends Error {

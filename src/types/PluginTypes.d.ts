@@ -4,15 +4,17 @@
  * This file contains all type definitions for the Plugin SDK.
  * Can be extracted into a separate npm package later.
  */
+// Single method pattern - simplified execution data
 export interface PluginExecutionData {
-    job_id: string;
-    flow_id: string;
-    plugin_id: string;
-    function_name: string;
-    input: any;
-    workspace_id: string;
-    user_id: string;
-    metadata?: any;
+    execution_id?: string;
+    plugin_name: string; // Plugin name instead of plugin_id
+    data: any; // Single input data
+    ctx?: {
+        user: any;
+        workspace: any;
+        session: any;
+        metadata?: any;
+    };
     timeout?: number;
 }
 export interface PluginExecutionResult {
