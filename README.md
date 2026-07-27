@@ -387,6 +387,7 @@ variable: [docs/CLI.md](docs/CLI.md).
 | `aivin create [name]` | Scaffold a new plugin (interactive, or `--json`/`--stdin` for scripted/AI use). |
 | `aivin plugin make "<description>"` | AI-generate `src/main.ts` from a natural-language business description, already written against this SDK's namespaces. |
 | `aivin plugin convert` | Already have a project? Turn it into a plugin — AI-generate `src/main.ts` from the code you already have, in the current directory. |
+| `aivin plugin search "<query>"` | Search the platform's plugin ecosystem for something to reuse before writing new logic. |
 | `aivin plugin trigger "<mission>" '<input>'` | Invoke an already-deployed plugin for real and print the result — like the platform's Playground. `-a "<prompt>"` lets the platform auto-map free text onto the input schema instead. |
 | `aivin validate --json <config>` | Validate a plugin config before creating/deploying. |
 | `aivin start` | Run the plugin locally: real gRPC server + an HTTP test shim on `:4001`. |

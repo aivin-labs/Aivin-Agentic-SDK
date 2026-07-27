@@ -208,6 +208,27 @@ aivin plugin convert "focus on the exportInvoice function"
 
 Review generated code before relying on it - it's a strong starting point, not a guarantee.
 
+## `aivin plugin search <query>`
+
+Searches the platform's plugin ecosystem before you write new logic - the same relevance-ranked
+lookup the platform's own agent uses to auto-select a plugin for a mission (`GET /plugins/search`).
+Doesn't need to be run from inside a plugin project.
+
+```bash
+aivin plugin search "send a slack message"
+```
+
+Options:
+
+```
+Options:
+  --workspace <id>  Restrict to plugins visible in this workspace (default: your whole org)
+  --limit <n>       Max results to show
+```
+
+Prints each match's id, name, description, and version. Call one from your own plugin with
+`await ctx.sdk.call('<id>.<purpose>', params)` (or `import { call } from '@aivin-labs/sdk'`).
+
 ## `aivin plugin trigger [mission] [input]`
 
 Invokes an **already-deployed** plugin for real and prints the result - the same
