@@ -5,6 +5,47 @@
 First published release (`npm install @aivin-labs/sdk`). Everything below accumulated during
 development before this release - kept as-is rather than squashed, since the detail is useful.
 
+### 🐛 Fixed — plugin-to-plugin calls (`ctx.sdk.call('other_plugin_id', params)`) never actually worked
+
+The AI code generator's own instructions (`CodeGenerationHelper.ts` on the backend) told every
+generated plugin to reuse an existing plugin via `ctx.sdk.call('plugin_id', params)` when one
+matched the task. This was false for this SDK's Docker/gRPC runtime: the inbound dispatcher
+(`GrpcSDKServer.Invoke` → `PluginBridge.call()`) only ever looked up registered host methods
+(`ai.*`, `agent.*`, `datastore.*`, ...) and threw `SDK_FUNCTION_NOT_FOUND` for anything else - the
+plugin-to-plugin fallback (`PluginBridge.trigger()`) existed on the backend but was only wired into
+`InProcessTransportAdapter`, a different (LITE/in-process) plugin runtime. Any AI-generated plugin
+that followed the platform's own advice and called another plugin would crash at runtime. Fixed by
+adding the same fallback to `PluginBridge.call()` - verified live that the failure mode changed
+from `SDK_FUNCTION_NOT_FOUND` to a (correctly) deeper-stage error once the target is an actual
+Docker-runtime plugin, which this sandbox's bare-metal backend can't fully reach for the same
+Docker-networking reason noted above.
+
+### 🆕 Added — `aivin plugin search <query>`
+
+Search the platform's plugin ecosystem before writing new logic - wraps the backend's existing
+`GET /plugins/search` (the same relevance-ranked lookup the platform's own agent uses to
+auto-select a plugin for a mission; newly opened up to API-key auth via `@AllowApiKey()` so the CLI
+can reach it, not just a browser session). `--workspace <id>` narrows scope, `--limit <n>` caps
+results. Verified live - found a real previously-deployed plugin by name.
+
+### 🆕 Added — `AGENTS.md` scaffolding + `import` style as the documented default over `ctx.sdk`
+
+- `aivin create` now writes a short `AGENTS.md` into every new plugin project - the emerging
+  cross-tool convention (Claude Code, Cursor, and others read it automatically on open). Unlike
+  `docs/AI-Plugin-Guide.md` in *this* repo, a coding agent working inside a freshly-scaffolded
+  plugin project (a different directory entirely) had no way to discover that guide on its own.
+  Covers: the two files that matter, the preferred `import { ai } from '@aivin-labs/sdk'` style vs.
+  when to actually reach for `ctx.sdk`, `aivin plugin search` for reuse-before-rewrite, and the
+  handful of CLI commands you'll actually run day to day.
+- `docs/SDK.md` and the backend's own AI code-generation instructions/template
+  (`CodeGenerationHelper.ts`) now both lead with the top-level `import` style as the default,
+  explaining `ctx.sdk` exists specifically (and only) for code that isn't guaranteed to run inside
+  `main()`'s async context - not as a beginner-friendly alternative. Verified live: a fresh
+  `aivin plugin make` generation now produces `import { ai } from '@aivin-labs/sdk'` code instead of
+  `ctx.sdk.ai.prompt(...)`.
+- Added `AGENTS.md` at this repo's own root too, for anyone (human or agent) working on the SDK's
+  source directly - distinct from the one scaffolded into consumer projects.
+
 ### 🐛 Fixed — real end-to-end Docker test uncovered 2 deployment-blocking backend bugs
 
 Set up a genuinely fresh project (`aivin create`, real `npm install` from the public registry now

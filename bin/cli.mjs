@@ -351,7 +351,70 @@ async function createPluginProject(
     createTsConfig(pluginDir),
     createEnv(pluginDir),
     createGitignore(pluginDir),
+    createAgentsGuide(pluginDir),
   ]);
+}
+
+/**
+ * AGENTS.md - the emerging cross-tool convention (Claude Code, Cursor, and others all read this
+ * file automatically on open, unlike docs/AI-Plugin-Guide.md in the *SDK's own* repo, which a
+ * coding agent working inside a freshly-scaffolded plugin project - a completely different
+ * directory - has no way to discover on its own). Kept short on purpose: this is a primer to get
+ * an agent oriented fast, not a full reference - it points to the installed package's own README
+ * for depth instead of duplicating it.
+ */
+async function createAgentsGuide(pluginDir) {
+  const agentsPath = path.join(pluginDir, 'AGENTS.md');
+  if (fs.existsSync(agentsPath)) return;
+
+  const content = `# AGENTS.md
+
+This is an Aivin plugin project (\`@aivin-labs/sdk\`). Quick orientation for a coding agent working in this directory.
+
+## The two files that matter
+
+- **\`manifest.json\`** - id/name/description/version + \`input\`/\`output\` field descriptions (used for auto-mapping natural-language prompts onto real args). Full reference: \`node_modules/@aivin-labs/sdk/docs/MANIFEST.md\`.
+- **\`src/main.ts\`** - exports exactly one \`main(mission, input, ctx)\` entry point, returning a \`PluginResponse\` (\`{ status: PluginStatus.SUCCESS | ERROR | FAIL, data?, message?, error_code? }\`).
+
+## Calling the platform - prefer the top-level import, not \`ctx.sdk\`
+
+Both work (they're the exact same client under the hood), but **default to this style** in any code you write or generate here:
+
+\`\`\`typescript
+import { ai } from '@aivin-labs/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
+
+export async function main(mission: string, input: PluginInput, ctx: PluginContext): Promise<PluginResponse> {
+  const summary = await ai.prompt(\`Summarize: \${input.text}\`);
+  return { status: PluginStatus.SUCCESS, data: summary };
+}
+\`\`\`
+
+Only reach for \`ctx.sdk.*\` if you specifically need to call the platform from somewhere that isn't guaranteed to be inside a running \`main()\` invocation - the top-level import relies on \`AsyncLocalStorage\` scoping that \`ctx.sdk\` doesn't need.
+
+Namespaces available: \`ai\`, \`vector\`, \`knowledge\`, \`datastore\`, \`task\`, \`store\`, \`redis\`, \`mongo\`, \`workspace\`, \`agent\`, \`realtime\`, \`queue\`, \`message\`, \`notification\`, \`file\`, \`session\`, \`resource\`, \`setting\`, \`usage\`, \`automation\`, \`browser\`, \`causality\`, \`attachment\`, \`datasource\`. Full per-namespace reference: \`node_modules/@aivin-labs/sdk/docs/sdk/*.md\`.
+
+## Reusing another plugin instead of writing new logic
+
+Before implementing something from scratch, check if a plugin already does it:
+
+\`\`\`bash
+aivin plugin search "what you're trying to do"
+\`\`\`
+
+Call one from your own \`main()\` with \`await ctx.sdk.call('<plugin_id>.<purpose>', params)\` (or the top-level \`call()\` import).
+
+## Commands you'll actually use
+
+- \`aivin start\` - run this plugin locally (gRPC server + HTTP test shim on :4001).
+- \`aivin test\` - deploy to a test instance and smoke-test it with generated input.
+- \`aivin plugin trigger "<mission>" '<input JSON>'\` - invoke an already-deployed plugin for real.
+- \`aivin plugin make "<description>"\` - regenerate \`src/main.ts\` from a plain-language description.
+
+Full docs: \`node_modules/@aivin-labs/sdk/README.md\` and \`node_modules/@aivin-labs/sdk/docs/\`.
+`;
+  fs.writeFileSync(agentsPath, content);
 }
 
 async function createGitignore(pluginDir) {
@@ -1356,7 +1419,65 @@ async function triggerPlugin(mission, inputJson, options) {
   if (!ok) process.exitCode = 1;
 }
 
+async function searchPlugins(query, options) {
+  const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    console.log(chalk.yellow('⚠️  API_KEY not set - run `aivin login` first'));
+  }
+  const authHeaders = { headers: { Authorization: `Bearer ${apiKey || 'dev-token'}` } };
+
+  const params = { query };
+  if (options.workspace) params.workspace_id = options.workspace;
+  if (options.limit) params.limit = options.limit;
+
+  let response;
+  try {
+    response = await axios.get(`${serverUrl}/plugins/search`, { ...authHeaders, params });
+  } catch (error) {
+    const message = error.response?.data?.message || error.message;
+    throw new Error(`Search failed: ${message}`, { cause: error });
+  }
+
+  // `?limit`/`?page` given -> { items, total, ... } (paged); otherwise a bare array (the same
+  // relevance-ranked lookup the platform's own agent uses to auto-select a plugin for a mission).
+  const data = response.data;
+  const results = Array.isArray(data) ? data : data?.items || [];
+
+  if (results.length === 0) {
+    console.log(chalk.yellow(`No plugins found matching "${query}".`));
+    return;
+  }
+
+  console.log(chalk.blue(`Found ${results.length} plugin(s) matching "${query}":\n`));
+  for (const plugin of results) {
+    console.log(chalk.bold(plugin.name || plugin.id) + chalk.gray(`  (${plugin.id})`));
+    if (plugin.description) console.log(`  ${plugin.description}`);
+    if (plugin.version) console.log(chalk.gray(`  v${plugin.version}`));
+    console.log();
+  }
+  console.log(
+    chalk.gray(
+      `Call one from your own plugin with: ctx.sdk.call('<id>.<purpose>', params) - or import { call } from '@aivin-labs/sdk'.`,
+    ),
+  );
+}
+
 const pluginCommand = program.command('plugin').description('AI-assisted plugin authoring');
+
+pluginCommand
+  .command('search <query>')
+  .description("Search the platform's plugin ecosystem for something to reuse instead of writing it yourself")
+  .option('--workspace <id>', 'Restrict to plugins visible in this workspace (default: your whole org)')
+  .option('--limit <n>', 'Max results to show')
+  .action(async (query, options) => {
+    try {
+      await searchPlugins(query, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
 
 pluginCommand
   .command('make <description>')

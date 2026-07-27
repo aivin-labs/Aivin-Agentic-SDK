@@ -26,19 +26,22 @@ export async function main(
 ## Three equivalent ways to reach it
 
 All three resolve to the exact same per-invocation client (same tenant scoping, same capability
-token) — pick whichever reads best in your code.
+token) — but they're not interchangeable by preference alone. **Default to style 1** (import just
+the namespaces you need) in any code you write or generate; reach for `ctx.sdk` only when you
+specifically need it (see below).
 
 ```typescript
-// 1. Import just the namespace(s) you need (preferred - keeps imports explicit and minimal)
+// 1. RECOMMENDED — import just the namespace(s) you need
 import { ai, mongo } from '@aivin-labs/sdk';
 await ai.prompt('Hello');
 mongo.model('users').find({});
 
-// 2. Default import - the whole client as one object
+// 2. Default import - the whole client as one object (same client as style 1, just one import)
 import SDK from '@aivin-labs/sdk';
 await SDK.ai.prompt('Hello');
 
-// 3. Via ctx (3rd argument of main()) - no import needed for the client itself
+// 3. Via ctx (3rd argument of main()) - use only when you need to call the platform from
+// somewhere not guaranteed to run inside main() itself (see below); not the default choice.
 export async function main(mission, input, ctx) {
   return { status: 'success', data: await ctx.sdk.ai.prompt('Hello') };
 }
@@ -46,8 +49,10 @@ export async function main(mission, input, ctx) {
 
 Styles 1–2 only resolve while a `main()` invocation is actively running (backed by
 `AsyncLocalStorage`, scoped per-invocation) — calling them outside that window throws a clear
-error. Use `ctx.sdk` (style 3) if you need to call the platform from somewhere that isn't
-guaranteed to run inside `main()`.
+error. That's the *only* reason `ctx.sdk` (style 3) exists at all: for the rare case where you're
+calling the platform from code that isn't guaranteed to run inside `main()`'s async context. It is
+not a "simpler for beginners" alternative to style 1 - both are the same client, same call, same
+cost; style 1 is just the one to default to.
 
 Within any of these, two equivalent call styles are always available:
 
