@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## [1.1.0] - 2026-07-28
+
+### 📝 Documented — `manifest.json`'s `avatar` field
+
+Real, working, already-persisted on every deploy (`PluginModel.ts`'s schema has had `avatar: String`
+all along, and `PluginStoreService.loadPlugin` spreads the whole manifest object into it) - but was
+typed on neither side (`PluginTypes.ts` here nor the backend's own `PluginDTO.ts`) and never
+mentioned in `docs/MANIFEST.md`, so no plugin author had a way to discover it existed. Added
+`avatar?: string` to `PluginManifest` and a field-table row explaining it's a URL (host the image
+via `resource.upload` or elsewhere first, not raw bytes) with a fallback to the publishing user's
+own avatar when omitted.
 
 ### 🆕 Added — real unit-testing utilities (`createMockSDK`/`withMockSDK`/`createMockContext`) + live debug streaming
 

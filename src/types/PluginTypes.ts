@@ -18,6 +18,14 @@ export interface PluginManifest {
   author?: string;
   email?: string;
   /**
+   * URL to an image representing this plugin (shown in plugin listings/pickers) - a plain string
+   * field on the real backend schema (`PluginModel.ts`'s `avatar`), not previously typed here.
+   * Omit it and the platform falls back to the publishing user's own avatar. Host the image
+   * yourself first (e.g. `resource.upload({ file, is_public: true })` - see docs/sdk/resource.md -
+   * or any public URL) and put the resulting URL here; this field does not accept raw image bytes.
+   */
+  avatar?: string;
+  /**
    * Name of the exported function in `src/main.ts` this manifest calls. Only meaningful for a
    * multi-function plugin, where several manifest entries (see `MultiFunctionManifestEntry`) share
    * one uploaded `src/main.ts`/container - omit it for a normal single-function plugin, which
