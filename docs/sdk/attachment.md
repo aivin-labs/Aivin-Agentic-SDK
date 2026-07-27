@@ -8,8 +8,8 @@ plugin needs to reason over files a user has attached rather than raw text passe
 ## Import
 
 ```typescript
-import { attachment } from '@aivin/sdk';
-// equally: ctx.sdk.attachment / import SDK from '@aivin/sdk'; SDK.attachment
+import { attachment } from '@aivin-labs/sdk';
+// equally: ctx.sdk.attachment / import SDK from '@aivin-labs/sdk'; SDK.attachment
 ```
 
 ## Methods
@@ -25,7 +25,7 @@ import { attachment } from '@aivin/sdk';
 ## `search` example
 
 ```typescript
-import { attachment } from '@aivin/sdk';
+import { attachment } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const matches = await attachment.search({ query: 'Q3 revenue table', limit: 5 });
@@ -36,7 +36,7 @@ export async function main(mission, input, ctx) {
 ## `deepResearch` example
 
 ```typescript
-import { attachment } from '@aivin/sdk';
+import { attachment } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const research = await attachment.deepResearch({
@@ -55,7 +55,7 @@ export async function main(mission, input, ctx) {
 ## `evaluate` example
 
 ```typescript
-import { attachment } from '@aivin/sdk';
+import { attachment } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const review = await attachment.evaluate({
@@ -73,7 +73,7 @@ export async function main(mission, input, ctx) {
 ## `queryTabularData` example
 
 ```typescript
-import { attachment } from '@aivin/sdk';
+import { attachment } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const result = await attachment.queryTabularData({
@@ -90,7 +90,7 @@ export async function main(mission, input, ctx) {
 ## `queryMediaTimestamp` example
 
 ```typescript
-import { attachment } from '@aivin/sdk';
+import { attachment } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const result = await attachment.queryMediaTimestamp({

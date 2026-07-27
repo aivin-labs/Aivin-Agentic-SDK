@@ -8,8 +8,8 @@ similarity search over indexed content.
 ## Import
 
 ```typescript
-import { knowledge } from '@aivin/sdk';
-// equally: ctx.sdk.knowledge / import SDK from '@aivin/sdk'; SDK.knowledge
+import { knowledge } from '@aivin-labs/sdk';
+// equally: ctx.sdk.knowledge / import SDK from '@aivin-labs/sdk'; SDK.knowledge
 ```
 
 ## Methods
@@ -21,7 +21,7 @@ import { knowledge } from '@aivin/sdk';
 ## `search` example
 
 ```typescript
-import { knowledge } from '@aivin/sdk';
+import { knowledge } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const results = await knowledge.search(input.question, {

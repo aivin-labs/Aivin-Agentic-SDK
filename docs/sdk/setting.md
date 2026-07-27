@@ -8,8 +8,8 @@ merchant-level config (e.g. billing/store setup) rather than its own plugin conf
 ## Import
 
 ```typescript
-import { setting } from '@aivin/sdk';
-// equally: ctx.sdk.setting / import SDK from '@aivin/sdk'; SDK.setting
+import { setting } from '@aivin-labs/sdk';
+// equally: ctx.sdk.setting / import SDK from '@aivin-labs/sdk'; SDK.setting
 ```
 
 ## Methods
@@ -26,7 +26,7 @@ based on what your workspace actually returns.
 ## `get` example
 
 ```typescript
-import { setting } from '@aivin/sdk';
+import { setting } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const settings = await setting.get({ lang: 'vi' });
@@ -37,7 +37,7 @@ export async function main(mission, input, ctx) {
 ## `getMerchantConfig` example
 
 ```typescript
-import { setting } from '@aivin/sdk';
+import { setting } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // No fields are accepted here per the SDKClient.ts signature - call with no args or `{}`.

@@ -150,7 +150,7 @@ aivin deploy
 
 ```bash
 # Cài đặt dependencies
-npm install -g @aivin/sdk
+npm install -g @aivin-labs/sdk
 ```
 
 ### 2. **Tạo Plugin đầu tiên của bạn**

@@ -10,8 +10,8 @@ and pass the resulting URL/metadata into `file.create`.
 ## Import
 
 ```typescript
-import { file } from '@aivin/sdk';
-// equally: ctx.sdk.file / import SDK from '@aivin/sdk'; SDK.file
+import { file } from '@aivin-labs/sdk';
+// equally: ctx.sdk.file / import SDK from '@aivin-labs/sdk'; SDK.file
 ```
 
 ## Methods
@@ -30,7 +30,7 @@ Underlying host calls: `file.createFile`, `file.getFile`, `file.deleteFile`, `fi
 ## `create` example
 
 ```typescript
-import { file } from '@aivin/sdk';
+import { file } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const created = await file.create({
@@ -47,7 +47,7 @@ export async function main(mission, input, ctx) {
 ## `get` / `del` example
 
 ```typescript
-import { file } from '@aivin/sdk';
+import { file } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const record = await file.get(input.fileId);
@@ -66,7 +66,7 @@ export async function main(mission, input, ctx) {
 ## `list` / `search` example
 
 ```typescript
-import { file } from '@aivin/sdk';
+import { file } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const page = await file.list({ limit: 20, offset: 0 });

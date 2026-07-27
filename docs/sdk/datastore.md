@@ -8,8 +8,8 @@
 ## Import
 
 ```typescript
-import { datastore } from '@aivin/sdk';
-// equally: ctx.sdk.datastore / import SDK from '@aivin/sdk'; SDK.datastore
+import { datastore } from '@aivin-labs/sdk';
+// equally: ctx.sdk.datastore / import SDK from '@aivin-labs/sdk'; SDK.datastore
 ```
 
 ## Methods
@@ -37,7 +37,7 @@ import { datastore } from '@aivin/sdk';
 ## `ensureTable` / `createTable` example
 
 ```typescript
-import { datastore } from '@aivin/sdk';
+import { datastore } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // Get-or-create a table by purpose - lets the platform pick/reuse an existing table.
@@ -69,7 +69,7 @@ export async function main(mission, input, ctx) {
 ## `getTables` / `getTable` / `updateTable` / `deleteTable` example
 
 ```typescript
-import { datastore } from '@aivin/sdk';
+import { datastore } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const tables = await datastore.getTables({
@@ -97,7 +97,7 @@ export async function main(mission, input, ctx) {
 ## `addRow` / `getRow` / `updateRow` / `deleteRow` example
 
 ```typescript
-import { datastore } from '@aivin/sdk';
+import { datastore } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const row = await datastore.addRow({
@@ -120,7 +120,7 @@ export async function main(mission, input, ctx) {
 ## `getRows` example
 
 ```typescript
-import { datastore } from '@aivin/sdk';
+import { datastore } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const openTickets = await datastore.getRows({
@@ -140,7 +140,7 @@ export async function main(mission, input, ctx) {
 ## `batchUpdateRows` / `batchDeleteRows` / `bulkAddRows` example
 
 ```typescript
-import { datastore } from '@aivin/sdk';
+import { datastore } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await datastore.batchUpdateRows({
@@ -170,7 +170,7 @@ export async function main(mission, input, ctx) {
 ## `smartQuery` / `batchUpdateByAI` / `searchSemantic` example
 
 ```typescript
-import { datastore } from '@aivin/sdk';
+import { datastore } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const answer = await datastore.smartQuery('How many open tickets does each customer have?');

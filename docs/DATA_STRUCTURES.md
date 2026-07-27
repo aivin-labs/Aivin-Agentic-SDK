@@ -1,6 +1,6 @@
 # 📊 Aivin SDK — Data Structures
 
-Every type below is exported from `@aivin/sdk` and mirrors the backend's real data models
+Every type below is exported from `@aivin-labs/sdk` and mirrors the backend's real data models
 (`src/plugins/sdk/CodeSDK.d.ts`).
 
 ```typescript
@@ -14,10 +14,10 @@ import type {
   PluginInput,
   PluginContext,
   PluginResponse,
-} from '@aivin/sdk';
+} from '@aivin-labs/sdk';
 
 // Real (value) imports - these exist at runtime, use them in your return statements:
-import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
+import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
 ```
 
 ## Context types
@@ -267,7 +267,7 @@ function main(mission: string, input: PluginInput, ctx: PluginContext): Promise<
 
 ```typescript
 interface PluginContext {
-  sdk: SDKClient; // see docs/SDK.md — or `import SDK from '@aivin/sdk'`
+  sdk: SDKClient; // see docs/SDK.md — or `import SDK from '@aivin-labs/sdk'`
   user?: User;
   workspace?: Workspace;
   session?: MessageSession;

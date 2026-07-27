@@ -9,8 +9,8 @@ follow-ups, retry-after-cooldown logic, and multi-step workflows that need to pa
 ## Import
 
 ```typescript
-import { queue } from '@aivin/sdk';
-// equally: ctx.sdk.queue / import SDK from '@aivin/sdk'; SDK.queue
+import { queue } from '@aivin-labs/sdk';
+// equally: ctx.sdk.queue / import SDK from '@aivin-labs/sdk'; SDK.queue
 ```
 
 ## Methods
@@ -24,7 +24,7 @@ Underlying host call: `queue.scheduleJob`.
 ## `scheduleJob` example
 
 ```typescript
-import { queue } from '@aivin/sdk';
+import { queue } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // First run: kick off work, then schedule a follow-up check of this same plugin.

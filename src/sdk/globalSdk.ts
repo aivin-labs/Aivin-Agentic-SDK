@@ -6,8 +6,8 @@ import type { SDKClient } from './SDKClient';
  * SDKClient (same capability token, same tenant scoping) - pick whichever reads best:
  *
  *   ctx.sdk.mongo.model('users').find({...})              // via ctx (3rd arg of main())
- *   import SDK from '@aivin/sdk'; SDK.mongo.model(...)      // default import
- *   import { mongo } from '@aivin/sdk'; mongo.model(...)    // import just the namespace you need
+ *   import SDK from '@aivin-labs/sdk'; SDK.mongo.model(...)      // default import
+ *   import { mongo } from '@aivin-labs/sdk'; mongo.model(...)    // import just the namespace you need
  *
  * All of these are Proxy objects that resolve `getCurrentSDK()` fresh on every property access -
  * there's no single shared instance, since a new SDKClient (bound to a fresh capability token) is
@@ -36,10 +36,10 @@ const sdkClient: SDKClient = new Proxy({} as SDKClient, {
   },
 }) as SDKClient;
 
-/** `import SDK from '@aivin/sdk'` - the whole client as one object. */
+/** `import SDK from '@aivin-labs/sdk'` - the whole client as one object. */
 export default sdkClient;
 
-// ── Per-namespace named exports - `import { mongo, redis, ai } from '@aivin/sdk'` ────────────
+// ── Per-namespace named exports - `import { mongo, redis, ai } from '@aivin-labs/sdk'` ────────────
 export const ai = bindNamespace('ai');
 export const knowledge = bindNamespace('knowledge');
 export const vector = bindNamespace('vector');
@@ -66,7 +66,7 @@ export const store = bindNamespace('store');
 export const redis = bindNamespace('redis');
 export const mongo = bindNamespace('mongo');
 
-// ── Top-level method exports - `import { ask, hil, call } from '@aivin/sdk'` ──────────────────
+// ── Top-level method exports - `import { ask, hil, call } from '@aivin-labs/sdk'` ──────────────────
 export function call(func: string, params?: any, timeoutMs?: number) {
   return getCurrentSDK().call(func, params, timeoutMs);
 }

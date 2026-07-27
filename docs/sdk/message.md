@@ -8,8 +8,8 @@ which manages the session/thread container itself (not the messages inside it).
 ## Import
 
 ```typescript
-import { message } from '@aivin/sdk';
-// equally: ctx.sdk.message / import SDK from '@aivin/sdk'; SDK.message
+import { message } from '@aivin-labs/sdk';
+// equally: ctx.sdk.message / import SDK from '@aivin-labs/sdk'; SDK.message
 ```
 
 ## Methods
@@ -26,7 +26,7 @@ import { message } from '@aivin/sdk';
 ## `save` example
 
 ```typescript
-import { message } from '@aivin/sdk';
+import { message } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await message.save({
@@ -44,7 +44,7 @@ real handler doesn't read.
 ## `getList` / `getRecent` example
 
 ```typescript
-import { message } from '@aivin/sdk';
+import { message } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const history = await message.getList({ session_id: ctx.session.id, limit: 100 });
@@ -56,7 +56,7 @@ export async function main(mission, input, ctx) {
 ## `search` example
 
 ```typescript
-import { message } from '@aivin/sdk';
+import { message } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const hits = await message.search({ query: 'refund status', limit: 20 });
@@ -67,7 +67,7 @@ export async function main(mission, input, ctx) {
 ## `getById` / `update` example
 
 ```typescript
-import { message } from '@aivin/sdk';
+import { message } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const msg = await message.getById({ message_id: input.messageId });

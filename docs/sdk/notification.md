@@ -8,8 +8,8 @@ topic. All four methods resolve `void` — they are fire-and-forget from the plu
 ## Import
 
 ```typescript
-import { notification } from '@aivin/sdk';
-// equally: ctx.sdk.notification / import SDK from '@aivin/sdk'; SDK.notification
+import { notification } from '@aivin-labs/sdk';
+// equally: ctx.sdk.notification / import SDK from '@aivin-labs/sdk'; SDK.notification
 ```
 
 ## Methods
@@ -27,7 +27,7 @@ Underlying host calls: `notification.pushNotification`, `notification.sendMail`,
 ## `push` example
 
 ```typescript
-import { notification } from '@aivin/sdk';
+import { notification } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await notification.push({
@@ -43,7 +43,7 @@ export async function main(mission, input, ctx) {
 ## `sendMail` example
 
 ```typescript
-import { notification } from '@aivin/sdk';
+import { notification } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await notification.sendMail({
@@ -59,7 +59,7 @@ export async function main(mission, input, ctx) {
 ## `subscribeTopic` / `unsubscribeTopic` example
 
 ```typescript
-import { notification } from '@aivin/sdk';
+import { notification } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   if (input.action === 'subscribe') {

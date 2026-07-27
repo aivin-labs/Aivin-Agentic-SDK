@@ -8,8 +8,8 @@ session's status/seen state for UI purposes.
 ## Import
 
 ```typescript
-import { session } from '@aivin/sdk';
-// equally: ctx.sdk.session / import SDK from '@aivin/sdk'; SDK.session
+import { session } from '@aivin-labs/sdk';
+// equally: ctx.sdk.session / import SDK from '@aivin-labs/sdk'; SDK.session
 ```
 
 ## The `MessageSession` shape
@@ -43,7 +43,7 @@ interface MessageSession {
 ## `get` example
 
 ```typescript
-import { session } from '@aivin/sdk';
+import { session } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const s = await session.get(input.sessionId);
@@ -54,7 +54,7 @@ export async function main(mission, input, ctx) {
 ## `getList` example
 
 ```typescript
-import { session } from '@aivin/sdk';
+import { session } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const sessions = await session.getList({
@@ -69,7 +69,7 @@ export async function main(mission, input, ctx) {
 ## `markAsSeen` example
 
 ```typescript
-import { session } from '@aivin/sdk';
+import { session } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await session.markAsSeen({
@@ -84,7 +84,7 @@ export async function main(mission, input, ctx) {
 ## `update` example
 
 ```typescript
-import { session } from '@aivin/sdk';
+import { session } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const updated = await session.update({ id: input.sessionId, name: 'Renamed session' });
@@ -95,7 +95,7 @@ export async function main(mission, input, ctx) {
 ## `newSession` / `create` example
 
 ```typescript
-import { session } from '@aivin/sdk';
+import { session } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // Both create a session - see Notes below on which one to prefer if unsure.
@@ -118,7 +118,7 @@ export async function main(mission, input, ctx) {
 ## `updateStatus` example
 
 ```typescript
-import { session } from '@aivin/sdk';
+import { session } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await session.updateStatus({ session_id: input.sessionId, status: 'processing' });

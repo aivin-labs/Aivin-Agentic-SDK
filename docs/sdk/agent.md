@@ -8,8 +8,8 @@ those live as top-level `ask()`/`hil()` functions, not on this namespace (see No
 ## Import
 
 ```typescript
-import { agent } from '@aivin/sdk';
-// equally: ctx.sdk.agent / import SDK from '@aivin/sdk'; SDK.agent
+import { agent } from '@aivin-labs/sdk';
+// equally: ctx.sdk.agent / import SDK from '@aivin-labs/sdk'; SDK.agent
 ```
 
 ## Methods
@@ -37,7 +37,7 @@ interface Agent {
 ## `get` example
 
 ```typescript
-import { agent } from '@aivin/sdk';
+import { agent } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const me = await agent.get(); // defaults to the current agent
@@ -49,7 +49,7 @@ export async function main(mission, input, ctx) {
 ## `status` / `cancel` example
 
 ```typescript
-import { agent } from '@aivin/sdk';
+import { agent } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const status = await agent.status('agent-id-123');
@@ -63,7 +63,7 @@ export async function main(mission, input, ctx) {
 ## `delegate` example
 
 ```typescript
-import { agent } from '@aivin/sdk';
+import { agent } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // target can be a real agent ID, or a free-text description — if `target` doesn't look like
@@ -96,7 +96,7 @@ use whichever reads better at the call site; there is no behavioral difference.
   `workspace.searchAgents({ query: target, limit: 1 })` — throwing `No agent found matching: <target>`
   if nothing matches.
 - `user(id)` is a **separate top-level function**, not part of the `agent` namespace — it returns a
-  user's public profile (`ctx.sdk.user(id)` / `import { user } from '@aivin/sdk'`), unrelated to
+  user's public profile (`ctx.sdk.user(id)` / `import { user } from '@aivin-labs/sdk'`), unrelated to
   agent delegation.
 - `ask()` and `hil()` block the current plugin run waiting on a human response (or time out) — they
   are for human-in-the-loop workflows, distinct from `agent.delegate`'s agent-to-agent handoff:

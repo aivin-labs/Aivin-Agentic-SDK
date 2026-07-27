@@ -313,9 +313,9 @@ against the real backend (`src/base/sdk/`, `src/plugins/`) and rewrote to match:
 - Also fixed along the way: `aivin deploy`'s broken `axios.post` call (Authorization header was
   never actually sent), an event-listener leak in the old Bull-based job tracking, and several
   stale/duplicated doc pages describing an architecture that no longer existed.
-- **Removed** the named `import { sdk } from '@aivin/sdk'` export — it was a redundant spelling of
-  the default import (`import SDK from '@aivin/sdk'`). Use the default import, per-namespace
-  imports (`import { ai, store } from '@aivin/sdk'`), or `ctx.sdk`.
+- **Removed** the named `import { sdk } from '@aivin-labs/sdk'` export — it was a redundant spelling of
+  the default import (`import SDK from '@aivin-labs/sdk'`). Use the default import, per-namespace
+  imports (`import { ai, store } from '@aivin-labs/sdk'`), or `ctx.sdk`.
 
 ### Fixed (previous entry, 2024-12-19)
 

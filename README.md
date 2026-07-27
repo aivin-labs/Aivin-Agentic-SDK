@@ -33,9 +33,9 @@ You write `src/main.ts`. The SDK, CLI, and platform handle the container, the tr
 and the infrastructure.
 
 ```typescript
-import { ai } from '@aivin/sdk';
-import { PluginStatus } from '@aivin/sdk';
-import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
+import { ai } from '@aivin-labs/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
 
 export async function main(
   mission: string,
@@ -114,7 +114,7 @@ workspace can already discover and call.
 ### 1. Initialize
 
 ```bash
-npm install -g @aivin/sdk
+npm install -g @aivin-labs/sdk
 
 aivin create my-plugin
 cd my-plugin && npm install
@@ -169,9 +169,9 @@ my-plugin/
 `src/main.ts` is the only file you write. Export exactly one `main` function:
 
 ```typescript
-import { ai, store } from '@aivin/sdk';
-import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
-import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
+import { ai, store } from '@aivin-labs/sdk';
+import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
 
 export async function main(
   mission: string,          // human-readable reason this run was triggered (for logging)
@@ -203,11 +203,11 @@ token) — pick whichever reads best in your code:
 
 ```typescript
 // 1. Import just the namespace(s) you need (preferred)
-import { ai, mongo } from '@aivin/sdk';
+import { ai, mongo } from '@aivin-labs/sdk';
 await ai.prompt('Hello');
 
 // 2. Default import — the whole client as one object
-import SDK from '@aivin/sdk';
+import SDK from '@aivin-labs/sdk';
 await SDK.ai.prompt('Hello');
 
 // 3. Via ctx (3rd argument of main()) — no import needed
@@ -221,7 +221,7 @@ Full details, including the generic `call('namespace.method', params)` escape ha
 
 ## What the SDK exposes
 
-Every namespace below is importable on its own — `import { ai, store } from '@aivin/sdk'` — and
+Every namespace below is importable on its own — `import { ai, store } from '@aivin-labs/sdk'` — and
 equally reachable via `ctx.sdk` if you'd rather not import it (see
 [Three equivalent ways to call the SDK](#three-equivalent-ways-to-call-the-sdk)).
 

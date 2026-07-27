@@ -12,8 +12,8 @@ of boilerplate between them - for that case, see
 functions in one shared `src/main.ts` instead of one.
 
 ```typescript
-import { PluginStatus } from '@aivin/sdk';
-import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
 
 export async function main(
   mission: string,
@@ -112,7 +112,7 @@ export default async function (mission, input, ctx) {
   downstream tooling (agentic planner, retry/replan logic) actually reads.
 
 ```typescript
-import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
+import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   try {

@@ -398,10 +398,10 @@ async function createHandler(pluginDir, aiConfig) {
   const header =
     '// Import just the namespace(s) you need - see docs/SDK.md for the full list\n' +
     '// (ai, vector, knowledge, task, store, redis, mongo, workspace, agent, realtime, queue, ...).\n' +
-    "// ctx.sdk.<namespace> and `import SDK from '@aivin/sdk'` work identically.\n" +
-    "import { ai } from '@aivin/sdk';\n" +
-    "import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';\n" +
-    "import { PluginStatus, PluginErrorCode } from '@aivin/sdk';";
+    "// ctx.sdk.<namespace> and `import SDK from '@aivin-labs/sdk'` work identically.\n" +
+    "import { ai } from '@aivin-labs/sdk';\n" +
+    "import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';\n" +
+    "import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';";
 
   let handlerContent;
 
@@ -456,7 +456,7 @@ async function createPackageJson(pluginDir, name, description, currentPackageJso
       start: 'aivin start',
     },
     dependencies: {
-      '@aivin/sdk': 'latest',
+      '@aivin-labs/sdk': 'latest',
     },
     devDependencies: {
       '@types/node': 'latest',
@@ -961,9 +961,9 @@ async function makePluginFromDescription(description, options = {}) {
 Rules:
 - Export exactly one async function: export async function main(mission: string, input: PluginInput, ctx: PluginContext): Promise<PluginResponse> { ... }
 - "input" fields come from the manifest's "input" description. "mission" is why this run was triggered (for logging, not routing).
-- Preferred: import only the namespace(s) you need directly, e.g. import { ai, vector, task, store, redis, mongo } from '@aivin/sdk'; then call ai.prompt(...), vector.search(...), task.create(...), store.set(...), redis.get(...), mongo.model(name).find(...). Only fall back to import { call } from '@aivin/sdk'; call(namespace, params) if no sugar method fits.
+- Preferred: import only the namespace(s) you need directly, e.g. import { ai, vector, task, store, redis, mongo } from '@aivin-labs/sdk'; then call ai.prompt(...), vector.search(...), task.create(...), store.set(...), redis.get(...), mongo.model(name).find(...). Only fall back to import { call } from '@aivin-labs/sdk'; call(namespace, params) if no sugar method fits.
 - Return { status: PluginStatus.SUCCESS, data, message } on success, or { status: PluginStatus.ERROR, message, error_code: PluginErrorCode.XXX } on failure.
-- Import types from '@aivin/sdk': import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk'; import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
+- Import types from '@aivin-labs/sdk': import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk'; import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
 
 Business requirement:
 ${description}`;
@@ -1161,10 +1161,10 @@ Rules:
 - Export exactly one async function: export async function main(mission: string, input: PluginInput, ctx: PluginContext): Promise<PluginResponse> { ... }
 - Analyze the provided project files (below, as workspace context) and adapt its real, existing logic into that one function - don't just stub it out. Preserve its actual behavior.
 - Map "input" to whatever parameters the project's core logic already takes.
-- Preferred: import only the namespace(s) you need directly from '@aivin/sdk', e.g. import { ai, vector, task, store, redis, mongo } from '@aivin/sdk'. Only use import { call } from '@aivin/sdk'; call(namespace, params) if no sugar method fits.
+- Preferred: import only the namespace(s) you need directly from '@aivin-labs/sdk', e.g. import { ai, vector, task, store, redis, mongo } from '@aivin-labs/sdk'. Only use import { call } from '@aivin-labs/sdk'; call(namespace, params) if no sugar method fits.
 - Return { status: PluginStatus.SUCCESS, data, message } on success, or { status: PluginStatus.ERROR, message, error_code: PluginErrorCode.XXX } on failure.
-- Import types from '@aivin/sdk': import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk'; import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
-- If the project talks to a real external service (a database, a paid API, ...), replace that connection code with the closest '@aivin/sdk' equivalent (store/redis/mongo for data, ai for LLM calls) rather than trying to keep raw credentials - plugins never receive them.
+- Import types from '@aivin-labs/sdk': import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk'; import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
+- If the project talks to a real external service (a database, a paid API, ...), replace that connection code with the closest '@aivin-labs/sdk' equivalent (store/redis/mongo for data, ai for LLM calls) rather than trying to keep raw credentials - plugins never receive them.
 ${hint ? `\nAdditional guidance from the developer:\n${hint}` : ''}`;
 
   console.log(chalk.blue('🤖 Generating src/main.ts from your existing code...'));
@@ -1826,7 +1826,7 @@ export { validatePluginConfig, incrementVersion, validateMcpProxyConfig, buildDe
 //
 // `import.meta.url` is always the module's real (symlink-resolved) path, but `process.argv[1]` is
 // whatever literal path launched it - through `npm link`'s global shim that's a symlink
-// (~/AppData/Roaming/npm/node_modules/@aivin/sdk/bin/cli.mjs -> this repo), which would never
+// (~/AppData/Roaming/npm/node_modules/@aivin-labs/sdk/bin/cli.mjs -> this repo), which would never
 // string-equal the resolved URL and silently skip program.parse() entirely (global `aivin` would
 // do nothing at all). Resolve argv[1] through the same symlink before comparing.
 function resolveIsMain() {

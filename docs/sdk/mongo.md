@@ -8,8 +8,8 @@ search/graph features, so reach for `store` first unless you specifically want M
 ## Import
 
 ```typescript
-import { mongo } from '@aivin/sdk';
-// equally: ctx.sdk.mongo / import SDK from '@aivin/sdk'; SDK.mongo
+import { mongo } from '@aivin-labs/sdk';
+// equally: ctx.sdk.mongo / import SDK from '@aivin-labs/sdk'; SDK.mongo
 ```
 
 ## Methods
@@ -36,7 +36,7 @@ sent to the host or validated). Every method below is called on the object `mode
 ## `create` / `insertMany` example
 
 ```typescript
-import { mongo } from '@aivin/sdk';
+import { mongo } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const Logs = mongo.model('logs');
@@ -54,7 +54,7 @@ export async function main(mission, input, ctx) {
 ## `find` / `findOne` / `countDocuments` example
 
 ```typescript
-import { mongo } from '@aivin/sdk';
+import { mongo } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const Logs = mongo.model('logs');
@@ -70,7 +70,7 @@ export async function main(mission, input, ctx) {
 ## `updateOne` / `updateMany` example
 
 ```typescript
-import { mongo } from '@aivin/sdk';
+import { mongo } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const Tickets = mongo.model('tickets');
@@ -85,7 +85,7 @@ export async function main(mission, input, ctx) {
 ## `findOneAndUpdate` example
 
 ```typescript
-import { mongo } from '@aivin/sdk';
+import { mongo } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const Counters = mongo.model('counters');
@@ -103,7 +103,7 @@ export async function main(mission, input, ctx) {
 ## `findOneAndDelete` / `deleteOne` / `deleteMany` example
 
 ```typescript
-import { mongo } from '@aivin/sdk';
+import { mongo } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const Sessions = mongo.model('sessions');
@@ -119,7 +119,7 @@ export async function main(mission, input, ctx) {
 ## `aggregate` example
 
 ```typescript
-import { mongo } from '@aivin/sdk';
+import { mongo } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const Orders = mongo.model('orders');

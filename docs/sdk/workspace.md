@@ -10,8 +10,8 @@ allowed to do something*, rather than operating on tasks/projects/messages thems
 ## Import
 
 ```typescript
-import { workspace } from '@aivin/sdk';
-// equally: ctx.sdk.workspace / import SDK from '@aivin/sdk'; SDK.workspace
+import { workspace } from '@aivin-labs/sdk';
+// equally: ctx.sdk.workspace / import SDK from '@aivin-labs/sdk'; SDK.workspace
 ```
 
 ## Methods
@@ -48,7 +48,7 @@ interface Workspace {
 ## `get` example
 
 ```typescript
-import { workspace } from '@aivin/sdk';
+import { workspace } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const ws = await workspace.get(ctx.workspace.id);
@@ -59,7 +59,7 @@ export async function main(mission, input, ctx) {
 ## `checkPermission` example
 
 ```typescript
-import { workspace } from '@aivin/sdk';
+import { workspace } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const allowed = await workspace.checkPermission({
@@ -81,7 +81,7 @@ checking a different workspace or a different member than the caller.
 ## `searchAgents` example
 
 ```typescript
-import { workspace } from '@aivin/sdk';
+import { workspace } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const matches = await workspace.searchAgents({ query: 'customer support triage', limit: 3 });
@@ -92,7 +92,7 @@ export async function main(mission, input, ctx) {
 ## `getPluginConfig` example
 
 ```typescript
-import { workspace } from '@aivin/sdk';
+import { workspace } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const cfg = await workspace.getPluginConfig({ plugin_id: 'my-plugin-id' });

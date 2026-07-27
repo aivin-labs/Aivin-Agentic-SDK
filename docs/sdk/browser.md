@@ -11,8 +11,8 @@ approach if one is available to your plugin.
 ## Import
 
 ```typescript
-import { browser } from '@aivin/sdk';
-// equally: ctx.sdk.browser / import SDK from '@aivin/sdk'; SDK.browser
+import { browser } from '@aivin-labs/sdk';
+// equally: ctx.sdk.browser / import SDK from '@aivin-labs/sdk'; SDK.browser
 ```
 
 ## Methods
@@ -24,7 +24,7 @@ import { browser } from '@aivin/sdk';
 ## `run` example
 
 ```typescript
-import { browser } from '@aivin/sdk';
+import { browser } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const result = await browser.run(

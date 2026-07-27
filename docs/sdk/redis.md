@@ -7,8 +7,8 @@ schema/search/graph features would be overkill.
 ## Import
 
 ```typescript
-import { redis } from '@aivin/sdk';
-// equally: ctx.sdk.redis / import SDK from '@aivin/sdk'; SDK.redis
+import { redis } from '@aivin-labs/sdk';
+// equally: ctx.sdk.redis / import SDK from '@aivin-labs/sdk'; SDK.redis
 ```
 
 ## Methods
@@ -31,7 +31,7 @@ import { redis } from '@aivin/sdk';
 ## `set` / `get` / `del` example
 
 ```typescript
-import { redis } from '@aivin/sdk';
+import { redis } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await redis.set('last_run_id', input.runId);
@@ -44,7 +44,7 @@ export async function main(mission, input, ctx) {
 ## `setex` example
 
 ```typescript
-import { redis } from '@aivin/sdk';
+import { redis } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // Cache a computed value for 10 minutes.
@@ -56,7 +56,7 @@ export async function main(mission, input, ctx) {
 ## `exists` example
 
 ```typescript
-import { redis } from '@aivin/sdk';
+import { redis } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const count = await redis.exists('flag:a', 'flag:b');
@@ -67,7 +67,7 @@ export async function main(mission, input, ctx) {
 ## `incr` / `incrby` example
 
 ```typescript
-import { redis } from '@aivin/sdk';
+import { redis } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const runsToday = await redis.incr('runs:today');
@@ -79,7 +79,7 @@ export async function main(mission, input, ctx) {
 ## `hget` / `hset` / `hgetall` / `hdel` example
 
 ```typescript
-import { redis } from '@aivin/sdk';
+import { redis } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await redis.hset('user:prefs', 'theme', 'dark');
@@ -93,7 +93,7 @@ export async function main(mission, input, ctx) {
 ## `keys` example
 
 ```typescript
-import { redis } from '@aivin/sdk';
+import { redis } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const sessionKeys = await redis.keys('session:*');

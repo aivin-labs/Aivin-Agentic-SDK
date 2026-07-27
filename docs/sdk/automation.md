@@ -7,8 +7,8 @@ recurring work (e.g. "run this report every Monday") or manage jobs it previousl
 ## Import
 
 ```typescript
-import { automation } from '@aivin/sdk';
-// equally: ctx.sdk.automation / import SDK from '@aivin/sdk'; SDK.automation
+import { automation } from '@aivin-labs/sdk';
+// equally: ctx.sdk.automation / import SDK from '@aivin-labs/sdk'; SDK.automation
 ```
 
 ## Methods
@@ -27,7 +27,7 @@ which take a params object.
 ## `createJob` example
 
 ```typescript
-import { automation } from '@aivin/sdk';
+import { automation } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const job = await automation.createJob({
@@ -42,7 +42,7 @@ export async function main(mission, input, ctx) {
 ## `updateJob` example
 
 ```typescript
-import { automation } from '@aivin/sdk';
+import { automation } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const updated = await automation.updateJob({
@@ -56,7 +56,7 @@ export async function main(mission, input, ctx) {
 ## `getJobs` / `deleteJob` / `executeById` example
 
 ```typescript
-import { automation } from '@aivin/sdk';
+import { automation } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const jobs = await automation.getJobs({ limit: 20 });

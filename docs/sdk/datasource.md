@@ -8,8 +8,8 @@ connected for training, or kick off a (re-)learn pass on a specific source.
 ## Import
 
 ```typescript
-import { datasource } from '@aivin/sdk';
-// equally: ctx.sdk.datasource / import SDK from '@aivin/sdk'; SDK.datasource
+import { datasource } from '@aivin-labs/sdk';
+// equally: ctx.sdk.datasource / import SDK from '@aivin-labs/sdk'; SDK.datasource
 ```
 
 ## Methods
@@ -23,7 +23,7 @@ import { datasource } from '@aivin/sdk';
 ## `getSources` / `getDomains` example
 
 ```typescript
-import { datasource } from '@aivin/sdk';
+import { datasource } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const sources = await datasource.getSources();
@@ -36,7 +36,7 @@ export async function main(mission, input, ctx) {
 ## `learn` example
 
 ```typescript
-import { datasource } from '@aivin/sdk';
+import { datasource } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const source = (await datasource.getSources())[0];

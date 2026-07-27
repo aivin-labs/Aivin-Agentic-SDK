@@ -11,8 +11,8 @@ a raw cache or Mongo query shapes.
 ## Import
 
 ```typescript
-import { store } from '@aivin/sdk';
-// equally: ctx.sdk.store / import SDK from '@aivin/sdk'; SDK.store
+import { store } from '@aivin-labs/sdk';
+// equally: ctx.sdk.store / import SDK from '@aivin-labs/sdk'; SDK.store
 ```
 
 ## Wire mapping note
@@ -48,7 +48,7 @@ method and call `store.transaction` via `call()` directly.
 ## `set` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const order = await store.set(
@@ -74,7 +74,7 @@ export async function main(mission, input, ctx) {
 ## `get` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const order = await store.get('orders', input.orderId);
@@ -88,7 +88,7 @@ export async function main(mission, input, ctx) {
 ## `del` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const { deleted } = await store.del('orders', input.orderId);
@@ -99,7 +99,7 @@ export async function main(mission, input, ctx) {
 ## `bulk` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const result = await store.bulk('orders', [
@@ -114,7 +114,7 @@ export async function main(mission, input, ctx) {
 ## `query` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const recent = await store.query(
@@ -131,7 +131,7 @@ export async function main(mission, input, ctx) {
 ## `count` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const pendingCount = await store.count('orders', { status: 'pending' });
@@ -142,7 +142,7 @@ export async function main(mission, input, ctx) {
 ## `search` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const hits = await store.search('support_tickets', input.query, {
@@ -158,7 +158,7 @@ export async function main(mission, input, ctx) {
 ## `aggregate` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const revenueByStatus = await store.aggregate(
@@ -176,7 +176,7 @@ export async function main(mission, input, ctx) {
 ## `cursor` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   let after: string | undefined;
@@ -195,7 +195,7 @@ export async function main(mission, input, ctx) {
 ## `transaction` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // Atomically move an order from "pending" to "paid" and record a ledger entry.
@@ -216,7 +216,7 @@ export async function main(mission, input, ctx) {
 ## `join` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const ordersWithCustomers = await store.join({
@@ -233,7 +233,7 @@ export async function main(mission, input, ctx) {
 ## `link` / `unlink` / `getLinks` example
 
 ```typescript
-import { store } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // Link an order to the customer that placed it.

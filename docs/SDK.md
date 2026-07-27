@@ -7,9 +7,9 @@ for every plugin.
 **Preferred style: import just the namespaces you use.**
 
 ```typescript
-import { ai, mongo } from '@aivin/sdk';
-import { PluginStatus } from '@aivin/sdk';
-import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
+import { ai, mongo } from '@aivin-labs/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
 
 export async function main(
   mission: string,
@@ -30,12 +30,12 @@ token) — pick whichever reads best in your code.
 
 ```typescript
 // 1. Import just the namespace(s) you need (preferred - keeps imports explicit and minimal)
-import { ai, mongo } from '@aivin/sdk';
+import { ai, mongo } from '@aivin-labs/sdk';
 await ai.prompt('Hello');
 mongo.model('users').find({});
 
 // 2. Default import - the whole client as one object
-import SDK from '@aivin/sdk';
+import SDK from '@aivin-labs/sdk';
 await SDK.ai.prompt('Hello');
 
 // 3. Via ctx (3rd argument of main()) - no import needed for the client itself
@@ -52,7 +52,7 @@ guaranteed to run inside `main()`.
 Within any of these, two equivalent call styles are always available:
 
 ```typescript
-import { ai, call } from '@aivin/sdk';
+import { ai, call } from '@aivin-labs/sdk';
 
 await ai.prompt('Hello'); // shorthand (recommended)
 await call('ai.prompt', { quest: 'Hello' }); // generic escape hatch — same call underneath
@@ -62,8 +62,8 @@ Use the shorthand form unless you need a namespace that has no sugar method yet 
 accepts any `"namespace.method"` string the platform exposes.
 
 > Section headers below say `ctx.sdk.<namespace>` for brevity — every method listed is equally
-> reachable as `import { <namespace> } from '@aivin/sdk'` (e.g. `ctx.sdk.ai.prompt` ≡ `ai.prompt`
-> after `import { ai } from '@aivin/sdk'`).
+> reachable as `import { <namespace> } from '@aivin-labs/sdk'` (e.g. `ctx.sdk.ai.prompt` ≡ `ai.prompt`
+> after `import { ai } from '@aivin-labs/sdk'`).
 
 ## AI & LLM — `ctx.sdk.ai`
 

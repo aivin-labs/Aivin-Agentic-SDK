@@ -8,8 +8,8 @@ the user.
 ## Import
 
 ```typescript
-import { usage } from '@aivin/sdk';
-// equally: ctx.sdk.usage / import SDK from '@aivin/sdk'; SDK.usage
+import { usage } from '@aivin-labs/sdk';
+// equally: ctx.sdk.usage / import SDK from '@aivin-labs/sdk'; SDK.usage
 ```
 
 ## Methods
@@ -26,7 +26,7 @@ returns at runtime.
 ## `checkBalance` example
 
 ```typescript
-import { usage } from '@aivin/sdk';
+import { usage } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const balance = await usage.checkBalance();
@@ -38,7 +38,7 @@ export async function main(mission, input, ctx) {
 ## `getUsage` example
 
 ```typescript
-import { usage } from '@aivin/sdk';
+import { usage } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const stats = await usage.getUsage({ period: 'month' });

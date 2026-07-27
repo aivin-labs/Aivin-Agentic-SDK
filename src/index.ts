@@ -9,7 +9,7 @@
 export { SDKClient } from './sdk/SDKClient';
 export type { PluginIdentity } from './sdk/SDKClient';
 
-// Default/per-namespace exports (`import { mongo } from '@aivin/sdk'`, etc.) - see
+// Default/per-namespace exports (`import { mongo } from '@aivin-labs/sdk'`, etc.) - see
 // src/sdk/globalSdk.ts for how these forward to the current invocation.
 export * from './sdk/globalSdk';
 export { default } from './sdk/globalSdk';

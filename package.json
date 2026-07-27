@@ -1,5 +1,5 @@
 {
-  "name": "@aivin/sdk",
+  "name": "@aivin-labs/sdk",
   "version": "1.0.0",
   "description": "Aivin Plugin SDK - gRPC client/server for building plugins that run inside the Aivin platform (agentic engine, vector search, workspace, tasks, and more)",
   "type": "commonjs",
@@ -16,7 +16,7 @@
     }
   },
   "bin": {
-    "aivin": "./bin/cli.mjs"
+    "aivin": "bin/cli.mjs"
   },
   "scripts": {
     "build": "tsc && npm run copy:proto",
@@ -67,15 +67,18 @@
     "bin/**/*",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.0.0"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/aivin-ai/sdk"
+    "url": "git+https://github.com/aivin-labs/AIVIN-SDK.git"
   },
   "bugs": {
-    "url": "https://github.com/aivin-ai/sdk/issues"
+    "url": "https://github.com/aivin-labs/AIVIN-SDK/issues"
   },
-  "homepage": "https://github.com/aivin-ai/sdk#readme"
+  "homepage": "https://github.com/aivin-labs/AIVIN-SDK#readme"
 }

@@ -9,8 +9,8 @@ causal knowledge it has derived for later reuse.
 ## Import
 
 ```typescript
-import { causality } from '@aivin/sdk';
-// equally: ctx.sdk.causality / import SDK from '@aivin/sdk'; SDK.causality
+import { causality } from '@aivin-labs/sdk';
+// equally: ctx.sdk.causality / import SDK from '@aivin-labs/sdk'; SDK.causality
 ```
 
 ## Methods
@@ -23,7 +23,7 @@ import { causality } from '@aivin/sdk';
 ## `think` example
 
 ```typescript
-import { causality } from '@aivin/sdk';
+import { causality } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const answer = await causality.think('Why did conversion rate drop last week?', {
@@ -37,7 +37,7 @@ export async function main(mission, input, ctx) {
 ## `absorb` example
 
 ```typescript
-import { causality } from '@aivin/sdk';
+import { causality } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const result = await causality.absorb(

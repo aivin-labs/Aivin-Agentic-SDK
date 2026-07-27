@@ -14,7 +14,7 @@ export function getCurrentSDK(): SDKClient {
   const client = invocationStorage.getStore();
   if (!client) {
     throw new Error(
-      'This import from @aivin/sdk is only usable while main() is running. ' +
+      'This import from @aivin-labs/sdk is only usable while main() is running. ' +
         'If you are calling this outside that scope, use ctx.sdk instead.',
     );
   }

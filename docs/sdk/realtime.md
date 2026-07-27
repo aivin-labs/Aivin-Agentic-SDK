@@ -9,8 +9,8 @@ are intentionally unimplemented for this runtime and throw if called.
 ## Import
 
 ```typescript
-import { realtime } from '@aivin/sdk';
-// equally: ctx.sdk.realtime / import SDK from '@aivin/sdk'; SDK.realtime
+import { realtime } from '@aivin-labs/sdk';
+// equally: ctx.sdk.realtime / import SDK from '@aivin-labs/sdk'; SDK.realtime
 ```
 
 ## Methods
@@ -24,7 +24,7 @@ Underlying host call: `realtime.publish`.
 ## `publish` example
 
 ```typescript
-import { realtime } from '@aivin/sdk';
+import { realtime } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await realtime.publish({

@@ -95,9 +95,9 @@ manual `curl` testing across every function in one dev-mode process — see
 
 ```typescript
 // src/main.ts — two named exports, no `main`/default export needed
-import { ai } from '@aivin/sdk';
-import { PluginStatus } from '@aivin/sdk';
-import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
+import { ai } from '@aivin-labs/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
 
 export async function summarizeTicket(
   mission: string,

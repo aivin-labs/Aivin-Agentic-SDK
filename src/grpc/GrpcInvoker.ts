@@ -119,7 +119,7 @@ function emitTrace(trace: CallTrace): void {
   if (process.env.SDK_DEBUG === 'true') {
     const outcome = trace.success ? 'ok' : `FAILED: ${trace.error}`;
     console.debug(
-      `[@aivin/sdk] ${trace.namespace} (${trace.durationMs}ms, ${trace.attempts} attempt(s)) - ${outcome}`,
+      `[@aivin-labs/sdk] ${trace.namespace} (${trace.durationMs}ms, ${trace.attempts} attempt(s)) - ${outcome}`,
     );
   }
 }
@@ -159,7 +159,7 @@ function resolveEndpoint(): string {
   if (!warnedDefaultEndpoint) {
     warnedDefaultEndpoint = true;
     console.warn(
-      `[@aivin/sdk] SDK_GRPC_ENDPOINT not set - defaulting to production (${DEFAULT_ENDPOINT}). ` +
+      `[@aivin-labs/sdk] SDK_GRPC_ENDPOINT not set - defaulting to production (${DEFAULT_ENDPOINT}). ` +
         'Set SDK_GRPC_ENDPOINT to point at a local/dev backend instead.',
     );
   }
@@ -233,7 +233,7 @@ export async function invokeHost<T = any>(request: InvokeRequest): Promise<T> {
         isRetryable: isRetryableTransportError,
         onRetry: (attempt) =>
           console.warn(
-            `[@aivin/sdk] '${request.namespace}' unreachable (attempt ${attempt + 1}/${maxRetries + 1}), retrying...`,
+            `[@aivin-labs/sdk] '${request.namespace}' unreachable (attempt ${attempt + 1}/${maxRetries + 1}), retrying...`,
           ),
       },
     );

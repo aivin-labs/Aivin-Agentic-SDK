@@ -8,8 +8,8 @@ to [`knowledge`](./knowledge.md)'s curated long-term knowledge base.
 ## Import
 
 ```typescript
-import { vector } from '@aivin/sdk';
-// equally: ctx.sdk.vector / import SDK from '@aivin/sdk'; SDK.vector
+import { vector } from '@aivin-labs/sdk';
+// equally: ctx.sdk.vector / import SDK from '@aivin-labs/sdk'; SDK.vector
 ```
 
 ## Methods
@@ -22,7 +22,7 @@ import { vector } from '@aivin/sdk';
 ## `search` example
 
 ```typescript
-import { vector } from '@aivin/sdk';
+import { vector } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const hits = await vector.search({
@@ -39,7 +39,7 @@ export async function main(mission, input, ctx) {
 ## `index` example
 
 ```typescript
-import { vector } from '@aivin/sdk';
+import { vector } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await vector.index({

@@ -7,8 +7,8 @@ lifecycle management is not exposed to plugins through this namespace.
 ## Import
 
 ```typescript
-import { project } from '@aivin/sdk';
-// equally: ctx.sdk.project / import SDK from '@aivin/sdk'; SDK.project
+import { project } from '@aivin-labs/sdk';
+// equally: ctx.sdk.project / import SDK from '@aivin-labs/sdk'; SDK.project
 ```
 
 ## Methods
@@ -24,7 +24,7 @@ string — match the exact shape shown above.
 ## `get` example
 
 ```typescript
-import { project } from '@aivin/sdk';
+import { project } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const proj = await project.get({ id: input.projectId });
@@ -35,7 +35,7 @@ export async function main(mission, input, ctx) {
 ## `search` example
 
 ```typescript
-import { project } from '@aivin/sdk';
+import { project } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const matches = await project.search({

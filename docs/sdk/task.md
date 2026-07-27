@@ -9,8 +9,8 @@ existing ones.
 ## Import
 
 ```typescript
-import { task } from '@aivin/sdk';
-// equally: ctx.sdk.task / import SDK from '@aivin/sdk'; SDK.task
+import { task } from '@aivin-labs/sdk';
+// equally: ctx.sdk.task / import SDK from '@aivin-labs/sdk'; SDK.task
 ```
 
 ## Methods
@@ -42,7 +42,7 @@ interface Task {
 ## `create` example
 
 ```typescript
-import { task } from '@aivin/sdk';
+import { task } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const newTask = await task.create({
@@ -59,7 +59,7 @@ export async function main(mission, input, ctx) {
 ## `update` example
 
 ```typescript
-import { task } from '@aivin/sdk';
+import { task } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // taskId is passed separately - it is NOT a field inside `data`.
@@ -71,7 +71,7 @@ export async function main(mission, input, ctx) {
 ## `getById` / `delete` example
 
 ```typescript
-import { task } from '@aivin/sdk';
+import { task } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const existing = await task.getById(input.taskId);
@@ -86,7 +86,7 @@ export async function main(mission, input, ctx) {
 ## `list` / `listMine` example
 
 ```typescript
-import { task } from '@aivin/sdk';
+import { task } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const openTasks = await task.list({

@@ -5,7 +5,7 @@ End-to-end walkthrough: from an empty folder to a deployed plugin.
 ## 1. Prerequisites
 
 - Node.js >= 22 (the SDK relies on Node's native TypeScript support to load `src/main.ts` directly)
-- `npm install -g @aivin/sdk`
+- `npm install -g @aivin-labs/sdk`
 - An Aivin account + API key (`aivin login`) once you're ready to deploy
 
 ## 2. Create the plugin
@@ -23,7 +23,7 @@ my-plugin/
 ├── manifest.json      # identity, input/output description, trigger types
 ├── src/
 │   └── main.ts         # your one entry point: main()
-├── package.json        # depends only on @aivin/sdk; `npm start` runs `aivin start`
+├── package.json        # depends only on @aivin-labs/sdk; `npm start` runs `aivin start`
 ├── tsconfig.json        # editor/type-checking config (not used to build anything at deploy time)
 ├── .env                 # local-only config (see step 4)
 └── .gitignore
@@ -38,8 +38,8 @@ and `input`/`output` (free-form, but the clearer the better).
 Every plugin exports exactly one entry point, `main`:
 
 ```typescript
-import { PluginStatus } from '@aivin/sdk';
-import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
 
 export async function main(
   mission: string,
@@ -57,7 +57,7 @@ export async function main(
 - `ctx.cert` — connected-account credentials, only present if `manifest.connection_id` is set.
 - `ctx.sdk` — the full platform surface. See [SDK.md](./SDK.md) for every namespace (`ai`,
   `vector`, `knowledge`, `task`, `store`, `redis`, `mongo`, `workspace`, `agent`, `realtime`,
-  `queue`, and more). `import SDK from '@aivin/sdk'` is an equivalent alternative if you'd rather
+  `queue`, and more). `import SDK from '@aivin-labs/sdk'` is an equivalent alternative if you'd rather
   not thread `ctx` through your own helper functions.
 
 ### Let AI write it for you
@@ -153,8 +153,8 @@ to (you never receive raw database credentials).
 **Fail soft for expected cases.**
 
 ```typescript
-import { call, log } from '@aivin/sdk';
-import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
+import { call, log } from '@aivin-labs/sdk';
+import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   try {

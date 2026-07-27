@@ -263,7 +263,7 @@ export class PluginServer extends EventEmitter {
     const targetFunction = this.resolveTargetFunction(mission, explicitFunc);
 
     // Bind this invocation's SDKClient to the async context so the default/per-namespace imports
-    // from '@aivin/sdk' resolve to it too, not just `ctx.sdk` - see src/sdk/globalSdk.ts. Nested
+    // from '@aivin-labs/sdk' resolve to it too, not just `ctx.sdk` - see src/sdk/globalSdk.ts. Nested
     // inside `withTrace` so every `sdk.*` call made anywhere during this invocation (including
     // inside nested async work the handler awaits) gets recorded against this invocation's trace,
     // not a sibling one running concurrently in the same process.

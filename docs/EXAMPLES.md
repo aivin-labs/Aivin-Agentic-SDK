@@ -3,7 +3,7 @@
 Real plugins across common use cases. Each one is the complete `manifest.json` + `src/main.ts` pair.
 
 These use the preferred style — import just the namespace(s) you need. `ctx.sdk.ai.prompt(...)`
-and `import SDK from '@aivin/sdk'; SDK.ai.prompt(...)` work identically; see
+and `import SDK from '@aivin-labs/sdk'; SDK.ai.prompt(...)` work identically; see
 [SDK.md](./SDK.md#three-equivalent-ways-to-reach-it).
 
 ## 1. Text Summarizer
@@ -19,9 +19,9 @@ and `import SDK from '@aivin/sdk'; SDK.ai.prompt(...)` work identically; see
 ```
 
 ```typescript
-import { ai } from '@aivin/sdk';
-import { PluginStatus } from '@aivin/sdk';
-import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
+import { ai } from '@aivin-labs/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
 
 export async function main(
   mission: string,
@@ -53,8 +53,8 @@ export async function main(
 ```
 
 ```typescript
-import { store } from '@aivin/sdk';
-import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
+import { store } from '@aivin-labs/sdk';
+import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   if (input.action === 'add') {
@@ -93,8 +93,8 @@ export async function main(mission, input, ctx) {
 ```
 
 ```typescript
-import { redis, realtime } from '@aivin/sdk';
-import { PluginStatus } from '@aivin/sdk';
+import { redis, realtime } from '@aivin-labs/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const { city, temperature, condition } = input;
@@ -138,8 +138,8 @@ export async function main(mission, input, ctx) {
 ```
 
 ```typescript
-import { notification, queue } from '@aivin/sdk';
-import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
+import { notification, queue } from '@aivin-labs/sdk';
+import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const { to, subject, body, attempt = 0 } = input;
@@ -180,8 +180,8 @@ export async function main(mission, input, ctx) {
 ```
 
 ```typescript
-import { knowledge } from '@aivin/sdk';
-import { PluginStatus } from '@aivin/sdk';
+import { knowledge } from '@aivin-labs/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const results = await knowledge.search(input.query, { limit: 5, threshold: 0.7 });
@@ -202,8 +202,8 @@ export async function main(mission, input, ctx) {
 ```
 
 ```typescript
-import { task, hil } from '@aivin/sdk';
-import { PluginStatus } from '@aivin/sdk';
+import { task, hil } from '@aivin-labs/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
 
 const AUTO_APPROVE_LIMIT = 500;
 
@@ -252,8 +252,8 @@ export async function main(mission, input, ctx) {
 ```
 
 ```typescript
-import { mongo } from '@aivin/sdk';
-import { PluginStatus } from '@aivin/sdk';
+import { mongo } from '@aivin-labs/sdk';
+import { PluginStatus } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const Users = mongo.model('users');

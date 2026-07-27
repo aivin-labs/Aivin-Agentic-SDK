@@ -163,7 +163,7 @@ aivin test --no-smoke-test         # deploy only, same as before this flag exist
 
 AI-generates `src/main.ts` from a natural-language description, via the real `POST /code/generate`
 endpoint (the same one the browser CodeEditor uses) - prompted to reinforce this SDK's conventions
-(`main(mission, input, ctx)`, `ctx.sdk.*`/`import { ai } from '@aivin/sdk'`, `PluginResponse`).
+(`main(mission, input, ctx)`, `ctx.sdk.*`/`import { ai } from '@aivin-labs/sdk'`, `PluginResponse`).
 Requires `manifest.json` to already exist (`aivin create` first).
 
 ```

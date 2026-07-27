@@ -8,8 +8,8 @@ credentials, rate limits, or model selection — the host resolves all of that s
 ## Import
 
 ```typescript
-import { ai } from '@aivin/sdk';
-// equally: ctx.sdk.ai / import SDK from '@aivin/sdk'; SDK.ai
+import { ai } from '@aivin-labs/sdk';
+// equally: ctx.sdk.ai / import SDK from '@aivin-labs/sdk'; SDK.ai
 ```
 
 ## Methods
@@ -40,7 +40,7 @@ import { ai } from '@aivin/sdk';
 ## `prompt` example
 
 ```typescript
-import { ai } from '@aivin/sdk';
+import { ai } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const summary = await ai.prompt(`Summarize this ticket:\n${input.text}`, {
@@ -55,7 +55,7 @@ export async function main(mission, input, ctx) {
 ### Structured output with `schema`
 
 ```typescript
-import { ai } from '@aivin/sdk';
+import { ai } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const result = await ai.prompt(`Extract fields from: ${input.text}`, {
@@ -78,7 +78,7 @@ Same shape as Vercel AI SDK's `streamText()` — a `textStream` you can iterate 
 deltas, and a `text` promise for the full result:
 
 ```typescript
-import { ai } from '@aivin/sdk';
+import { ai } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const result = ai.promptStream(`Write a short summary of: ${input.text}`);
@@ -103,7 +103,7 @@ No automatic retry on transport failure mid-stream (unlike every other call in t
 ## `getEmbedding` / `getEmbeddings` example
 
 ```typescript
-import { ai } from '@aivin/sdk';
+import { ai } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // Single string in -> single vector out
@@ -119,7 +119,7 @@ export async function main(mission, input, ctx) {
 ## `rerank` example
 
 ```typescript
-import { ai } from '@aivin/sdk';
+import { ai } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const docs = input.candidates as string[];

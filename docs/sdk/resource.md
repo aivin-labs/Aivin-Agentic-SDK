@@ -9,8 +9,8 @@ for `resource` when you just need "put these bytes somewhere and get a URL back.
 ## Import
 
 ```typescript
-import { resource } from '@aivin/sdk';
-// equally: ctx.sdk.resource / import SDK from '@aivin/sdk'; SDK.resource
+import { resource } from '@aivin-labs/sdk';
+// equally: ctx.sdk.resource / import SDK from '@aivin-labs/sdk'; SDK.resource
 ```
 
 ## Methods
@@ -25,7 +25,7 @@ Underlying host calls: `resource.uploadFile`, `resource.removeFile`.
 ## `upload` example
 
 ```typescript
-import { resource } from '@aivin/sdk';
+import { resource } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const uploaded = await resource.upload({
@@ -43,7 +43,7 @@ export async function main(mission, input, ctx) {
 ## `remove` example
 
 ```typescript
-import { resource } from '@aivin/sdk';
+import { resource } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   await resource.remove({ url: input.previousFileUrl });

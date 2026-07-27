@@ -34,9 +34,9 @@ Full field list: [docs/MANIFEST.md](./docs/MANIFEST.md).
 Export exactly **one** entry point named `main`, with three parameters:
 
 ```typescript
-import { ai } from '@aivin/sdk';
-import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
-import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
+import { ai } from '@aivin-labs/sdk';
+import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
 
 export async function main(
   mission: string,
@@ -58,7 +58,7 @@ export async function main(
 **Import just the namespace(s) you use** — this is the preferred style:
 
 ```typescript
-import { ai, vector, knowledge, task, store, redis, mongo } from '@aivin/sdk';
+import { ai, vector, knowledge, task, store, redis, mongo } from '@aivin-labs/sdk';
 
 ai.prompt(quest, opts)              // call the LLM
 vector.search({ query })            // semantic search
@@ -70,11 +70,11 @@ mongo.model(name).find(...)         // Mongoose-style isolated collection
 ```
 
 Two other equally-valid ways to reach the same client: `ctx.sdk.<namespace>.<method>`, or
-`import SDK from '@aivin/sdk'; SDK.<namespace>.<method>`. Full reference:
+`import SDK from '@aivin-labs/sdk'; SDK.<namespace>.<method>`. Full reference:
 [docs/SDK.md](./docs/SDK.md).
 
 For anything without a dedicated import, use the generic escape hatch:
-`import { call } from '@aivin/sdk'; call('namespace.method', params)`.
+`import { call } from '@aivin-labs/sdk'; call('namespace.method', params)`.
 
 ## Trigger types
 
