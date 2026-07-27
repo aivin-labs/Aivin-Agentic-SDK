@@ -1,6 +1,18 @@
 # Changelog
 
-## [Unreleased] - 2026-07-27 (2)
+## [1.0.0] - 2026-07-27
+
+First published release (`npm install @aivin-labs/sdk`). Everything below accumulated during
+development before this release - kept as-is rather than squashed, since the detail is useful.
+
+### 🐛 Fixed — `aivin create --json`/`--stdin` never told you to `cd` into the new project
+
+Found during a post-publish DX audit: `createFromJSON()` (the non-interactive/scripted path behind
+both `--json` and `--stdin`) always creates the plugin in a **subdirectory** named after
+`config.name`, but its "Next steps" output only ever printed `npm install` / `npm start` - never
+`cd <name>` first. Following the printed instructions verbatim ran `npm install` in the *parent*
+directory. The plain interactive `aivin create <name>` path already had this right (fixed earlier
+this session) - this fix brings the scripted path to parity.
 
 ### 🆕 Added — `sdk.ai.promptStream()`, true token-level AI streaming
 
@@ -60,8 +72,6 @@
   complementary layer: even if the instruction-level nudge isn't enough, one corrective round trip
   usually recovers a well-formed response instead of surfacing a hard failure to the caller.
 
-## [Unreleased] - 2026-07-27
-
 ### 🔄 Changed — retry/backoff, observability, and test coverage for the gRPC transport
 
 - `invokeHost` now retries transport-level `UNAVAILABLE` failures (connection refused/DNS
@@ -80,8 +90,6 @@
   (`call`/`a2a`/`ask`/`hil`/`stream` behavior, including the agent-id-vs-search-query heuristic,
   now exported as the pure function `looksLikeAgentId`) - the core runtime paths previously had
   zero test coverage.
-
-## [Unreleased] - 2026-07-26
 
 ### 🆕 Added — `aivin plugin trigger`
 

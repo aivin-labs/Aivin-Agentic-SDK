@@ -137,6 +137,7 @@ async function createFromJSON(jsonConfig, options) {
     if (!options.silent) {
       console.log(chalk.green('✅ Created:'), pluginDir);
       console.log(chalk.cyan('\n🔧 Next steps:'));
+      console.log(`   cd ${path.relative(process.cwd(), pluginDir)}  # Enter the new project directory`);
       console.log(`   npm install     # Install dependencies`);
       console.log(`   npm start       # Start plugin (local gRPC server + HTTP test shim)`);
     }

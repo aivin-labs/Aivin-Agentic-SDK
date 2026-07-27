@@ -253,7 +253,7 @@ aivin deploy
 
 **Sẵn sàng xây dựng tương lai của AI?**
 
-[🚀 Bắt đầu Đóng góp Hôm nay](https://github.com/aivin-ai/sdk/issues/good-first-issue)
+[🚀 Bắt đầu Đóng góp Hôm nay](https://github.com/aivin-labs/AIVIN-SDK/issues/good-first-issue)
 
 ---
 
