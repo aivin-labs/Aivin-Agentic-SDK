@@ -16,12 +16,16 @@ Usage: aivin [options] [command]
 Aivin Plugin SDK - Build and run AI plugins
 
 Options:
-  -V, --version       output the version number
-  -h, --help          display help for command
+  -V, --version            output the version number
+  -h, --help               display help for command
 
 Commands:
   create [options] [name]  Create new plugin
-  validate [options]       Validate JSON config
+  init [options] [name]    Set up a new plugin step by step: asks what it should
+                           do, then generates real working code from that
+                           description
+  validate [options]       Validate manifest.json in the current directory (or
+                           --json/--stdin for scripted use)
   start                    Start plugin server
   deploy                   Deploy plugin to your org on the Aivin server
   test [options]           Deploy to a non-production test instance, then
@@ -34,6 +38,47 @@ Commands:
                            (opens your browser by default)
   help [command]           display help for command
 ```
+
+## `aivin init [name]`
+
+The simplest way to start: asks what the plugin should do, then scaffolds the project **and**
+generates real working code from that description in one step - no separate `aivin create` +
+`aivin plugin make` needed.
+
+```bash
+aivin init my-plugin
+# ? Plugin name: my-plugin
+# ? What should this plugin do? (be specific - this is what generates your code)
+#   > Summarize a support ticket and tag its urgency low/medium/high
+```
+
+Options:
+
+```
+Options:
+  --name <name>          Plugin name (if not specified, will prompt)
+  --model <model>        LLM model to use for generation
+  --provider <provider>  LLM provider to use for generation
+```
+
+Writes two source files instead of one, unlike `aivin create`:
+
+- **`src/service.ts`** - the actual business logic, AI-generated from your description. A single
+  exported `execute(input, ctx)` that returns plain result data (or throws a plain `Error`) - no
+  `PluginResponse`/`PluginStatus` boilerplate to think about.
+- **`src/main.ts`** - a thin, static wrapper (not AI-generated, doesn't change between runs). Calls
+  `execute()` and packages the result into the `PluginResponse` the platform expects. This filename
+  is fixed - the runtime always loads exactly `src/main.ts`, so it's never regenerated or renamed.
+
+If code generation fails (network issue, `API_KEY` not set, etc.), `aivin init` still leaves you
+with a working, deployable scaffold - it falls back to the same plain placeholder `aivin create`
+writes, so nothing is left half-broken.
+
+Regenerating later: `aivin plugin make "<new description>"` detects `src/service.ts` and targets it
+instead of `src/main.ts`, so the split is preserved (see below).
+
+Prefer no AI step at all? `aivin create` scaffolds the same project structure minus the generation -
+one `src/main.ts` you write by hand.
 
 ## `aivin create`
 
@@ -71,14 +116,23 @@ aivin create --json '{"name":"my-plugin","description":"Summarize tickets"}'
 
 Validates a plugin config against the same rules `aivin create` enforces (name format, required
 `description`, and - if present - `proxy_config` completeness for MCP proxy plugins). Doesn't touch
-disk or the network.
+the network.
+
+With no flags, validates `manifest.json` in the current directory - the common case:
+
+```bash
+cd my-plugin
+aivin validate
+```
 
 ```
 Options:
-  --json <config>  JSON config
-  --stdin          From stdin
+  --json <config>  JSON config, instead of reading manifest.json from the current directory
+  --stdin          Read JSON config from stdin, instead of reading manifest.json
   --json-output    JSON output
 ```
+
+`--json`/`--stdin` remain for scripted/CI use where the config isn't a file on disk yet:
 
 ```bash
 aivin validate --json '{"name":"my-plugin","description":"x"}'

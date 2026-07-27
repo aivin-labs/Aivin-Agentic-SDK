@@ -1,6 +1,6 @@
 # 🚀 Aivin Plugin SDK
 
-[![npm version](https://badge.fury.io/js/%40aivin%2Fsdk.svg)](https://badge.fury.io/js/%40aivin%2Fsdk)
+[![npm version](https://badge.fury.io/js/%40aivin-labs%2Fsdk.svg)](https://badge.fury.io/js/%40aivin-labs%2Fsdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)](https://www.typescriptlang.org/)
@@ -116,18 +116,28 @@ workspace can already discover and call.
 ```bash
 npm install -g @aivin-labs/sdk
 
-aivin create my-plugin
+aivin init my-plugin
 cd my-plugin && npm install
 ```
 
-### 2. Write
+`aivin init` asks what the plugin should do, then scaffolds the project **and** generates real
+working code from that description in one step — `src/service.ts` (the business logic) + a thin,
+static `src/main.ts` wrapper, instead of one file mixing both concerns.
 
-Edit `src/main.ts` — the only file you need (full walkthrough:
-[Anatomy of a plugin](#anatomy-of-a-plugin)). Or skip writing it yourself:
+### 2. Write (or regenerate)
+
+Edit `src/service.ts` yourself (full walkthrough: [Anatomy of a plugin](#anatomy-of-a-plugin)), or
+regenerate it from a new description:
 
 ```bash
 aivin plugin make "Summarize a support ticket and tag its urgency"
-# or, converting a project you already have instead of starting from a description:
+```
+
+Prefer a blank scaffold with no AI step at all? `aivin create my-plugin` does just the scaffolding
+(one `src/main.ts` you write by hand) - `aivin init` is the guided, AI-assisted alternative.
+Converting a project you already have, instead of starting from a description:
+
+```bash
 aivin plugin convert
 ```
 
@@ -153,20 +163,27 @@ No Dockerfile, no CI pipeline, no server to provision — the CLI packages `src/
 
 ## Anatomy of a plugin
 
-`aivin create` scaffolds everything you need:
+`aivin create`/`aivin init` scaffold everything you need:
 
 ```
 my-plugin/
 ├── manifest.json      # name, description, input/output shape, triggers
 ├── src/
-│   └── main.ts         # your one entry point — main(mission, input, ctx)
+│   ├── main.ts         # the entry point — main(mission, input, ctx). Fixed filename: the
+│   │                    #   runtime always loads exactly this file, never rename it.
+│   └── service.ts       # (aivin init only) your actual business logic, kept separate from
+│                        #   main.ts's protocol wrapping - main.ts just calls it and packages
+│                        #   the result into a PluginResponse.
 ├── package.json
 ├── tsconfig.json
+├── AGENTS.md            # primer for coding agents (Claude Code, Cursor, ...) working in this dir
 ├── .env                # local-only overrides, e.g. LOCAL_TEST_PORT (never committed)
 └── .gitignore
 ```
 
-`src/main.ts` is the only file you write. Export exactly one `main` function:
+`aivin create` writes one `src/main.ts` you edit directly; `aivin init` additionally splits your
+business logic into `src/service.ts`, keeping `main.ts` a thin, unchanging wrapper. Either way,
+`main.ts` exports exactly one `main` function:
 
 ```typescript
 import { ai, store } from '@aivin-labs/sdk';
@@ -384,12 +401,13 @@ variable: [docs/CLI.md](docs/CLI.md).
 
 | Command | Description |
 | --- | --- |
-| `aivin create [name]` | Scaffold a new plugin (interactive, or `--json`/`--stdin` for scripted/AI use). |
-| `aivin plugin make "<description>"` | AI-generate `src/main.ts` from a natural-language business description, already written against this SDK's namespaces. |
+| `aivin init [name]` | Guided setup: asks what the plugin should do, then scaffolds the project **and** generates real code from that description — `src/service.ts` (logic) + `src/main.ts` (thin wrapper). The simplest way to start. |
+| `aivin create [name]` | Scaffold a new plugin with no AI step — one `src/main.ts` you write by hand (interactive, or `--json`/`--stdin` for scripted/AI use). |
+| `aivin plugin make "<description>"` | (Re)generate business logic from a natural-language description — targets `src/service.ts` if `aivin init` created one, else `src/main.ts`. |
 | `aivin plugin convert` | Already have a project? Turn it into a plugin — AI-generate `src/main.ts` from the code you already have, in the current directory. |
 | `aivin plugin search "<query>"` | Search the platform's plugin ecosystem for something to reuse before writing new logic. |
 | `aivin plugin trigger "<mission>" '<input>'` | Invoke an already-deployed plugin for real and print the result — like the platform's Playground. `-a "<prompt>"` lets the platform auto-map free text onto the input schema instead. |
-| `aivin validate --json <config>` | Validate a plugin config before creating/deploying. |
+| `aivin validate` | Validate `manifest.json` in the current directory (or `--json <config>`/`--stdin` for scripted/CI use). |
 | `aivin start` | Run the plugin locally: real gRPC server + an HTTP test shim on `:4001`. |
 | `aivin test` | Deploy to a non-production test instance, then smoke-test it with generated input and save a report to `.test/`. Blocked in production. |
 | `aivin deploy` | Deploy to your org. |

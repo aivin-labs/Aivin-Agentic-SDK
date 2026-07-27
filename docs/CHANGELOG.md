@@ -5,6 +5,41 @@
 First published release (`npm install @aivin-labs/sdk`). Everything below accumulated during
 development before this release - kept as-is rather than squashed, since the detail is useful.
 
+### 🆕 Added — `aivin init [name]`, a guided one-command alternative to `create` + `plugin make`
+
+Asks what the plugin should do, then scaffolds the project **and** generates real working code
+from that description in one step - instead of `aivin create` followed by a separate
+`aivin plugin make`. Splits the result into two files instead of one:
+
+- **`src/service.ts`** - the actual business logic, AI-generated. A single exported
+  `execute(input, ctx)` returning plain result data (or throwing a plain `Error`) - no
+  `PluginResponse`/`PluginStatus` envelope to think about.
+- **`src/main.ts`** - a thin, static wrapper (not AI-generated, never changes) that calls
+  `execute()` and packages the result into the `PluginResponse` the platform expects. This
+  filename is fixed - the runtime always loads exactly `src/main.ts` - `service.ts` is just this
+  project's own convention for where the logic lives, not a platform requirement.
+
+Achieved without any backend code-generation changes: the existing `/code/generate` endpoint
+already branches its prompt based on `target_file` (a "MAIN ENTRY POINT, must return
+PluginResponse" branch for `src/main.ts`, a generic "utility file" branch for anything else) -
+`aivin init` targets `src/service.ts` (the generic branch) for the AI-generated part, and writes
+`src/main.ts` itself, deterministically, client-side.
+
+`aivin plugin make` now detects an existing `src/service.ts` and regenerates that instead of
+`src/main.ts`, so re-running it on an `aivin init`-created project doesn't silently collapse the
+split back into one file. Falls back to the plain placeholder handler (same as `aivin create`) if
+generation fails, so a network hiccup never leaves a half-scaffolded project. `AGENTS.md`
+scaffolding (see below) also adapts its content depending on which layout a given project has.
+
+Verified live end-to-end: real code generation, correct runtime output, clean `tsc` compile of the
+two-file split together.
+
+### 🔄 Changed — `aivin validate` defaults to the current directory's `manifest.json`
+
+Previously required `--json <config>` or `--stdin` even for the common case (validating your own
+project) - `aivin validate` now just works from inside a plugin directory. `--json`/`--stdin`
+remain for scripted/CI use where the config isn't a file on disk yet.
+
 ### 🐛 Fixed — plugin-to-plugin calls (`ctx.sdk.call('other_plugin_id', params)`) never actually worked
 
 The AI code generator's own instructions (`CodeGenerationHelper.ts` on the backend) told every

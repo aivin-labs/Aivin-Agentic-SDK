@@ -88,6 +88,23 @@ program
     }
   });
 
+// Command: init plugin - guided one-step replacement for `create` + `plugin make`
+program
+  .command('init [name]')
+  .description('Set up a new plugin step by step: asks what it should do, then generates real working code from that description')
+  .option('--name <name>', 'Plugin name (if not specified, will prompt)')
+  .option('--model <model>', 'LLM model to use for generation')
+  .option('--provider <provider>', 'LLM provider to use for generation')
+  .action(async (name, options) => {
+    if (name) options.name = name;
+    try {
+      await initInteractive(options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
 function readStdin() {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -209,9 +226,9 @@ function validateMcpProxyConfig(proxyConfig) {
 // Command: Validate plugin config
 program
   .command('validate')
-  .description('Validate JSON config')
-  .option('--json <config>', 'JSON config')
-  .option('--stdin', 'From stdin')
+  .description('Validate manifest.json in the current directory (or --json/--stdin for scripted use)')
+  .option('--json <config>', 'JSON config, instead of reading manifest.json from the current directory')
+  .option('--stdin', 'Read JSON config from stdin, instead of reading manifest.json')
   .option('--json-output', 'JSON output')
   .action(async (options) => {
     try {
@@ -222,7 +239,14 @@ program
       } else if (options.json) {
         configData = options.json;
       } else {
-        throw new Error('Need --json or --stdin');
+        // Simple, no-flags default: validate manifest.json in the current directory - the case
+        // you actually want most of the time (`aivin validate` from inside your plugin project).
+        // --json/--stdin remain for scripted/CI use where the config isn't a file on disk yet.
+        const manifestPath = path.join(process.cwd(), 'manifest.json');
+        if (!fs.existsSync(manifestPath)) {
+          throw new Error('No manifest.json found in the current directory. Pass --json <config> or --stdin instead.');
+        }
+        configData = fs.readFileSync(manifestPath, 'utf8');
       }
 
       const config = JSON.parse(configData);
@@ -339,20 +363,28 @@ async function createPluginProject(
   description,
   aiConfig = null,
   currentPackageJson = null,
+  { skipHandler = false } = {},
 ) {
   if (!fs.existsSync(pluginDir)) {
     fs.mkdirSync(pluginDir, { recursive: true });
   }
 
-  await Promise.all([
+  const tasks = [
     createManifest(pluginDir, name, description, aiConfig),
-    createHandler(pluginDir, aiConfig),
     createPackageJson(pluginDir, name, description, currentPackageJson),
     createTsConfig(pluginDir),
     createEnv(pluginDir),
     createGitignore(pluginDir),
-    createAgentsGuide(pluginDir),
-  ]);
+    // `skipHandler` is only ever true for `aivin init`'s flow (see below) - the AGENTS.md content
+    // differs depending on whether this project will end up with the src/service.ts split or one
+    // plain src/main.ts, so it doubles as that signal here.
+    createAgentsGuide(pluginDir, { usesServiceSplit: skipHandler }),
+  ];
+  // `aivin init` writes its own src/main.ts (static wrapper) + src/service.ts (AI-generated business
+  // logic) right after this returns - skip the generic placeholder handler so it isn't written and
+  // immediately overwritten.
+  if (!skipHandler) tasks.push(createHandler(pluginDir, aiConfig));
+  await Promise.all(tasks);
 }
 
 /**
@@ -363,18 +395,30 @@ async function createPluginProject(
  * an agent oriented fast, not a full reference - it points to the installed package's own README
  * for depth instead of duplicating it.
  */
-async function createAgentsGuide(pluginDir) {
+async function createAgentsGuide(pluginDir, { usesServiceSplit = false } = {}) {
   const agentsPath = path.join(pluginDir, 'AGENTS.md');
   if (fs.existsSync(agentsPath)) return;
+
+  const filesSection = usesServiceSplit
+    ? `## The files that matter
+
+- **\`manifest.json\`** - id/name/description/version + \`input\`/\`output\` field descriptions (used for auto-mapping natural-language prompts onto real args). Full reference: \`node_modules/@aivin-labs/sdk/docs/MANIFEST.md\`.
+- **\`src/service.ts\`** - the actual business logic. Edit this. A single exported \`execute(input, ctx)\` that returns plain result data, or throws a plain \`Error\` on failure - no \`PluginResponse\`/\`PluginStatus\` to think about here.
+- **\`src/main.ts\`** - a thin, static wrapper. Do NOT edit this or add logic to it - it just calls \`execute()\` and packages the result into the \`PluginResponse\` the platform expects. Its filename is fixed (the runtime always loads exactly this file), unlike \`service.ts\` which is just this project's convention.`
+    : `## The two files that matter
+
+- **\`manifest.json\`** - id/name/description/version + \`input\`/\`output\` field descriptions (used for auto-mapping natural-language prompts onto real args). Full reference: \`node_modules/@aivin-labs/sdk/docs/MANIFEST.md\`.
+- **\`src/main.ts\`** - exports exactly one \`main(mission, input, ctx)\` entry point, returning a \`PluginResponse\` (\`{ status: PluginStatus.SUCCESS | ERROR | FAIL, data?, message?, error_code? }\`).`;
+
+  const regenerateCommand = usesServiceSplit
+    ? `\`aivin plugin make "<description>"\` - regenerate \`src/service.ts\` from a plain-language description (detected automatically; \`src/main.ts\` is left untouched).`
+    : `\`aivin plugin make "<description>"\` - regenerate \`src/main.ts\` from a plain-language description.`;
 
   const content = `# AGENTS.md
 
 This is an Aivin plugin project (\`@aivin-labs/sdk\`). Quick orientation for a coding agent working in this directory.
 
-## The two files that matter
-
-- **\`manifest.json\`** - id/name/description/version + \`input\`/\`output\` field descriptions (used for auto-mapping natural-language prompts onto real args). Full reference: \`node_modules/@aivin-labs/sdk/docs/MANIFEST.md\`.
-- **\`src/main.ts\`** - exports exactly one \`main(mission, input, ctx)\` entry point, returning a \`PluginResponse\` (\`{ status: PluginStatus.SUCCESS | ERROR | FAIL, data?, message?, error_code? }\`).
+${filesSection}
 
 ## Calling the platform - prefer the top-level import, not \`ctx.sdk\`
 
@@ -410,7 +454,7 @@ Call one from your own \`main()\` with \`await ctx.sdk.call('<plugin_id>.<purpos
 - \`aivin start\` - run this plugin locally (gRPC server + HTTP test shim on :4001).
 - \`aivin test\` - deploy to a test instance and smoke-test it with generated input.
 - \`aivin plugin trigger "<mission>" '<input JSON>'\` - invoke an already-deployed plugin for real.
-- \`aivin plugin make "<description>"\` - regenerate \`src/main.ts\` from a plain-language description.
+- ${regenerateCommand}
 
 Full docs: \`node_modules/@aivin-labs/sdk/README.md\` and \`node_modules/@aivin-labs/sdk/docs/\`.
 `;
@@ -1003,6 +1047,197 @@ program
   });
 
 /**
+ * Static (not AI-generated) entry-point wrapper `aivin init` writes to src/main.ts - deterministic
+ * every time, so the only AI-generated file is src/service.ts (the actual business logic). Keeps
+ * protocol concerns (PluginResponse/PluginStatus/error_code) out of the business logic entirely -
+ * `execute()` just returns plain data or throws a plain Error.
+ */
+function buildInitMainWrapper() {
+  return `// This file is a thin, static wrapper - the real business logic lives in src/service.ts
+// (regenerate it with \`aivin plugin make "<new description>"\`, targeting src/service.ts).
+import { execute } from './service.ts';
+import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';
+
+export async function main(mission: string, input: PluginInput, ctx: PluginContext): Promise<PluginResponse> {
+  try {
+    const data = await execute(input, ctx);
+    return { status: PluginStatus.SUCCESS, data, message: 'Success' };
+  } catch (error: any) {
+    console.error('Plugin error:', error);
+    return {
+      status: PluginStatus.ERROR,
+      message: error.message,
+      error_code: PluginErrorCode.EXECUTION_FAILED,
+    };
+  }
+}
+`;
+}
+
+/**
+ * `aivin init`'s code generation - targets src/service.ts (a plain business-logic module, per
+ * CodeGenerationHelper's generic "utility file" branch on the backend) instead of src/main.ts (the
+ * "MAIN ENTRY POINT, must return PluginResponse" branch `plugin make` targets). Keeps the
+ * AI-generated file free of protocol boilerplate - src/main.ts (buildInitMainWrapper, above) is the
+ * only place that needs to know about PluginResponse/PluginStatus at all.
+ */
+async function generateServiceAndWrapper(pluginDir, description, options = {}) {
+  const manifestPath = path.join(pluginDir, 'manifest.json');
+  const servicePath = path.join(pluginDir, 'src', 'service.ts');
+  const mainPath = path.join(pluginDir, 'src', 'main.ts');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+  const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    console.log(chalk.yellow('⚠️  API_KEY not set - run `aivin login` first'));
+  }
+
+  const logic = `Write the core business logic for an Aivin plugin, as a single exported function:
+  export async function execute(input: PluginInput, ctx: PluginContext): Promise<any>
+Rules:
+- This is PURE business logic - do NOT return a PluginResponse/{status, data, message} envelope, do NOT import or reference PluginStatus/PluginErrorCode. Just return the actual result data, or throw a plain Error on failure - the caller (src/main.ts) handles wrapping it into the plugin's response format.
+- "input" fields come from the manifest's "input" description below. Validate required fields are present at the start and throw a clear Error if not.
+- Preferred: import only the namespace(s) you need directly, e.g. import { ai, vector, task, store, redis, mongo } from '@aivin-labs/sdk'; then call ai.prompt(...), vector.search(...), etc. Only fall back to import { call } from '@aivin-labs/sdk'; call(namespace, params) if no sugar method fits.
+- Import types from '@aivin-labs/sdk' if needed: import type { PluginInput, PluginContext } from '@aivin-labs/sdk';
+
+Business requirement:
+${description}`;
+
+  let response;
+  try {
+    response = await axios.post(
+      `${serverUrl}/code/generate`,
+      {
+        // No `workspace_files` - see makePluginFromDescription's comment on why that would trip
+        // the backend's surgical-edit/diff mode.
+        logic,
+        code_id: manifest.id,
+        target_file: 'src/service.ts',
+        model: options.model,
+        provider: options.provider,
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey || 'dev-token'}`,
+        },
+      },
+    );
+  } catch (error) {
+    const message = error.response?.data?.message || error.message;
+    throw new Error(`Code generation failed: ${message}`, { cause: error });
+  }
+
+  const result = response.data ?? {};
+  if (!result.code) {
+    throw new Error('Aivin server did not return generated code.');
+  }
+  const looksLikeDiffBlob = /^\s*\{\s*"mode"\s*:\s*"(diff|full)"/.test(result.code);
+  if (looksLikeDiffBlob) {
+    throw new Error(
+      'Aivin server returned an internal patch format instead of plain code - this is a server-side bug, not something to write to src/service.ts. Please report it.',
+    );
+  }
+
+  fs.mkdirSync(path.dirname(servicePath), { recursive: true });
+  fs.writeFileSync(servicePath, result.code);
+  fs.writeFileSync(mainPath, buildInitMainWrapper());
+
+  applyGeneratedManifestFields(manifestPath, manifest, result);
+}
+
+/**
+ * `aivin init [name]` - the guided, one-command replacement for `aivin create` + `aivin plugin
+ * make`: asks just what's needed (name, business description), scaffolds the project, and
+ * generates real working code from the description - split into src/service.ts (business logic,
+ * AI-generated) + src/main.ts (protocol wrapper, static/deterministic) instead of one file mixing
+ * both concerns, per the same architecture as `plugin make` targeting a non-main.ts file.
+ */
+async function initInteractive(options) {
+  console.log(chalk.blue('🚀 Aivin Plugin Init\n'));
+
+  const nameGivenUpfront = !!options.name;
+  if (nameGivenUpfront && !/^[a-z0-9-]+$/.test(options.name)) {
+    throw new Error('Plugin name must contain only lowercase letters, numbers, and hyphens');
+  }
+  const pluginDir = nameGivenUpfront ? path.join(process.cwd(), options.name) : process.cwd();
+  if (nameGivenUpfront && fs.existsSync(pluginDir)) {
+    throw new Error(`Directory already exists: ${pluginDir}`);
+  }
+
+  let pluginName = options.name || (nameGivenUpfront ? undefined : path.basename(process.cwd()));
+
+  const nameQuestion = nameGivenUpfront
+    ? []
+    : [
+        {
+          type: 'input',
+          name: 'name',
+          message: 'Plugin name:',
+          default: pluginName,
+          validate: (input) => {
+            if (!input.trim()) return 'Plugin name cannot be empty';
+            if (!/^[a-z0-9-]+$/.test(input))
+              return 'Plugin name must contain only lowercase letters, numbers, and hyphens';
+            return true;
+          },
+        },
+      ];
+
+  const answers = await inquirer.prompt([
+    ...nameQuestion,
+    {
+      type: 'input',
+      name: 'description',
+      message: 'What should this plugin do? (be specific - this is what generates your code)',
+      validate: (input) => (input.trim() ? true : 'A description is required to generate working code'),
+    },
+  ]);
+
+  pluginName = answers.name || pluginName;
+  const description = answers.description;
+
+  console.log(chalk.gray(`\n📁 Scaffolding ${pluginName}...`));
+  // input/output start EMPTY (not the generic {data: "..."} placeholder `aivin create` writes) so
+  // generateServiceAndWrapper's applyGeneratedManifestFields (which only fills a field that's
+  // currently empty) actually applies the schema the AI infers from the description, instead of
+  // silently no-op'ing against an already-non-empty placeholder.
+  await createPluginProject(pluginDir, pluginName, description, { input: {}, output: {} }, null, {
+    skipHandler: true,
+  });
+
+  console.log(chalk.blue('🤖 Generating business logic (src/service.ts)...'));
+  try {
+    await generateServiceAndWrapper(pluginDir, description, options);
+    console.log(chalk.green('✅ src/service.ts + src/main.ts generated'));
+  } catch (error) {
+    // Don't leave a half-scaffolded project on generation failure - fall back to the plain
+    // placeholder handler (same one `aivin create` writes), so `aivin init` still leaves a working,
+    // deployable plugin the developer can fill in by hand or retry with `aivin plugin make`. Also
+    // restores the generic input/output placeholder - the empty {} above only makes sense once
+    // generation has actually filled it in.
+    console.error(chalk.yellow(`⚠️  Code generation failed (${error.message}) - falling back to a placeholder handler.`));
+    await createHandler(pluginDir, null);
+    const manifestPath = path.join(pluginDir, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (Object.keys(manifest.input || {}).length === 0) manifest.input = { data: 'object - Input data for processing' };
+    if (Object.keys(manifest.output || {}).length === 0) manifest.output = { data: 'object - Processed data result' };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+
+  console.log(chalk.green(`\n✅ Plugin initialized!`));
+  console.log(`📁 Directory: ${pluginDir}`);
+  console.log(chalk.cyan(`\n🔧 Next steps:`));
+  if (nameGivenUpfront) {
+    console.log(`   cd ${pluginName}  # Enter the new project directory`);
+  }
+  console.log(`   npm install     # Install dependencies`);
+  console.log(`   npm start       # Start plugin locally (gRPC server + HTTP test shim on :4001)`);
+}
+
+/**
  * Calls the real AI code generator (POST /code/generate - CodeHandler.generateCode on the
  * frontend, same endpoint the browser CodeEditor uses). That endpoint's default output already
  * targets `main(mission, input, ctx)` + `ctx.sdk.*` + `PluginResponse` - the same conventions this
@@ -1015,6 +1250,19 @@ async function makePluginFromDescription(description, options = {}) {
 
   if (!fs.existsSync(manifestPath)) {
     throw new Error('manifest.json not found. Run `aivin create` first.');
+  }
+
+  // A project created by `aivin init` has src/service.ts (business logic) + a static src/main.ts
+  // wrapper - regenerating here should target service.ts too, or it'd overwrite that clean split
+  // with a single self-contained main.ts, silently undoing it.
+  if (fs.existsSync(path.join(currentDir, 'src', 'service.ts'))) {
+    console.log(chalk.gray('src/service.ts found - regenerating business logic there (main.ts wrapper unchanged).'));
+    await generateServiceAndWrapper(currentDir, description, options);
+    console.log(chalk.green('✅ src/service.ts regenerated'));
+    console.log(chalk.cyan('\n🔧 Next steps:'));
+    console.log('   aivin start   # test locally');
+    console.log('   aivin test    # deploy to a test instance');
+    return;
   }
 
   const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';

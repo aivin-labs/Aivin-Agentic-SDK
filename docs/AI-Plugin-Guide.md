@@ -83,12 +83,17 @@ For anything without a dedicated import, use the generic escape hatch:
 ## CLI workflow
 
 ```bash
-aivin create my-plugin              # scaffold manifest.json + src/main.ts
-cd my-plugin
+aivin init my-plugin                # asks what it should do, scaffolds + generates real code in one step
+cd my-plugin && npm install
+# writes src/service.ts (business logic, AI-generated) + src/main.ts (thin static wrapper)
 
-aivin plugin make "<description>"   # or: let AI generate src/main.ts from a description
+# alternative: scaffold with no AI step, write src/main.ts by hand
+aivin create my-plugin
+cd my-plugin
+aivin plugin make "<description>"   # or: let AI generate the logic from a description
 aivin plugin convert                # or: convert a project you already have into a plugin
 
+aivin plugin search "<query>"       # check if an existing plugin already does this, first
 aivin start                         # run locally: gRPC server + curl-able HTTP shim on :4001
 aivin test                          # deploy to a non-production test instance
 aivin deploy                        # ship to your org
