@@ -1,9 +1,9 @@
 # Changelog
 
-## [1.0.0] - 2026-07-27
+## [1.0.1] - 2026-07-27
 
-First published release (`npm install @aivin-labs/sdk`). Everything below accumulated during
-development before this release - kept as-is rather than squashed, since the detail is useful.
+Everything below happened after `1.0.0` was already published to npm - fixes/features here ship in
+`1.0.1`.
 
 ### 🆕 Added — `aivin init [name]`, a guided one-command alternative to `create` + `plugin make`
 
@@ -130,6 +130,10 @@ both `--json` and `--stdin`) always creates the plugin in a **subdirectory** nam
 `cd <name>` first. Following the printed instructions verbatim ran `npm install` in the *parent*
 directory. The plain interactive `aivin create <name>` path already had this right (fixed earlier
 this session) - this fix brings the scripted path to parity.
+
+## [1.0.0] - 2026-07-27
+
+First published release (`npm install @aivin-labs/sdk`).
 
 ### 🆕 Added — `sdk.ai.promptStream()`, true token-level AI streaming
 

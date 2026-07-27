@@ -40,7 +40,7 @@ const __dirname = dirname(__filename);
 
 const program = new Command();
 
-program.name('aivin').description('Aivin Plugin SDK - Build and run AI plugins').version('1.0.0');
+program.name('aivin').description('Aivin Plugin SDK - Build and run AI plugins').version('1.0.1');
 
 // Command: create plugin
 program
@@ -568,7 +568,7 @@ async function createPackageJson(pluginDir, name, description, currentPackageJso
       // "latest"/range dependency pins as a supply-chain risk (a later, unreviewed version could
       // get pulled in silently) and blocks deployment over it. Bump this alongside this CLI's own
       // version() call above when publishing a new @aivin-labs/sdk release.
-      '@aivin-labs/sdk': '1.0.0',
+      '@aivin-labs/sdk': '1.0.1',
     },
     devDependencies: {
       '@types/node': '^24.0.0',
