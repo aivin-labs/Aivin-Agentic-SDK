@@ -213,6 +213,27 @@ Imported the same way as the namespaces: `import { ask, hil, a2a, log, wait, con
 | `user(id)`                   | Public profile for a user in the current tenant.         |
 | `getCachedUser(id)`          | Redis-cached variant of `user(id)` - for high-traffic channels. |
 
+## Testing
+
+Not runtime helpers for inside `main()` — these are for `test/*.test.ts`, to unit-test your plugin
+logic with no real backend/gRPC round trip. `aivin create`/`aivin init` scaffold a working example
+using these (`npm test` to run it).
+
+| Method | Description |
+| --- | --- |
+| `createMockSDK({ identity?, handlers? })` | Builds a fake `SDKClient`. `handlers` is one function per `namespace.method` your code is expected to call (`{ 'ai.prompt': async ({quest}) => '...' }`) — calling anything not listed throws immediately, naming the missing one. Returns `{ client, calls }`; `calls` is every call made, in order, for asserting on params sent. |
+| `withMockSDK(client, fn)` | Runs `fn` with `client` bound as the ambient SDK for that async context — needed so the recommended `import { ai } from '@aivin-labs/sdk'` top-level style resolves to your mock too, not just code that reads `ctx.sdk` directly. Wrap your call to `main()` (or whatever you're testing) in this. |
+| `createMockContext(client, overrides?)` | Builds a `PluginContext` (the `ctx` argument) around a mock client, with plausible default `user`/`workspace` so you don't re-type them at every test call site. |
+
+```typescript
+import { createMockSDK, withMockSDK, createMockContext } from '@aivin-labs/sdk';
+import { main } from '../src/main';
+
+const { client, calls } = createMockSDK({ handlers: { 'ai.prompt': async () => 'mocked summary' } });
+const ctx = createMockContext(client);
+const result = await withMockSDK(client, () => main('test', { text: 'x' }, ctx));
+```
+
 ## What's in `ctx`
 
 ```typescript

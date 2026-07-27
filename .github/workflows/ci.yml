@@ -23,3 +23,29 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+
+  # Cross-checks SDKClient.ts against the backend's real PluginBridge registrations - see
+  # scripts/check-contract.mjs's own header for what this does/doesn't catch. Needs a checkout of
+  # the (separate, private) backend repo, which the default GITHUB_TOKEN can't access - this job is
+  # a documented no-op until two repository variables/secrets are configured:
+  #   - vars.BE_REPO       e.g. "aivin-labs/be" (Settings -> Secrets and variables -> Actions -> Variables)
+  #   - secrets.BE_REPO_TOKEN   a PAT/deploy key with read access to that repo
+  # Until then this job is skipped entirely (not run-and-fail) so it never blocks CI on its own.
+  check-contract:
+    runs-on: ubuntu-latest
+    if: ${{ vars.BE_REPO != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.BE_REPO }}
+          token: ${{ secrets.BE_REPO_TOKEN }}
+          path: be-repo
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run check:contract -- --be-path ./be-repo

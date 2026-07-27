@@ -139,7 +139,9 @@ aivin plugin convert
 ### 3. Run it locally
 
 ```bash
+npm test         # unit tests - no server, no network (see docs/SDK.md#testing)
 npm start        # real gRPC server + a curl-friendly HTTP test shim on :4001
+npm start -- --debug  # same, plus logs every sdk.* call live as it happens
 
 curl -X POST http://localhost:4001/invoke -H 'content-type: application/json' \
   -d '{"input":{"text":"Aivin plugins are easy to write."}}'

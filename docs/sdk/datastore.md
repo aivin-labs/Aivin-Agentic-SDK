@@ -12,6 +12,14 @@ import { datastore } from '@aivin-labs/sdk';
 // legacy (works, not recommended): ctx.sdk.datastore
 ```
 
+Every method validates its params locally (zod) before the call goes out — a missing `table_id`/
+`workspace_id`/`project_id`, etc. throws immediately with a clear `[datastore.X] invalid params -
+...` message instead of failing obscurely on the host. Note this validation is looser than
+`store`'s in a few spots (`columns`, `strategy` are `any` rather than a fixed shape) — this
+reflects `datastore` tables having user-defined column structures, not a gap; a fixed union type
+doesn't fit a "the user decides the columns" table the way it does `store`'s fixed operation
+vocabulary (`op: count|sum|avg|min|max`, etc.).
+
 ## Methods
 
 | Method | Parameters | Returns | Description |

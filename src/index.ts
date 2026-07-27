@@ -16,6 +16,8 @@ export { default } from './sdk/globalSdk';
 
 export { PluginServer } from './PluginServer';
 export { LocalTestServer } from './LocalTestServer';
+export { createMockSDK, withMockSDK, createMockContext } from './sdk/testUtils';
+export type { MockSDK, MockSDKHandlers, CreateMockSDKOptions } from './sdk/testUtils';
 export { invokeHost, invokeHostStream, onCall } from './grpc/GrpcInvoker';
 export type { CallTrace, StreamHandle } from './grpc/GrpcInvoker';
 export { getCurrentTrace, formatTraceForConsole } from './sdk/trace';

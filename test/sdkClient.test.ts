@@ -325,3 +325,60 @@ test('resource.upload() accepts a base64 string file and forwards params as-is',
   assert.equal(requests[0].namespace, 'resource.uploadFile');
   assert.deepEqual(requests[0].params, { file: 'aGVsbG8=', name: 'hello.txt' });
 });
+
+test('store.set() forwards a valid call and rejects an empty table name locally', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { key: 'k1' };
+  });
+
+  await client.store.set('orders', 'o1', { total: 100 });
+  assert.equal(requests[0].namespace, 'store.set');
+  assert.deepEqual(requests[0].params, {
+    table_id: 'orders',
+    key: 'o1',
+    data: { total: 100 },
+    ttl_seconds: undefined,
+    schema: undefined,
+    strict: undefined,
+  });
+
+  await assert.rejects(async () => {
+    await client.store.set('', 'o1', { total: 100 });
+  }, /store\.set/);
+});
+
+test('store.aggregate() rejects an invalid metrics[].op value locally', async () => {
+  const client = makeClient(async () => []);
+  await assert.rejects(async () => {
+    await (client.store.aggregate as any)('orders', [{ op: 'median', as: 'x' }]);
+  }, /store\.aggregate/);
+});
+
+test('datastore.addRow() forwards a valid call and rejects a missing table_id locally', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { id: 'row1' };
+  });
+
+  await client.datastore.addRow({
+    workspace_id: 'w1',
+    project_id: 'p1',
+    table_id: 't1',
+    data: { name: 'Ada' },
+  });
+  assert.equal(requests[0].namespace, 'datastore.addRow');
+
+  await assert.rejects(async () => {
+    await (client.datastore.addRow as any)({ workspace_id: 'w1', project_id: 'p1', data: { name: 'Ada' } });
+  }, /datastore\.addRow.*table_id/s);
+});
+
+test('datastore.getTables() rejects a missing project_id locally', async () => {
+  const client = makeClient(async () => []);
+  await assert.rejects(async () => {
+    await (client.datastore.getTables as any)({ workspace_id: 'w1' });
+  }, /datastore\.getTables.*project_id/s);
+});

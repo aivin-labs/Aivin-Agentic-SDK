@@ -26,7 +26,7 @@ Commands:
                            description
   validate [options]       Validate manifest.json in the current directory (or
                            --json/--stdin for scripted use)
-  start                    Start plugin server
+  start [options]          Start plugin server
   deploy                   Deploy plugin to your org on the Aivin server
   test [options]           Deploy to a non-production test instance, then
                            smoke-test it with generated input and save a report
@@ -166,6 +166,22 @@ curl -X POST http://localhost:4001/invoke -H 'content-type: application/json' \
 SDK calls made while running default to the **production** backend (`api.aivin.cloud`) if
 `SDK_GRPC_ENDPOINT` isn't set in `.env` - point it at a local/dev backend instead if you don't want
 that (see [Environment variables](#environment-variables) below).
+
+### Live per-call debugging: `--debug` / `--debug-json`
+
+By default you only see a trace summary once the whole invocation finishes (`AIVIN_TRACE`, on by
+default - see [Environment variables](#environment-variables)). To watch each `sdk.*` call as it
+happens instead:
+
+```bash
+aivin start --debug        # human-readable: one line per call, live
+aivin start --debug-json   # same events, one JSON object per line - for a script/coding agent
+                            # to parse instead of pattern-matching free text
+```
+
+Both are `SDK_DEBUG=true`/`SDK_DEBUG=json` under the hood (settable directly if you're not going
+through `aivin start`, e.g. inside `aivin test`'s smoke-test run). Each line/event covers exactly
+one `sdk.*` call: `namespace`, `duration_ms`, `attempts`, `success`, `error` (if any).
 
 ## `aivin deploy`
 

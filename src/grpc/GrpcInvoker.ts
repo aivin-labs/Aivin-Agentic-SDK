@@ -116,10 +116,31 @@ function emitTrace(trace: CallTrace): void {
       // A misbehaving interceptor must never break the actual RPC call.
     }
   }
+  // `SDK_DEBUG=true` - human-readable one-liner per call, live as it happens (not batched/post-hoc
+  // like `formatTraceForConsole`, which only prints once the whole invocation finishes). Set by
+  // `aivin start --debug`.
   if (process.env.SDK_DEBUG === 'true') {
     const outcome = trace.success ? 'ok' : `FAILED: ${trace.error}`;
     console.debug(
       `[@aivin-labs/sdk] ${trace.namespace} (${trace.durationMs}ms, ${trace.attempts} attempt(s)) - ${outcome}`,
+    );
+  }
+  // `SDK_DEBUG=json` - same live-per-call signal, structured as one JSON object per line instead of
+  // a formatted string. Meant for a coding agent (or any script) reading this process's stdout to
+  // parse programmatically - a free-text line requires the reader to know this SDK's exact log
+  // format; a JSON-lines stream doesn't. Written to stdout (not stderr/console.debug) specifically
+  // so a `| grep '"type":"sdk_call"'`-style pipeline sees it without stderr interleaving.
+  if (process.env.SDK_DEBUG === 'json') {
+    process.stdout.write(
+      JSON.stringify({
+        type: 'sdk_call',
+        namespace: trace.namespace,
+        duration_ms: trace.durationMs,
+        attempts: trace.attempts,
+        success: trace.success,
+        error: trace.error,
+        ts: Date.now(),
+      }) + '\n',
     );
   }
 }

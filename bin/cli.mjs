@@ -389,6 +389,7 @@ async function createPluginProject(
     // differs depending on whether this project will end up with the src/service.ts split or one
     // plain src/main.ts, so it doubles as that signal here.
     createAgentsGuide(pluginDir, { usesServiceSplit: skipHandler }),
+    createTestFile(pluginDir, { usesServiceSplit: skipHandler }),
   ];
   // `aivin init` writes its own src/main.ts (static wrapper) + src/service.ts (AI-generated business
   // logic) right after this returns - skip the generic placeholder handler so it isn't written and
@@ -423,6 +424,9 @@ async function createAgentsGuide(pluginDir, { usesServiceSplit = false } = {}) {
   const regenerateCommand = usesServiceSplit
     ? `\`aivin plugin make "<description>"\` - regenerate \`src/service.ts\` from a plain-language description (detected automatically; \`src/main.ts\` is left untouched).`
     : `\`aivin plugin make "<description>"\` - regenerate \`src/main.ts\` from a plain-language description.`;
+
+  const testFileName = usesServiceSplit ? 'test/service.test.ts' : 'test/main.test.ts';
+  const testTargetName = usesServiceSplit ? 'execute()' : 'main()';
 
   const content = `# AGENTS.md
 
@@ -462,14 +466,95 @@ Call one from your own \`main()\` with \`import { call } from '@aivin-labs/sdk'\
 ## Commands you'll actually use
 
 - \`aivin start\` - run this plugin locally (gRPC server + HTTP test shim on :4001).
-- \`aivin test\` - deploy to a test instance and smoke-test it with generated input.
+- \`aivin start --debug\` - same, plus logs every \`sdk.*\` call live as it happens (human-readable one-liner per call). \`--debug-json\` prints the same events as one JSON object per line instead - prefer this when *you* (the coding agent) are the one reading the output, so you can parse it instead of pattern-matching free text.
+- \`npm test\` - runs \`${testFileName}\` (Node's built-in test runner + native TS execution, no extra tooling). Mocks the SDK with \`createMockSDK\`/\`withMockSDK\` from \`@aivin-labs/sdk\` - no real backend, no gRPC round trip. **Keep this file in sync whenever you change what \`${testTargetName}\` calls or returns** - update the mocked \`handlers\` and assertions together with the logic, don't let it go stale.
+- \`aivin test\` - deploy to a *real* test instance and smoke-test it with generated input (unlike \`npm test\`, this hits the actual backend) - writes a JSON report to \`.test/\`, read that file for structured pass/fail instead of parsing the console output.
 - \`aivin plugin trigger "<mission>" '<input JSON>'\` - invoke an already-deployed plugin for real.
 - \`aivin plugin logs\` - tail this plugin's own console output live, once deployed.
 - ${regenerateCommand}
 
+## Debugging a failure
+
+1. Reproduce locally first: \`aivin start --debug-json\`, then \`curl -X POST http://localhost:4001/invoke -H 'content-type: application/json' -d '{"input":{...}}'\` in another terminal (or read the JSON lines this process prints as it runs, if you're driving it directly).
+2. Each \`sdk.*\` call's own error message is usually the fastest signal - namespaces validated with zod (\`automation.*\`, \`resource.*\`, \`store.*\`, \`datastore.*\`) throw \`[namespace.method] invalid params - field: reason\` immediately on a bad shape, before any network call.
+3. If a call's *shape* is right but the *result* is wrong, check the relevant \`node_modules/@aivin-labs/sdk/docs/sdk/*.md\` page - several namespaces have "Notes & caveats" documenting real field names/behavior that differ from what you'd guess (e.g. \`automation.createJob\` takes \`mission\`/\`schedule_condition\`, not \`name\`/\`schedule\`).
+
 Full docs: \`node_modules/@aivin-labs/sdk/README.md\` and \`node_modules/@aivin-labs/sdk/docs/\`.
 `;
   fs.writeFileSync(agentsPath, content);
+}
+
+/**
+ * A real, runnable example test using createMockSDK/withMockSDK/createMockContext - not just
+ * documentation. Deliberately written to still PASS against the literal placeholder handler
+ * `createHandler` writes (which calls no SDK method at all) - the mocked `ai.prompt` handler is
+ * simply never invoked in that case, and the assertions on `status`/`data.processed` hold either
+ * way. Once real logic replaces the placeholder (by hand or via `aivin plugin make`), this file is
+ * a starting point to adapt, exactly like `src/main.ts`/`src/service.ts` themselves are.
+ */
+async function createTestFile(pluginDir, { usesServiceSplit = false } = {}) {
+  const testDir = path.join(pluginDir, 'test');
+  if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+
+  const testPath = path.join(testDir, usesServiceSplit ? 'service.test.ts' : 'main.test.ts');
+  if (fs.existsSync(testPath)) return;
+
+  const content = usesServiceSplit
+    ? `// Tests the real business logic in src/service.ts directly - src/main.ts is a thin, static
+// wrapper (see AGENTS.md) not worth testing on its own. Adapt the mocked handlers/assertions
+// below once execute() calls something other than what's here now.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createMockSDK, withMockSDK } from '@aivin-labs/sdk';
+import { execute } from '../src/service.ts';
+
+test('execute() returns a result', async () => {
+  const { client, calls } = createMockSDK({
+    handlers: {
+      // Add one entry per namespace.method execute() actually calls - see the error message
+      // a missing handler throws for the exact string to use, or docs/sdk/*.md in
+      // node_modules/@aivin-labs/sdk.
+      'ai.prompt': async ({ quest }) => \`Echo: \${quest}\`,
+    },
+  });
+
+  const result = await withMockSDK(client, () => execute({ text: 'hello' } as any, {} as any));
+
+  assert.ok(result !== undefined);
+  // Uncomment once execute() actually calls something:
+  // assert.equal(calls[0]?.namespace, 'ai.prompt');
+  void calls;
+});
+`
+    : `// Adapt the mocked handlers/assertions below once main() calls something other than what's
+// here now (the placeholder calls no SDK method at all, so this passes as-is against a fresh
+// \`aivin create\`/\`aivin init\` scaffold).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createMockSDK, withMockSDK, createMockContext } from '@aivin-labs/sdk';
+import { main } from '../src/main.ts';
+
+test('main() returns a success response', async () => {
+  const { client, calls } = createMockSDK({
+    handlers: {
+      // Add one entry per namespace.method main() actually calls - see the error message
+      // a missing handler throws for the exact string to use, or docs/sdk/*.md in
+      // node_modules/@aivin-labs/sdk.
+      'ai.prompt': async ({ quest }) => \`Echo: \${quest}\`,
+    },
+  });
+  const ctx = createMockContext(client);
+
+  const result = await withMockSDK(client, () => main('test mission', { text: 'hello' }, ctx));
+
+  assert.equal(result.status, 'success');
+  // Uncomment once main() actually calls something:
+  // assert.equal(calls[0]?.namespace, 'ai.prompt');
+  void calls;
+});
+`;
+
+  fs.writeFileSync(testPath, content);
 }
 
 async function createGitignore(pluginDir) {
@@ -634,6 +719,9 @@ async function createPackageJson(pluginDir, name, description, currentPackageJso
     type: 'module',
     scripts: {
       start: 'aivin start',
+      // Node's own native TS execution (same mechanism PluginServer.loadPlugin uses to load
+      // src/main.ts directly, no separate compile step) - not a new tool/dependency to learn.
+      test: 'node --test test/**/*.test.ts',
     },
     dependencies: {
       // Pinned to an exact version, not "latest" - the platform's own AI security scan flags
@@ -719,10 +807,14 @@ async function createEnv(pluginDir) {
 program
   .command('start')
   .description('Start plugin server')
-  .action(() => {
+  .option('--debug', 'Log every sdk.* call live as it happens (human-readable), not just the final trace summary')
+  .option('--debug-json', 'Same live per-call logging as --debug, but one JSON object per line on stdout - for a script/coding agent to parse instead of a human')
+  .action((options) => {
     const serverPath = path.join(__dirname, 'server.mjs');
+    const debugEnv = options.debugJson ? { SDK_DEBUG: 'json' } : options.debug ? { SDK_DEBUG: 'true' } : {};
     const child = spawn('node', [serverPath], {
       stdio: 'inherit',
+      env: { ...process.env, ...debugEnv },
     });
 
     child.on('error', (error) => {

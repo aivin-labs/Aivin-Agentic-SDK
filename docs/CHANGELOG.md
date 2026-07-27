@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### 🆕 Added — real unit-testing utilities (`createMockSDK`/`withMockSDK`/`createMockContext`) + live debug streaming
+
+Previously the only way to exercise a plugin's logic was a real `aivin start` + curl round trip
+(or the heavier `PluginServer.testInvoke`) - no way to unit-test `main()`/`service.ts` against a
+fake SDK. New top-level exports:
+
+- `createMockSDK({ identity?, handlers? })` - fake `SDKClient`, one handler function per
+  `namespace.method`; calling anything unmocked throws immediately naming the missing one (loud
+  failure at the call site, not a silent `undefined`). Returns `{ client, calls }` for asserting on
+  what was actually sent.
+- `withMockSDK(client, fn)` - binds the mock as the ambient client so the *recommended*
+  `import { ai } from '@aivin-labs/sdk'` top-level style resolves to it too, not just `ctx.sdk`.
+- `createMockContext(client, overrides?)` - builds a `PluginContext` around a mock client with
+  plausible `user`/`workspace` defaults.
+
+`aivin create`/`aivin init` now scaffold a real, runnable `test/main.test.ts` (or
+`test/service.test.ts`) using these, plus a `test` script in the generated `package.json` (Node's
+own `--test` + native TS execution - no new tooling). Verified end-to-end: scaffolded a fresh
+project with the updated CLI and ran its generated test for real - passes against the actual
+generated `src/main.ts`, not just type-checks.
+
+Also added live per-call debugging: `SDK_DEBUG=json` (new, alongside the existing
+`SDK_DEBUG=true` human-readable mode) prints one JSON object per `sdk.*` call as it happens - for a
+script or coding agent reading the process's stdout to parse programmatically, instead of a
+post-hoc trace summary or pattern-matching free text. `aivin start --debug` / `--debug-json` are
+CLI sugar for the two modes. See [CLI.md#aivin-start](./CLI.md#aivin-start) and
+[SDK.md#testing](./SDK.md#testing).
+
+### 📝 Improved — `AGENTS.md` scaffold: testing + debugging sections
+
+The scaffolded `AGENTS.md` (read automatically by Claude Code/Cursor/other coding agents opening a
+plugin project) now has "Commands you'll actually use" pointing at `npm test`/`--debug`/`--debug-json`,
+and a "Debugging a failure" section with a concrete repro-and-inspect flow - written for an agent
+working autonomously in the directory, not just a human skimming a README once.
+
 ### 🆕 Added — `agent.reply(quest, opts?)` and `agent.tell(text)`
 
 New chat-streaming primitives on `agent`, not `ai`: previously the only way to stream text into the
@@ -28,6 +63,15 @@ buggy/looping plugin from flooding a user's chat with unlimited persisted messag
 `SDKClient.ts` and `docs/sdk/code.md` both already assumed `import { code } from '@aivin-labs/sdk'`
 worked, but `globalSdk.ts` never actually exported it — only the legacy `ctx.sdk.code.executeLogic(...)`
 path worked. Added the missing `export const code = bindNamespace('code')`.
+
+### 🆕 Added — local zod validation extended to `store.*` and `datastore.*`
+
+Same treatment as `automation`/`resource` below, extended to the two highest-traffic write
+namespaces. Both were verified field-by-field against the real `StoreSDK.ts`/`DatastoreSDK.ts`
+first — unlike `automation`, these were already shape-correct, so this is a pure runtime-guard
+addition, not a bug fix. Also wired `scripts/check-contract.mjs` into CI (`.github/workflows/ci.yml`,
+`check-contract` job) — currently a documented no-op until `vars.BE_REPO`/`secrets.BE_REPO_TOKEN`
+are configured, since the checker needs a checkout of the separate backend repo.
 
 ### 🆕 Added — local zod validation for `automation.*` and `resource.upload`/`.remove`
 

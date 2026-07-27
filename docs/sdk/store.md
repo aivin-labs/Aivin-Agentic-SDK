@@ -26,6 +26,10 @@ particular, **`transaction` silently drops any operation that doesn't get a `tab
 attached**, which the SDK handles for you automatically; only a concern if you bypass the sugar
 method and call `store.transaction` via `call()` directly.
 
+Every method also validates its params locally (zod) before the call goes out — an empty `table`,
+an `aggregate` metric with an unrecognized `op`, etc. throws immediately with a clear
+`[store.X] invalid params - ...` message instead of failing obscurely on the host.
+
 ## Methods
 
 | Method | Parameters | Returns | Description |

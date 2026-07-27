@@ -84,6 +84,47 @@ aivin plugin convert
 
 ## 4. Test locally
 
+### Unit tests — no network, no running server
+
+`aivin create`/`aivin init` scaffold a real, runnable `test/main.test.ts` (or `test/service.test.ts`
+if you used `aivin init`'s service-split layout) using `createMockSDK`/`withMockSDK` from
+`@aivin-labs/sdk` — no real backend, no gRPC round trip:
+
+```bash
+npm test
+```
+
+```typescript
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createMockSDK, withMockSDK, createMockContext } from '@aivin-labs/sdk';
+import { main } from '../src/main.ts';
+
+test('main() returns a success response', async () => {
+  const { client, calls } = createMockSDK({
+    handlers: {
+      // One entry per namespace.method your plugin actually calls. Missing one throws
+      // immediately with a clear message naming it - that's the signal to add it here.
+      'ai.prompt': async ({ quest }) => `Echo: ${quest}`,
+    },
+  });
+  const ctx = createMockContext(client);
+
+  const result = await withMockSDK(client, () => main('test mission', { text: 'hello' }, ctx));
+
+  assert.equal(result.status, 'success');
+  assert.equal(calls[0]?.namespace, 'ai.prompt');
+});
+```
+
+`withMockSDK` matters even if your code only reads `ctx.sdk` today — wrap the call anyway so
+`import { ai } from '@aivin-labs/sdk'`-style code (the recommended style; see [Anatomy of a
+plugin](#anatomy-of-a-plugin) above) resolves to your mock too, not just `ctx.sdk` directly. Keep
+this file in sync as you change what your plugin calls/returns — a stale test that still passes
+because it mocks the wrong thing is worse than no test.
+
+### Running it for real — a live server + manual/live-observed calls
+
 ```bash
 aivin start
 ```
@@ -98,6 +139,14 @@ This starts two things:
 curl -X POST http://localhost:4001/invoke \
   -H 'content-type: application/json' \
   -d '{"input": {"text": "Some text to summarize"}}'
+```
+
+Want to see every `sdk.*` call as it happens instead of just a summary at the end?
+
+```bash
+aivin start --debug         # human-readable, live, one line per call
+aivin start --debug-json    # same, one JSON object per line - easier for a script/coding
+                             # agent to parse than free text
 ```
 
 SDK calls made during local testing default to the **production** backend
