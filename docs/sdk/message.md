@@ -22,6 +22,8 @@ import { message } from '@aivin-labs/sdk';
 | `getById` | `params: { message_id: string }` | `Promise<any>` | Fetch a single message by ID. |
 | `search` | `params: { query?: string; session_id?: string; limit?: number; [key: string]: any }` | `Promise<any[]>` | Full-text/keyword search across messages. |
 | `update` | `params: { message_id: string; [key: string]: any }` | `Promise<any>` | Update an existing message's fields. |
+| `init` | `params: { session_id?: string; [key: string]: any }` | `Promise<any>` | Initializes a message record (e.g. a placeholder the caller will stream/update into), as opposed to `save`'s one-shot full write. |
+| `stream` | `params: { session_id?: string; thread_id?: string; role?: 'user' \| 'assistant' \| 'system'; text: string; [key: string]: any }` | `Promise<any>` | Lower-level streaming push into a session's chat — this is the same mechanism `agent.tell()` wraps; prefer `agent.tell()` unless you need direct control over `role`/`thread_id`. |
 
 ## `save` example
 

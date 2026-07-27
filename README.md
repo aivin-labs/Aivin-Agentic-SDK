@@ -242,15 +242,15 @@ Every namespace below is importable on its own — `import { ai, store } from '@
 | `ai` | Prompt the LLM, generate embeddings, rerank documents | [docs/sdk/ai.md](docs/sdk/ai.md) |
 | `knowledge` | Search the workspace's long-term knowledge base (RAG) | [docs/sdk/knowledge.md](docs/sdk/knowledge.md) |
 | `vector` | Raw vector search and indexing over the workspace's document store | [docs/sdk/vector.md](docs/sdk/vector.md) |
-| `store` | Persistent storage, recommended default — relational key-value with schema, graph edges, hybrid search, aggregation, atomic transactions | [docs/sdk/store.md](docs/sdk/store.md) |
-| `redis` | Simple isolated key-value cache | [docs/sdk/redis.md](docs/sdk/redis.md) |
-| `mongo` | Isolated, Mongoose-style document collections | [docs/sdk/mongo.md](docs/sdk/mongo.md) |
-| `datastore` | Project-scoped tabular database (tables/rows) — separate from `store` | [docs/sdk/datastore.md](docs/sdk/datastore.md) |
+| `store` | Plugin-private persistent storage, default choice — relational key-value with schema, graph edges, hybrid search, aggregation, atomic transactions | [docs/sdk/store.md](docs/sdk/store.md) |
+| `redis` | Plugin-private ephemeral cache (counters, dedup locks, short-lived state) | [docs/sdk/redis.md](docs/sdk/redis.md) |
+| `mongo` | Plugin-private document collections, for teams porting existing Mongo-shaped logic | [docs/sdk/mongo.md](docs/sdk/mongo.md) |
+| `datastore` | User-facing tabular data (tables/rows a human browses/edits in the platform's UI) — a different job from `store`/`mongo`/`redis`, not a variant of them. See [Persistent storage](docs/SDK.md#persistent-storage--store-datastore-mongo-redis) for the full decision guide. | [docs/sdk/datastore.md](docs/sdk/datastore.md) |
 | `datasource` | Manage training data sources feeding the workspace's knowledge | [docs/sdk/datasource.md](docs/sdk/datasource.md) |
 | `task` | Create, update, list, and delete tasks | [docs/sdk/task.md](docs/sdk/task.md) |
 | `project` | Read-only project lookup | [docs/sdk/project.md](docs/sdk/project.md) |
 | `workspace` | Workspace details, members, permissions, per-workspace plugin config | [docs/sdk/workspace.md](docs/sdk/workspace.md) |
-| `agent` | Look up an AI Staff agent, check its status, or delegate work to it | [docs/sdk/agent.md](docs/sdk/agent.md) |
+| `agent` | Look up an AI Staff agent, delegate work to it, or reply/push text into the current chat | [docs/sdk/agent.md](docs/sdk/agent.md) |
 | `message` | Save, list, search, and update chat messages | [docs/sdk/message.md](docs/sdk/message.md) |
 | `session` | Chat/automation session management | [docs/sdk/session.md](docs/sdk/session.md) |
 | `realtime` | Publish a live event to the workspace or a specific user | [docs/sdk/realtime.md](docs/sdk/realtime.md) |
@@ -263,11 +263,13 @@ Every namespace below is importable on its own — `import { ai, store } from '@
 | `automation` | Manage cron-style automation jobs | [docs/sdk/automation.md](docs/sdk/automation.md) |
 | `browser` | Trigger a full, multi-step AI Browser mission | [docs/sdk/browser.md](docs/sdk/browser.md) |
 | `causality` | Deep causal reasoning over accumulated context | [docs/sdk/causality.md](docs/sdk/causality.md) |
-| `attachment` | Search, deep-research, and evaluate attached documents | [docs/sdk/attachment.md](docs/sdk/attachment.md) |
+| `attachment` | Search, upload, deep-research, evaluate, and extract raw content from attached documents | [docs/sdk/attachment.md](docs/sdk/attachment.md) |
+| `code` | Execute AI-generated/cached business logic with sandboxed args | [docs/sdk/code.md](docs/sdk/code.md) |
 
 A few top-level functions round out the surface, imported the same way: `ask(...)`/`hil(...)` for
-human-in-the-loop input, `a2a(...)` for agent delegation, `user(id)` for a user's public profile,
-`log(...)`/`wait(...)`, and `config()` for this plugin's saved workspace config.
+human-in-the-loop input, `a2a(...)` for agent delegation, `user(id)`/`getCachedUser(id)` for a
+user's public profile, `log(...)`/`wait(...)`, and `config()` for this plugin's saved workspace
+config.
 
 Every method is scoped to this plugin and the invoking tenant on the host side — your container
 never receives a raw database credential. Full method-by-method reference with parameter shapes:

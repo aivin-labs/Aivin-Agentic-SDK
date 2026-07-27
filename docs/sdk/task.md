@@ -23,6 +23,9 @@ import { task } from '@aivin-labs/sdk';
 | `list` | `params: { workspace_id: string; status?: string; assignee_id?: string; limit?: number }` | `Promise<Task[]>` | List tasks in a workspace, optionally filtered. |
 | `delete` | `taskId: string` | `Promise<any>` | Delete a task by ID. |
 | `listMine` | `params?: { status?: string; limit?: number; [key: string]: any }` | `Promise<Task[]>` | List tasks assigned to the current user. |
+| `gen` | `params: { prompt?: string; title?: string; workspace_id?: string; task_id?: string }` | `Promise<Task>` | AI-generates a task (fills in missing fields like description/priority from `prompt`). |
+| `addComment` | `params: { task_id: string; content: string }` | `Promise<any>` | Adds an AI/agent-authored comment to a task. |
+| `requestSupport` | `params: { task_id: string; assist_user_id: string; message: string }` | `Promise<{ success: boolean; task_id: string; assist_user_id: string }>` | Requests help from another user on a task. |
 
 `Task` shape (from `SDKTypes.ts`):
 
@@ -107,11 +110,7 @@ export async function main(mission, input, ctx) {
   broken (the request would go through but not touch the intended task). This SDK's current
   implementation is correct; the caveat is here so you understand why `taskId` is threaded through
   as `task_id` on the wire even though the client-facing method signature takes it positionally.
-- **`gen`, `addComment`, `requestSupport`** (present in the older `CodeSDK.d.ts` declarations) have
-  **no confirmed real implementation** on the backend and have been removed from this SDK rather
-  than risk shipping a wrong param shape. If you need equivalent behavior, use the generic
-  `call('task.<method>', params)` escape hatch directly and verify the shape against the backend
-  yourself first.
+- **`gen`, `addComment`, `requestSupport`** are confirmed against `TaskSDK.ts` on the backend.
 - `update`'s `data` only accepts `status`/`content` in the typed signature — for any other field the
   real `task.updateTask` handler might accept, use `call('task.updateTask', { task_id, ...data })`
   directly.

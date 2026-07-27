@@ -19,6 +19,7 @@ import { causality } from '@aivin-labs/sdk';
 | --- | --- | --- | --- |
 | `think` | `query: string`, `opts?: Record<string, any>` | `Promise<any>` | Runs a deep causal-reasoning pass over accumulated context to answer `query`. Maps to `think.deep`, with `opts` **spread directly** into the call params alongside `query` (i.e. `{ query, ...opts }`), not nested under a sub-key. |
 | `absorb` | `causalities: any[]`, `opts?: Record<string, any>` | `Promise<any>` | Feeds new causal facts (`causalities`) back into the reasoning engine's accumulated context. Maps to `think.absorb`, with `opts` spread directly into the call params (`{ causalities, ...opts }`). |
+| `search` | `query: string`, `opts?: { limit?: number; threshold?: number }` | `Promise<any[]>` | Searches the causality graph directly (no reasoning pass) for entries relevant to `query`. Maps to `think.search`. |
 
 ## `think` example
 
@@ -57,10 +58,10 @@ export async function main(mission, input, ctx) {
   `absorb` spread their `opts` directly into the call params (`this.call('think.deep', { query,
   ...opts })` / `this.call('think.absorb', { causalities, ...opts })`), rather than nesting them
   under a `mission`/`context` sub-key.
-- **There is no separate `think` namespace with `deep`/`search` sub-methods on the real SDK.** That
-  shape was invented from `CodeSDK.d.ts`'s declared-but-unimplemented `think.*` overloads and does
-  not exist on the backend — use `causality.think(...)` (which itself calls the `think.deep`
-  namespace under the hood), not a standalone `think.deep(...)` / `think.search(...)`.
+- **There is no separate `think` namespace exposed on the client** — `causality.think`/`causality.search`
+  call the backend's `think.deep`/`think.search` RPCs under the hood, but the client-side sugar object
+  is named `causality`, not `think`. Use `causality.think(...)`/`causality.search(...)`, not a
+  standalone `think.deep(...)`/`think.search(...)`.
 - Both `opts` and the individual entries of `causalities` are typed as `any`/`Record<string, any>`
   in `SDKClient.ts` — there is no fixed schema confirmed for either; shape what you pass based on
   what your reasoning use case needs and verify against actual responses.

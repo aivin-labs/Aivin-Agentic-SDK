@@ -23,6 +23,7 @@ import { workspace } from '@aivin-labs/sdk';
 | `getMembers` | _(none)_ | `Promise<string[]>` | Member list for the current workspace (resolved server-side from the caller's identity). |
 | `checkPermission` | `params: { workspace_id?: string; user_id?: string; permission: string }` | `Promise<boolean>` | Checks whether a member has a given permission. |
 | `getPluginConfig` | `params: { plugin_id: string; workspace_id?: string }` | `Promise<any>` | Reads this (or another) plugin's saved per-workspace config. |
+| `updatePlugin` | `params: { plugin_id: string; workspace_id?: string; arguments: Record<string, any> }` | `Promise<any>` | Writes arguments for a plugin already installed in the workspace. Requires the caller to have admin permission (enforced server-side inside the handler). |
 | `searchAgents` | `params: { query: string; limit?: number; threshold?: number }` | `Promise<Agent[]>` | Semantic search for an AI Staff agent by description. Also used internally by `a2a()`/`agent.delegate()` to resolve a non-ID target string. |
 
 `Workspace` shape (from `SDKTypes.ts`):
@@ -108,8 +109,8 @@ export async function main(mission, input, ctx) {
   the confirmed real endpoint to use (`workspace.searchAgents` on the backend).
 - All methods in this namespace map 1:1 to real backend RPCs (`workspace.getWorkspace`,
   `workspace.getWorkspacesByIds`, `workspace.getMembers`, `workspace.checkMemberPermission`,
-  `workspace.getPluginConfig`, `workspace.searchAgents`) — none are flagged as unconfirmed in
-  `SDKClient.ts`.
+  `workspace.getPluginConfig`, `workspace.updateWorkspacePlugin`, `workspace.searchAgents`) — none
+  are flagged as unconfirmed in `SDKClient.ts`.
 - `getMembers()` takes no parameters and always resolves against the *current* invocation's
   workspace — there is no `workspace_id` override for it (unlike `checkPermission`/`getByIds`).
 

@@ -17,10 +17,33 @@ import { resource } from '@aivin-labs/sdk';
 
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
-| `upload(params)` | `params: { file: any; name?: string; mime?: string; is_public?: boolean; temp?: boolean }` | `Promise<any>` | Upload a file blob to storage. |
+| `upload(params)` | `params: { file: string \| { type: 'Buffer'; data: number[] } \| number[]; name?: string; mime?: string; is_public?: boolean; temp?: boolean; workspace_id?: string }` | `Promise<ResourceMeta>` | Upload a file blob to storage. |
 | `remove(params)` | `params: { url: string }` | `Promise<any>` | Remove a previously uploaded blob by its URL. |
 
 Underlying host calls: `resource.uploadFile`, `resource.removeFile`.
+
+Both methods validate `params` locally (zod) before the call goes out — passing a `file` that
+isn't one of the three accepted shapes, or an empty `url` to `remove`, throws immediately with a
+clear `[resource.X] invalid params - ...` message instead of failing obscurely on the host.
+
+`ResourceMeta` shape (from `SDKTypes.ts`, verified against the backend's real `FSIO.ts`):
+
+```typescript
+interface ResourceMeta {
+  id: string;
+  name?: string;
+  size?: number | string;
+  user_id?: string;
+  mime?: string;
+  extension?: string;
+  url: string;
+  is_public?: boolean;
+  temp?: boolean;
+  workspace_id?: string;
+  created_date?: string;
+  expire_at?: string; // set when temp: true
+}
+```
 
 ## `upload` example
 
@@ -29,14 +52,14 @@ import { resource } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const uploaded = await resource.upload({
-    file: input.fileBuffer, // exact accepted shape (Buffer, base64 string, stream, etc.) is host-defined
+    file: input.fileBase64, // a base64 string is the simplest choice - see the type/caveats below
     name: 'export.csv',
     mime: 'text/csv',
     is_public: false,
     temp: false,
   });
 
-  return { status: 'success', data: uploaded };
+  return { status: 'success', data: uploaded }; // uploaded.url is the file's accessible URL
 }
 ```
 
@@ -54,17 +77,23 @@ export async function main(mission, input, ctx) {
 
 ## Notes & caveats
 
-- The exact accepted type for `file` in `upload()` is typed as `any` in `SDKClient.ts` — the
-  concrete shape the host expects (raw `Buffer`, base64-encoded string, a stream, a multipart form
-  part, etc.) is **not confirmed** here; treat it as host-implementation-defined and verify against
-  actual upload behavior before depending on a specific format.
-- `name`, `mime`, `is_public`, and `temp` are all optional. `temp: true` presumably marks the
-  upload for later cleanup/expiry, and `is_public: true` presumably affects URL accessibility, but
-  neither behavior is spelled out beyond the parameter names in `SDKClient.ts` — confirm actual
-  effect if it matters for your plugin's correctness.
-- Both `upload` and `remove` return `Promise<any>` — no typed response shape is available; inspect
-  the object at runtime (it likely includes at least a URL for `upload`, given `remove` takes a
-  `url` to reverse it).
+- `file` accepts exactly three shapes, verified against the backend's real `toBuffer()` normalizer
+  in `ResourceSDK.ts`: a base64-encoded string, a `{type:'Buffer',data:number[]}` object (this is
+  what `JSON.stringify(someBuffer)` itself produces — `Buffer` has a custom `toJSON()`), or a plain
+  `number[]` array of byte values. **A raw `Buffer` instance passed directly will NOT arrive
+  correctly** — the call travels as JSON over gRPC, and a `Buffer` only survives that round-trip in
+  one of the three shapes above (in practice, `JSON.stringify(buffer)` already produces the
+  `{type:'Buffer',...}` shape for you, so `file: someBuffer` often works by accident via that
+  implicit stringification — but pass it explicitly rather than relying on that).
+- `temp: true` **is confirmed** to mark the upload for automatic deletion after a period of time —
+  the returned `ResourceMeta.expire_at` reflects when. `is_public` **is confirmed** to control URL
+  accessibility — default `false` (private); the file is only publicly reachable if you explicitly
+  pass `is_public: true`.
+- `workspace_id` is accepted but undocumented in most call sites — omit it and the backend falls
+  back to `ctx.workspace`; only pass it explicitly if this invocation has no workspace attached.
+- `upload` returns a typed `ResourceMeta` (see above) — `url` is what you pass back into `remove()`.
+  `remove` itself still returns `Promise<any>` — no confirmed response shape, treat the resolved
+  value as advisory (the removal already happened by the time the promise settles).
 - There is no `resource.get`/`resource.list` — this namespace only uploads and removes. For
   workspace document records with listing/search, use `file.*` (`docs/sdk/file.md`) instead.
 

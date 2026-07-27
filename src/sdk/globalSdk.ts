@@ -53,6 +53,7 @@ export const agent = bindNamespace('agent');
 export const browser = bindNamespace('browser');
 export const project = bindNamespace('project');
 export const datastore = bindNamespace('datastore');
+export const code = bindNamespace('code');
 export const task = bindNamespace('task');
 export const message = bindNamespace('message');
 export const notification = bindNamespace('notification');

@@ -33,6 +33,14 @@ import { datastore } from '@aivin-labs/sdk';
 | `smartQuery` | `query: string` | `Promise<any>` | Natural-language query over datastore tables (AI-resolved). |
 | `batchUpdateByAI` | `instruction: string` | `Promise<any>` | Natural-language batch update instruction (AI-resolved). |
 | `searchSemantic` | `params: { query: string; table_id?: string; limit?: number }` | `Promise<any[]>` | Semantic search over row content. |
+| `rollback` | `snapshotId: string` | `Promise<any>` | Restores data from a `snapshot_id` returned by `deduplicateTable`/`batchDeleteRows`/`batchUpdateByAI`. |
+| `getAllTables` | `params?: { workspace_id?: string; project_id?: string }` | `Promise<any[]>` | Lists every table across a workspace (broader than `getTables`, which is project-scoped). |
+| `getTableStats` | `params: { table_id: string; workspace_id?: string; project_id?: string }` | `Promise<any>` | Row count / column / size stats for one table. |
+| `countRows` | `params: { table_id: string; workspace_id?: string; project_id?: string }` | `Promise<number>` | Row count for a table (cheaper than `getTableStats` if that's all you need). |
+| `exportTable` | `params: { table_id: string; workspace_id?: string; project_id?: string }` | `Promise<any>` | Exports a table's full contents. |
+| `deduplicateTable` | `params: { table_id: string; workspace_id?: string; project_id?: string; strategy?: any }` | `Promise<any>` | Removes duplicate rows per `strategy`; returns a `snapshot_id` usable with `rollback`. |
+| `backfillColumn` | `params: { table_id: string; workspace_id?: string; project_id?: string; column_key: string; default_value?: any }` | `Promise<any>` | Fills a missing/new column with `default_value` across existing rows; returns a `snapshot_id` usable with `rollback`. |
+| `formatRowsForContext` | `params: { table_id: string; workspace_id?: string; project_id?: string; query?: string; token_budget?: number }` | `Promise<string>` | Formats matching rows into an LLM-context-ready string, bounded by `token_budget`. |
 
 ## `ensureTable` / `createTable` example
 
@@ -201,6 +209,10 @@ export async function main(mission, input, ctx) {
 - `smartQuery` and `batchUpdateByAI` are AI-resolved natural-language operations — their exact
   interpretation and error behavior on ambiguous instructions are not specified in the client;
   treat their results as best-effort.
+- `rollback`, `getAllTables`, `getTableStats`, `countRows`, `exportTable`, `deduplicateTable`,
+  `backfillColumn`, `formatRowsForContext` were previously only reachable via the HTTP/UI route, not
+  through the SDK — `deduplicateTable`/`batchDeleteRows`/`batchUpdateByAI` return a `snapshot_id` you
+  can now pass to `rollback` to undo them.
 
 ## See also
 

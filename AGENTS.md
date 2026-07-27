@@ -15,7 +15,12 @@ has its own `AGENTS.md` already; this one is for people/agents working on the SD
 - `docs/` - the real reference. `docs/SDK.md` + `docs/sdk/*.md` (one file per namespace) is the
   full SDK surface; `docs/MANIFEST.md` is `manifest.json`'s field reference; `docs/CLI.md` is
   every CLI command; `docs/AI-Plugin-Guide.md` is the condensed cheat sheet for an AI generating a
-  plugin quickly.
+  plugin quickly; `docs/CONTEXT.md` documents the `ctx` handler argument; `docs/DATA_STRUCTURES.md`
+  covers the exported types mirroring the backend's real data models; `docs/EXAMPLES.md` is real
+  plugins across common use cases; `docs/PLUGIN_DEVELOPMENT_GUIDE.md` is the end-to-end empty-folder-
+  to-deployed walkthrough; `docs/SINGLE_METHOD_PLUGINS.md` covers the handler pattern;
+  `docs/ARCHITECTURE.md` is internals documentation for people working on the SDK itself;
+  `docs/CONTRIBUTING.md` and `docs/CHANGELOG.md` are project-facing, not SDK-usage reference.
 - `test/` - `node:test`, run via `npm test`. No mocking framework - fakes are passed in directly
   (see `SDKClientOptions.invoke`/`invokeStream` and `GrpcInvoker.emitTraceForTest`).
 

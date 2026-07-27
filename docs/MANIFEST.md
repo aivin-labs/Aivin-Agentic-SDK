@@ -59,7 +59,7 @@ still accepted everywhere for existing plugins, and remains the shape of codeles
 | `circuit_breaker`            | `object`                                                       | —         | Per-plugin override of the default circuit breaker: `fail_threshold` (default `3`), `window_sec` (default `300`), `cooldown_sec` (default `60`).                                                                                 |
 | `expose`                     | `string[]`                                                     | —         | Field paths from this plugin's data exposed externally (dynamic API / selection context).                                                                                                                                        |
 | `stacks`                     | `string[]`                                                     | —         | Dedicated service containers (`"REDIS_CACHE"`, `"MONGODB"`, `"BACKGROUND_JOBS"`, `"REALTIME_COMMUNICATION"`) provisioned alongside this plugin's container instead of shared, host-mediated storage. Only relevant outside shared-infrastructure deployments — omit for the normal case. |
-| `trigger_type`               | `TriggerType[]`                                                | —         | Restricts which channels can invoke this plugin: `manual`, `schedule`, `event`, `webhook`, `api`, `chat`. **Omit it entirely to allow all channels** — this is the normal default, not something you need to fill in explicitly. See [Trigger Types](#trigger-types) for which channels actually enforce the restriction. |
+| `trigger_type`               | `TriggerType[]`                                                | —         | Restricts which channels can invoke this plugin: `manual`, `schedule`, `event`, `webhook`, `api`, `chat`, `widget`. **Omit it entirely to allow all channels** — this is the normal default, not something you need to fill in explicitly. See [Trigger Types](#trigger-types) for which channels actually enforce the restriction. |
 | `initial`                    | `object`                                                       | —         | Default config values.                                                                                                                                                                                                           |
 | `scope`                      | `string[]`                                                     | —         | Business domains this plugin applies to (ranking signal), e.g. `["finance", "sales"]`.                                                                                                                                           |
 | `category`                   | `string`                                                       | —         | Single primary domain for display/classification.                                                                                                                                                                                |
@@ -275,6 +275,7 @@ export async function main(
 | `webhook`  | External HTTP request.                                | **Enforced.** If `trigger_type` is declared and does not include `webhook`, webhook endpoints respond `403`.     |
 | `api`      | Direct programmatic call.                             | **Enforced (allow-list).** Dynamic API endpoints are only registered when `api` is declared.                     |
 | `chat`     | Invoked from a chat/agent conversation.               | Advisory — declaring other triggers does not hide the plugin from chat selection; use `selection_rules` to steer discovery instead. |
+| `widget`   | Invoked from an embedded public widget session.       | **Enforced — but the reverse of "default-allow when omitted".** A plugin declaring `widget` is hidden from every **non**-widget session (chat, automation, etc.), no matter what else is in `trigger_type` — it becomes widget-only. Plugins that *omit* `widget` are unaffected either way (visible in both widget and non-widget sessions, subject to the other rules). |
 
 How the host reads `trigger_type`:
 
@@ -282,6 +283,9 @@ How the host reads `trigger_type`:
   the normal case; only declare `trigger_type` when you deliberately want to restrict channels.
 - Once declared, the list is **restrictive for the enforced channels**: a plugin declared as
   `["manual"]` cannot be fired via webhook, and gets no dynamic API endpoints.
+- `widget` is a one-way gate, not a symmetric allow-list entry: *presence* hides the plugin from
+  non-widget sessions; *absence* has no effect on widget-session visibility either way. Only add it
+  to a plugin genuinely meant to run exclusively inside an embedded widget.
 - Webhook invocations additionally require an API key whose scopes include `webhook` (keys created
   with the default `full_access` scope pass automatically; narrowly-scoped keys such as
   workspace-scoped MCP keys do not).

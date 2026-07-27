@@ -21,6 +21,10 @@ import { ai } from '@aivin-labs/sdk';
 | `getEmbedding` | `text: string \| string[]`, `opts?: LLMPromptOptions` | `Promise<Float32Array \| Float32Array[]>` | Single embedding call. Pass a string for one vector back, or a string array for an array of vectors back (shape of return mirrors shape of input). |
 | `getEmbeddings` | `texts: string[]`, `opts?: LLMPromptOptions` | `Promise<Float32Array[]>` | Batch embeddings — faster than looping `getEmbedding` per string. **`texts` is a bare array, not wrapped in an object** — this differs from `CodeSDK.d.ts`'s declared `getEmbeddings({texts, opts})` shape, which does not match the real backend. |
 | `rerank` | `query: string`, `docs: string[]`, `opts?: any` | `Promise<{ index: number; score: number }[]>` | Re-ranks `docs` by relevance to `query`. Returns one `{index, score}` entry per input doc, `index` referring back into the original `docs` array — **not** the reranked documents themselves. `opts` is accepted by the SDK signature but **currently ignored by the host** — the backend handler calls its reranker with `(query, docs)` only, so options like `top_k` have no effect today. |
+| `tts` | `text: string`, `opts?: Record<string, any>` | `Promise<any>` | Text-to-speech. Maps to `ai.tts` on the host. |
+| `stt` | `audio: any`, `opts?: Record<string, any>` | `Promise<any>` | Speech-to-text. Maps to `ai.stt` on the host. |
+| `getModels` | `provider?: string` | `Promise<any>` | Lists available models, optionally filtered by `provider`. Maps to `ai.getModels`. |
+| `calculateTokens` | `data: Record<string, any>` | `Promise<any>` | Estimates token usage for a given prompt/payload without making a real LLM call. Maps to `ai.calculateTokens`. |
 
 `LLMPromptOptions` (from `src/types/SDKTypes.ts`), applies to `prompt`, `getEmbedding`, and
 `getEmbeddings`:
@@ -142,10 +146,8 @@ export async function main(mission, input, ctx) {
   places: it declares `getEmbeddings({texts, opts})` (object-wrapped) when the real code takes
   `getEmbeddings(texts, opts)` (bare array first arg), and it declares `rerank(query, docs, ...opts)`
   (spread) when the real code nests rerank options under a single `opts` object.
-- `tts`, `stt`, `getModels`, and `calculateTokens` are **not** present on the `ai` sugar object, but
-  they **are registered on the host** — call them via the generic escape hatch with these verified
-  param shapes: `call('ai.tts', { text, opts })`, `call('ai.stt', { audio, opts })`,
-  `call('ai.getModels', { provider })`, `call('ai.calculateTokens', { data })`.
+- `tts`/`stt`/`getModels`/`calculateTokens` are confirmed against `AISDK.ts`'s `register(...)` calls
+  on the backend — exact return shapes are otherwise untyped (`Promise<any>`).
 - `rerank`'s `opts` is accepted client-side but **dropped server-side** (see the method table) — do
   not rely on any field in it; post-process the returned `{index, score}` list yourself instead.
 

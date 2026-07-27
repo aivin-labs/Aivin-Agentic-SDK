@@ -17,10 +17,12 @@ import { attachment } from '@aivin-labs/sdk';
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
 | `search` | `params: { query: string; limit?: number }` | `Promise<any[]>` | Calls `attachment.search`. Quick search over attachments matching `query`, capped at `limit`. Return shape is an untyped array — no confirmed per-item fields. |
+| `upload` | `params: { file: { url: string; name: string; mimeType: string; size: number } }` | `Promise<{ url: string; docId: string }>` | Calls `attachment.upload`. Registers an already-uploaded file (physical upload happens separately, e.g. via `resource.upload`) as a session attachment and kicks off extraction — the returned `docId` is what every other method in this namespace keys on. |
 | `deepResearch` | `params: { mission: string; docIds?: string[]; maxRounds?: number }` | `Promise<{ answer: string; citations: { doc_id: string; filename?: string }[]; rounds: number }>` | Calls `attachment.deepResearch`. Multi-round research over one or more documents toward answering `mission`, optionally scoped to specific `docIds` and capped at `maxRounds` rounds. |
 | `evaluate` | `params: { criteria: string; docIds?: string[] }` | `Promise<{ summary: string; findings: { aspect: string; assessment: string; severity?: string }[]; doc_ids_used: string[] }>` | Calls `attachment.evaluate`. Evaluates document(s) against a free-text `criteria` string, returning a summary plus a breakdown of per-aspect findings. |
 | `queryTabularData` | `params: { docId: string; question: string }` | `Promise<{ answer: string; tables_used: number }>` | Calls `attachment.queryTabularData`. Natural-language Q&A over tabular data (e.g. spreadsheet) inside a single document identified by `docId`. |
 | `queryMediaTimestamp` | `params: { docId: string; question: string }` | `Promise<{ answer: string }>` | Calls `attachment.queryMediaTimestamp`. Natural-language Q&A over a media attachment (audio/video), presumably answering with timestamp-aware context, identified by `docId`. |
+| `extract` | `params: { docId: string }` | `Promise<{ fileName: string; chunks: { content: string; chunk_index?: number; source?: string }[] }>` | Calls `attachment.extract`. Returns the **raw extracted chunks** of an already-uploaded attachment — no AI summarization/Q&A, just the text the extract-engine already produced during `upload`. Use this when you need the raw content to process yourself instead of asking a question about it. |
 
 ## `search` example
 
@@ -102,6 +104,22 @@ export async function main(mission, input, ctx) {
   return { status: 'success', data: result };
 }
 ```
+
+## `extract` example
+
+```typescript
+import { attachment } from '@aivin-labs/sdk';
+
+export async function main(mission, input, ctx) {
+  const { fileName, chunks } = await attachment.extract({ docId: input.docId });
+  const fullText = chunks.map((c) => c.content).join('\n');
+  return { status: 'success', data: { fileName, length: fullText.length } };
+}
+```
+
+`extract` reads back chunks already produced during `upload` — it does **not** re-run extraction
+against a fresh file, so it only works for `docId`s that came from a prior `attachment.upload` call
+(or any other doc already attached to the current session).
 
 ## Notes & caveats
 

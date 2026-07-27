@@ -300,6 +300,9 @@ export const TriggerType = {
   WEBHOOK: 'webhook',
   API: 'api',
   CHAT: 'chat',
+  /** Only visible to widget sessions - see `filterSelectablePlugins` on the backend, which hides
+   *  any plugin declaring this trigger from every non-widget session. */
+  WIDGET: 'widget',
 } as const;
 
 export type TriggerType = (typeof TriggerType)[keyof typeof TriggerType];

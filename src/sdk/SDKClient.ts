@@ -1,10 +1,23 @@
 import { invokeHost, invokeHostStream, type InvokeRequest, type StreamHandle } from '../grpc/GrpcInvoker';
+import {
+  createJobParamsSchema,
+  deleteJobParamsSchema,
+  executeByIdParamSchema,
+  getJobsParamsSchema,
+  removeParamsSchema,
+  updateJobParamsSchema,
+  uploadParamsSchema,
+  validateParams,
+} from './validation';
 import type {
   Agent,
+  AgentReplyOptions,
+  AutomationJob,
   ConnectionInfo,
   LLMPromptOptions,
   MessageSession,
   PluginContext,
+  ResourceMeta,
   Task,
   User,
   Workspace,
@@ -163,6 +176,11 @@ export class SDKClient {
     return this.call('user.getUser', { user_id: id });
   }
 
+  /** Redis-cached variant of `user()` - use for high-traffic channels (e.g. widget connect/send). */
+  getCachedUser(id: string): Promise<User> {
+    return this.call('user.getCachedUser', { user_id: id });
+  }
+
   // Streaming drivers are only meaningful inside the host process (LITE/WASM/in-process runtimes);
   // Docker-runtime plugins observe progress via `realtime.publish` instead. Kept for CodeSDK.d.ts
   // shape parity but intentionally unimplemented here - throws so callers fail loudly, not silently.
@@ -191,8 +209,7 @@ export class SDKClient {
    * `CodeSDK.d.ts` (which diverges from the actual implementation in several places - e.g. it
    * declares `getEmbeddings({texts, opts})` and `rerank({query, docs, ...opts})`, but the real
    * code takes `getEmbeddings(texts, opts)` and nests rerank's options under `opts`).
-   * `tts`/`stt`/`getModels`/`calculateTokens` are NOT present on the real `ai` object - use
-   * `call('ai.tts', ...)` etc. directly if you need them; their exact param shape is unconfirmed.
+   * `tts`/`stt`/`getModels`/`calculateTokens` confirmed against `AISDK.ts`'s `register(...)` calls.
    */
   readonly ai = {
     prompt: (quest: string | any[], opts?: LLMPromptOptions): Promise<any> =>
@@ -229,19 +246,28 @@ export class SDKClient {
       docs: string[],
       opts?: any,
     ): Promise<{ index: number; score: number }[]> => this.call('ai.rerank', { query, docs, opts }),
+    tts: (text: string, opts?: Record<string, any>): Promise<any> =>
+      this.call('ai.tts', { text, opts }),
+    stt: (audio: any, opts?: Record<string, any>): Promise<any> =>
+      this.call('ai.stt', { audio, opts }),
+    getModels: (provider?: string): Promise<any> => this.call('ai.getModels', { provider }),
+    calculateTokens: (data: Record<string, any>): Promise<any> =>
+      this.call('ai.calculateTokens', { data }),
   };
 
   /**
-   * Only `search` is confirmed against the real `get knowledge()` in `src/base/SDK.ts`.
-   * `store`/`get`/`del`/`reinforce` (from CodeSDK.d.ts) have no confirmed real implementation -
-   * removed rather than risk a wrong param shape; use `call('knowledge.storeKnowledge', ...)` etc.
-   * directly if you need them.
+   * `search`/`reinforce` confirmed against `BrainSDK.ts`'s `registerKnowledgeHandlers()`.
+   * `get`/`del` (from CodeSDK.d.ts) have no confirmed real implementation - use
+   * `call('knowledge.batchGetKnowledge'|'knowledge.batchDeleteKnowledge', ...)` directly if needed.
    */
   readonly knowledge = {
     search: (
       query: string,
       opts?: { workspace_id?: string; limit?: number; threshold?: number },
     ): Promise<any[]> => this.call('knowledge.searchKnowledge', { query, ...opts }),
+    store: (knowledge: any, scope?: Record<string, any>): Promise<any> =>
+      this.call('knowledge.storeKnowledge', { knowledge, scope }),
+    reinforce: (ids: string[]): Promise<any> => this.call('knowledge.reinforceKnowledge', { ids }),
   };
 
   readonly vector = {
@@ -279,11 +305,18 @@ export class SDKClient {
       this.call('think.deep', { query, ...opts }),
     absorb: (causalities: any[], opts?: Record<string, any>): Promise<any> =>
       this.call('think.absorb', { causalities, ...opts }),
+    search: (
+      query: string,
+      opts?: { limit?: number; threshold?: number },
+    ): Promise<any[]> => this.call('think.search', { query, ...opts }),
   };
 
   readonly attachment = {
     search: (params: { query: string; limit?: number }): Promise<any[]> =>
       this.call('attachment.search', params),
+    upload: (params: {
+      file: { url: string; name: string; mimeType: string; size: number };
+    }): Promise<{ url: string; docId: string }> => this.call('attachment.upload', params),
     deepResearch: (params: {
       mission: string;
       docIds?: string[];
@@ -310,6 +343,12 @@ export class SDKClient {
       docId: string;
       question: string;
     }): Promise<{ answer: string }> => this.call('attachment.queryMediaTimestamp', params),
+    extract: (params: {
+      docId: string;
+    }): Promise<{
+      fileName: string;
+      chunks: { content: string; chunk_index?: number; source?: string }[];
+    }> => this.call('attachment.extract', params),
   };
 
   readonly workspace = {
@@ -324,6 +363,11 @@ export class SDKClient {
     }): Promise<boolean> => this.call('workspace.checkMemberPermission', params),
     getPluginConfig: (params: { plugin_id: string; workspace_id?: string }): Promise<any> =>
       this.call('workspace.getPluginConfig', params),
+    updatePlugin: (params: {
+      plugin_id: string;
+      workspace_id?: string;
+      arguments: Record<string, any>;
+    }): Promise<any> => this.call('workspace.updateWorkspacePlugin', params),
     searchAgents: (params: {
       query: string;
       limit?: number;
@@ -345,9 +389,71 @@ export class SDKClient {
       this.call('agent.cancelResponse', { session_id: sessionId, thread_id: threadId }),
     delegate: (target: string, data: Record<string, unknown>, purpose: string): Promise<any> =>
       this.a2a(target, data, purpose),
+    /**
+     * Prompt the LLM and stream the result straight into the current chat bubble - same signature
+     * as `ai.prompt`, but resolves to a real, persisted chat message (buffered/flushed and saved by
+     * the host's message pipeline) instead of a bare string. Falls back to a plain, non-streamed
+     * `ai.prompt` call when this invocation has no live chat session (automation/webhook/API
+     * context) - always safe to call regardless of channel, no need to branch on `ctx` yourself.
+     *
+     * Deliberately lives on `agent`, not `ai`: `ai.prompt`/`ai.promptStream` are pure LLM calls with
+     * no notion of chat; this one is tied to the agent/session lifecycle (creates a real message,
+     * persists it, respects the same buffering the platform's own agent replies use).
+     *
+     * `opts.rich_content: true` lets the model render passive components (table/chart/mermaid/
+     * media/cardview/webview) correctly - plain `instructions` text does NOT teach it that syntax.
+     * It will NOT render working selection/form/action components - those need `agent.hil()`'s
+     * suspend+routing plumbing to actually receive a click/response back. Never use `agent.reply`
+     * (or `agent.tell`) to build anything the user needs to respond to; use `agent.hil()`/`ask()`.
+     */
+    reply: (quest: string | any[], opts?: AgentReplyOptions): Promise<any> =>
+      this.call('agent.reply', { quest, opts }),
+    /**
+     * Push a string you already have straight into the chat bubble, animated with a word-by-word
+     * typing effect, and persisted like any other message - no LLM call involved at all. Use this
+     * when the text didn't come from `ai.prompt`/`agent.reply` (composed locally, fetched from
+     * elsewhere, the output of your own external call) but should still appear as a real chat turn.
+     * Resolves to `{ success: false }` (not an error) when there's no live chat session to stream
+     * into, same graceful-degrade philosophy as `agent.reply` and `realtime.publish`.
+     *
+     * This is raw text passthrough - it does NOT know about rich components at all (no
+     * `rich_content` option, unlike `agent.reply`). Do not hand-write rich-component markup into
+     * `text` expecting it to work, especially selection/form/action: those need `agent.hil()`'s
+     * suspend+routing plumbing underneath to receive a response, which `tell` never sets up. A
+     * hand-rolled button here would render but silently do nothing when clicked.
+     */
+    tell: (text: string): Promise<{ success: boolean }> => this.call('agent.tell', { text }),
+    /** Run a full message-processing pass through the agent (NLU -> agentic/action/assistant routing). */
+    processMessage: (
+      message: Record<string, any>,
+      storageContext?: Record<string, any>,
+    ): Promise<any> => this.call('agent.processMessage', { message, storageContext }),
+    /** Resolve a PAUSED human-in-the-loop checkpoint (e.g. a visitor's selection/form reply) to resume a workflow. */
+    resolveHil: (params: {
+      session_id: string;
+      reply_id: string;
+      payload?: any;
+    }): Promise<{ success: boolean; reply_id: string; error?: string }> =>
+      this.call('agent.resolveHil', params),
   };
 
   readonly browser = {
+    /**
+     * Runs a full, multi-step, self-correcting AI Browser mission. Slow/heavy compared to any other
+     * namespace here - an agentic loop that can take many actions before returning, not a simple
+     * request/response fetch.
+     *
+     * The resolved result carries `data.session_id` (server's tenant client id) whether the mission
+     * succeeds, fails, or is cancelled. `browser.cancel()` always targets the calling tenant's own
+     * running mission - `session_id` is accepted only as a self-check (it must match the caller's own
+     * tenant or the call is rejected), NOT a way to cancel another tenant's mission.
+     *
+     * HIL (human-in-the-loop) is NOT supported through this call: it goes straight to
+     * `AIBrowserService.triggerMission` on the backend, bypassing the suspend/resume plumbing that
+     * chat/agent triggers use. If the mission hits a step that needs user confirmation, the promise
+     * resolves with `{ status: 'waiting', message: '...' }` instead of actually suspending - it does
+     * NOT wait for a human. Route missions that may need HIL through chat/agent triggers instead.
+     */
     run: (
       mission: string,
       opts?: {
@@ -358,6 +464,17 @@ export class SDKClient {
         [key: string]: any;
       },
     ): Promise<any> => this.call('browser.run', { mission, data: opts }),
+
+    /**
+     * Requests cancellation of a running AI Browser mission. Cooperative only: the backend checks
+     * for this between agentic-loop steps (each step is an LLM call plus a browser action), so it
+     * cannot interrupt a step already in flight - expect roughly one step's worth of delay before the
+     * mission actually stops. Always cancels the CALLING tenant's own running mission - `sessionId`
+     * is optional and only checked against that tenant (mismatches are rejected); it cannot be used
+     * to cancel a different tenant's mission.
+     */
+    cancel: (sessionId?: string): Promise<{ success: boolean; session_id: string }> =>
+      this.call('browser.cancel', sessionId ? { session_id: sessionId } : {}),
   };
 
   readonly project = {
@@ -445,13 +562,44 @@ export class SDKClient {
       table_id?: string;
       limit?: number;
     }): Promise<any[]> => this.call('datastore.searchSemantic', params),
+    /** Restore data from a `snapshot_id` returned by `deduplicateTable`/`batchDeleteRows`/`batchUpdateByAI`. */
+    rollback: (snapshotId: string): Promise<any> =>
+      this.call('datastore.rollback', { snapshot_id: snapshotId }),
+    getAllTables: (params?: { workspace_id?: string; project_id?: string }): Promise<any[]> =>
+      this.call('datastore.getAllTables', params),
+    getTableStats: (params: { table_id: string; workspace_id?: string; project_id?: string }): Promise<any> =>
+      this.call('datastore.getTableStats', params),
+    countRows: (params: { table_id: string; workspace_id?: string; project_id?: string }): Promise<number> =>
+      this.call('datastore.countRows', params),
+    exportTable: (params: { table_id: string; workspace_id?: string; project_id?: string }): Promise<any> =>
+      this.call('datastore.exportTable', params),
+    deduplicateTable: (params: {
+      table_id: string;
+      workspace_id?: string;
+      project_id?: string;
+      strategy?: any;
+    }): Promise<any> => this.call('datastore.deduplicateTable', params),
+    backfillColumn: (params: {
+      table_id: string;
+      workspace_id?: string;
+      project_id?: string;
+      column_key: string;
+      default_value?: any;
+    }): Promise<any> => this.call('datastore.backfillColumn', params),
+    formatRowsForContext: (params: {
+      table_id: string;
+      workspace_id?: string;
+      project_id?: string;
+      query?: string;
+      token_budget?: number;
+    }): Promise<string> => this.call('datastore.formatRowsForContext', params),
   };
 
   /**
    * `update`/`getById`/`delete` fixed to send `task_id` (matching `src/base/SDK.ts`'s real
    * `get task()`) - they previously sent `id`, which the real `task.updateTask`/`getTaskById`/
    * `deleteTask` handlers don't read, so those calls were silently broken. `gen`/`addComment`/
-   * `requestSupport` (from CodeSDK.d.ts) have no confirmed real implementation - removed.
+   * `requestSupport` confirmed against `TaskSDK.ts`.
    */
   readonly task = {
     create: (params: {
@@ -473,6 +621,16 @@ export class SDKClient {
     delete: (taskId: string): Promise<any> => this.call('task.deleteTask', { task_id: taskId }),
     listMine: (params?: { status?: string; limit?: number; [key: string]: any }): Promise<Task[]> =>
       this.call('task.listMyTasks', params),
+    gen: (params: { prompt?: string; title?: string; workspace_id?: string; task_id?: string }): Promise<Task> =>
+      this.call('task.genTask', params),
+    addComment: (params: { task_id: string; content: string }): Promise<any> =>
+      this.call('task.addTaskComment', params),
+    requestSupport: (params: {
+      task_id: string;
+      assist_user_id: string;
+      message: string;
+    }): Promise<{ success: boolean; task_id: string; assist_user_id: string }> =>
+      this.call('task.requestTaskSupport', params),
   };
 
   readonly message = {
@@ -496,6 +654,15 @@ export class SDKClient {
     }): Promise<any[]> => this.call('message.searchMessages', params),
     update: (params: { message_id: string; [key: string]: any }): Promise<any> =>
       this.call('message.updateMessage', params),
+    init: (params: { session_id?: string; [key: string]: any }): Promise<any> =>
+      this.call('message.initMessage', params),
+    stream: (params: {
+      session_id?: string;
+      thread_id?: string;
+      role?: 'user' | 'assistant' | 'system';
+      text: string;
+      [key: string]: any;
+    }): Promise<any> => this.call('message.streamResponse', params),
   };
 
   /**
@@ -544,31 +711,105 @@ export class SDKClient {
       this.call('usage.getUsage', params),
   };
 
+  /**
+   * Verified against the real `JobRequest`/`JobListRequest`/`JobResponse` in the backend's
+   * `AutomationDTO.ts` (via `AutomationSDK.ts`'s PluginBridge handlers) - a previous pass of this
+   * SDK had guessed at `{ name, schedule, logic }`, none of which are real field names on the
+   * backend (the real fields are `mission`/`schedule_condition`; there is no `logic` field at all -
+   * a job's executable content is `prompt`/`workflow`, not a code string).
+   *
+   * Every method here validates `params` against a zod schema (`validation.ts`) BEFORE the call
+   * goes out - this is the namespace where a shape mistake previously shipped silently (a wrong
+   * field name doesn't error, it just gets ignored, so the job schedule/mission ends up wrong with
+   * no signal at the call site). A caught mistake here throws immediately with a clear message
+   * instead of round-tripping to the host to fail later or not at all.
+   */
   readonly automation = {
-    createJob: (params: { name: string; schedule?: string; logic: string }): Promise<any> =>
-      this.call('automation.createJob', params),
+    createJob: (params: {
+      /** Short display name for the job - the real field the backend reads (not `name`). */
+      mission: string;
+      /** Full original request - source of truth for schedule inference/workflow generation when
+       *  set; falls back to `mission` if omitted. */
+      prompt?: string;
+      /** Required on this call path - unlike most other namespaces, NOT auto-filled from `ctx`. */
+      agent_id: string;
+      /** Optional here only because the backend falls back to `ctx.workspace`/`ctx.session` when
+       *  omitted - explicit is safer if this invocation might not have either attached. */
+      workspace_id?: string;
+      project_id?: string;
+      /** Natural-language schedule (e.g. "every 5 minutes", "daily at 9am") - NOT a raw cron
+       *  string; the backend parses this itself. Omit entirely for a manually-triggered job. */
+      schedule_condition?: string;
+      workflow?: any;
+      plugin_id?: string;
+      fresh_execution?: boolean;
+    }): Promise<AutomationJob> =>
+      this.call('automation.createJob', validateParams(createJobParamsSchema, params, 'automation.createJob')),
     updateJob: (params: {
+      /** Job id - `job_id` is also accepted as an alias by the backend. */
       id: string;
-      name?: string;
-      schedule?: string;
-      logic?: string;
+      mission?: string;
+      schedule_condition?: string;
+      workflow?: any;
+      project_id?: string;
+      agent_id?: string;
+      plugin_id?: string;
+      fresh_execution?: boolean;
+      /** Any other key is passed through but NOT read by the backend's recognized-fields list
+       *  (`mission`/`workflow`/`project_id`/`agent_id`/`fresh_execution`/`plugin_id`/
+       *  `schedule_condition`) - silently ignored rather than erroring, so don't rely on it. */
       [key: string]: any;
-    }): Promise<any> => this.call('automation.updateJob', params),
-    getJobs: (params?: { workspace_id?: string; limit?: number }): Promise<any[]> =>
-      this.call('automation.getJobs', params),
-    deleteJob: (params: { id: string }): Promise<any> => this.call('automation.deleteJob', params),
-    executeById: (id: string): Promise<any> => this.call('automation.executeById', { id }),
+    }): Promise<AutomationJob> =>
+      this.call('automation.updateJob', validateParams(updateJobParamsSchema, params, 'automation.updateJob')),
+    getJobs: (params: {
+      /** Required - the backend's permission check needs it even though it's typed optional-looking
+       *  here for callers that always have a workspace in `ctx`. */
+      workspace_id: string;
+      /** `'workspace'` = every job in the workspace (requires workspace-admin permission);
+       *  omitted/`'personal'` = only jobs the caller created. */
+      mode?: 'workspace' | 'personal';
+      search?: string;
+      limit?: number;
+      offset?: number;
+    }): Promise<AutomationJob[]> =>
+      this.call('automation.getJobs', validateParams(getJobsParamsSchema, params, 'automation.getJobs')),
+    deleteJob: (params: { id: string }): Promise<void> =>
+      this.call('automation.deleteJob', validateParams(deleteJobParamsSchema, params, 'automation.deleteJob')),
+    /** Manual out-of-schedule trigger. Only the calling user's own job can be triggered this way -
+     *  rejected with 403 otherwise. */
+    executeById: (id: string): Promise<{ status: string; job_id: string }> =>
+      this.call('automation.executeById', {
+        id: validateParams(executeByIdParamSchema, id, 'automation.executeById'),
+      }),
   };
 
+  /**
+   * `file`'s accepted shapes and the `ResourceMeta` return type verified against the backend's real
+   * `ResourceSDK.ts`/`FSIO.ts` - previously typed `file: any` and `Promise<any>` with no confirmed
+   * shape for either. `upload`'s zod schema is what actually enforces the 3-shapes-only rule on
+   * `file` at the call site (see `validation.ts`) - a 4th shape (e.g. a raw `Buffer`) is rejected
+   * immediately with a clear message instead of failing obscurely on the host.
+   */
   readonly resource = {
     upload: (params: {
-      file: any;
+      /** Base64-encoded string, a `{type:'Buffer',data:number[]}` object (a `Buffer`'s own
+       *  `JSON.stringify` shape), or a plain `number[]` - a raw `Buffer` instance itself does NOT
+       *  survive the gRPC call's JSON round-trip, so send one of these three instead. */
+      file: string | { type: 'Buffer'; data: number[] } | number[];
       name?: string;
       mime?: string;
+      /** Default `false` (private) - only becomes publicly accessible if set `true` explicitly. */
       is_public?: boolean;
+      /** `true` = auto-deleted after a period of time (temp upload cleanup) - see `expire_at` on
+       *  the returned `ResourceMeta`. */
       temp?: boolean;
-    }): Promise<any> => this.call('resource.uploadFile', params),
-    remove: (params: { url: string }): Promise<any> => this.call('resource.removeFile', params),
+      /** Falls back to `ctx.workspace` if omitted - only needed when this invocation has no
+       *  workspace attached. */
+      workspace_id?: string;
+    }): Promise<ResourceMeta> =>
+      this.call('resource.uploadFile', validateParams(uploadParamsSchema, params, 'resource.upload')),
+    remove: (params: { url: string }): Promise<any> =>
+      this.call('resource.removeFile', validateParams(removeParamsSchema, params, 'resource.remove')),
   };
 
   readonly session = {
@@ -595,6 +836,17 @@ export class SDKClient {
       session_id: string;
       status: 'idle' | 'processing' | 'completed';
     }): Promise<any> => this.call('session.updateSessionStatus', params),
+    updateAgent: (params: { session_id: string; agent_id: string; info?: any }): Promise<any> =>
+      this.call('session.updateSessionAgent', params),
+  };
+
+  readonly code = {
+    /** Executes arbitrary "business logic" (AI-generated/cached code) with sandboxed args. */
+    executeLogic: (params: {
+      logic: string;
+      args?: any;
+      input_schema?: Record<string, string>;
+    }): Promise<any> => this.call('code.executeLogic', params),
   };
 
   readonly file = {

@@ -183,3 +183,145 @@ test('ai.promptStream() text resolves even when textStream is never iterated', a
   const result = client.ai.promptStream('say hello');
   assert.equal(await result.text, 'ignored chunks');
 });
+
+test('browser.run() calls browser.run with mission and opts nested under data', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { product_name: 'flagship laptop', price_usd: 999 };
+  });
+
+  const opts = {
+    start_url: 'https://example-vendor.com/laptops',
+    success_criteria: ['A specific price in USD has been found'],
+    output_schema: { type: 'object', properties: { price_usd: { type: 'number' } } },
+  };
+  const result = await client.browser.run('Find the flagship laptop price', opts);
+
+  assert.deepEqual(result, { product_name: 'flagship laptop', price_usd: 999 });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].namespace, 'browser.run');
+  assert.deepEqual(requests[0].params, {
+    mission: 'Find the flagship laptop price',
+    data: opts,
+  });
+  assert.equal((requests[0].context as any).metadata._cap, 'cap-token');
+});
+
+test('browser.run() works with no opts (data is undefined)', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return 'ok';
+  });
+
+  await client.browser.run('Just check the homepage loads');
+
+  assert.equal(requests[0].namespace, 'browser.run');
+  assert.deepEqual(requests[0].params, { mission: 'Just check the homepage loads', data: undefined });
+});
+
+test('browser.cancel() with no sessionId sends an empty params object', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { success: true, session_id: 'tenant-a' };
+  });
+
+  const result = await client.browser.cancel();
+
+  assert.deepEqual(result, { success: true, session_id: 'tenant-a' });
+  assert.equal(requests[0].namespace, 'browser.cancel');
+  assert.deepEqual(requests[0].params, {});
+});
+
+test('browser.cancel(sessionId) forwards session_id to target a specific mission', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { success: true, session_id: 'tenant-b' };
+  });
+
+  await client.browser.cancel('tenant-b');
+
+  assert.equal(requests[0].namespace, 'browser.cancel');
+  assert.deepEqual(requests[0].params, { session_id: 'tenant-b' });
+});
+
+// Regression coverage for the real bug fixed alongside adding zod validation: a previous version
+// of this SDK typed automation.createJob's params as { name, schedule, logic } - none of which are
+// real backend field names - and nothing caught it client-side. These tests prove the *old*, wrong
+// shape is now rejected locally (never reaches the network), and the *real* shape still works.
+test('automation.createJob() rejects the old, wrong { name, schedule, logic } shape locally', async () => {
+  let called = false;
+  const client = makeClient(async () => {
+    called = true;
+    return {};
+  });
+
+  await assert.rejects(
+    async () => {
+      await (client.automation.createJob as any)({
+        name: 'Weekly digest',
+        schedule: '0 9 * * MON',
+        logic: '{}',
+      });
+    },
+    /automation\.createJob.*agent_id/s,
+  );
+  assert.equal(called, false, 'the network call must never fire when validation fails');
+});
+
+test('automation.createJob() accepts the real { mission, agent_id, ... } shape and forwards it as-is', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { id: 'job1', mission: 'Weekly digest', status: 'pending' };
+  });
+
+  await client.automation.createJob({
+    mission: 'Weekly digest',
+    agent_id: 'agent1',
+    schedule_condition: 'every Monday at 9am',
+  });
+
+  assert.equal(requests[0].namespace, 'automation.createJob');
+  assert.deepEqual(requests[0].params, {
+    mission: 'Weekly digest',
+    agent_id: 'agent1',
+    schedule_condition: 'every Monday at 9am',
+  });
+});
+
+test('automation.getJobs() rejects a missing workspace_id locally', async () => {
+  const client = makeClient(async () => []);
+  await assert.rejects(
+    async () => {
+      await (client.automation.getJobs as any)({ limit: 20 });
+    },
+    /automation\.getJobs.*workspace_id/s,
+  );
+});
+
+test('resource.upload() rejects a raw object that is not one of the three accepted `file` shapes', async () => {
+  const client = makeClient(async () => ({}));
+  await assert.rejects(
+    async () => {
+      await (client.resource.upload as any)({ file: { notAValidShape: true } });
+    },
+    /resource\.upload/,
+  );
+});
+
+test('resource.upload() accepts a base64 string file and forwards params as-is', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { id: 'r1', url: 'https://example.com/r1' };
+  });
+
+  await client.resource.upload({ file: 'aGVsbG8=', name: 'hello.txt' });
+
+  assert.equal(requests[0].namespace, 'resource.uploadFile');
+  assert.deepEqual(requests[0].params, { file: 'aGVsbG8=', name: 'hello.txt' });
+});

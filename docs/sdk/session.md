@@ -39,6 +39,7 @@ interface MessageSession {
 | `newSession` | `params: Record<string, any>` | `Promise<MessageSession>` | Create a new session (distinct host call from `create`, see caveats). |
 | `create` | `params: Record<string, any>` | `Promise<MessageSession>` | Create a new session. |
 | `updateStatus` | `params: { session_id: string; status: 'idle' \| 'processing' \| 'completed' }` | `Promise<any>` | Set a session's processing status. |
+| `updateAgent` | `params: { session_id: string; agent_id: string; info?: any }` | `Promise<any>` | Sets/changes which agent a session is bound to. Only sets the fields actually provided — a raw `update()` call would lose that field-guarding. |
 
 ## `get` example
 
@@ -130,11 +131,16 @@ export async function main(mission, input, ctx) {
 
 ## Notes & caveats
 
-- `newSession` and `create` call two distinct host methods (`session.newSession` and
-  `session.createSession` respectively) — the SDK client does not document or enforce a difference
-  in behavior between them beyond that; if the distinction matters for your use case (e.g. one may
-  be the "resume-or-create" variant used internally by chat UIs), verify against the backend rather
-  than assuming they're interchangeable.
+- **`create` is the higher-level call; `newSession` is the lower-level primitive it's built on** —
+  verified against the backend's real `SessionService`: `createSession()` auto-resolves a default
+  workspace when `workspace_id` is omitted and builds a full session record (agent/provider/model
+  defaults included) before calling `newSession()` internally. `newSession()` itself is **idempotent
+  by `id`**: if you pass an explicit `id` that already has a session, it just touches
+  `last_updated` and returns the existing record (no duplicate, no "create" event) — otherwise it
+  creates one from exactly the fields you gave it, with none of `create`'s auto-resolution.
+  - Prefer `create()` for the normal "start a new conversation" case. Reach for `newSession()`
+    directly when you want deterministic, idempotent session IDs (safe to call repeatedly with the
+    same `id` without creating duplicates) or want to skip the workspace auto-resolution.
   - `ctx.session` (the 3rd `main()` argument's `session` field) gives you the *current* run's
   session directly, typed as `MessageSession` — reach for `session.get(ctx.session.id)` only if you
   need a fresh read rather than the snapshot passed into `main()`.

@@ -1,5 +1,158 @@
 # Changelog
 
+## Unreleased
+
+### 🆕 Added — `agent.reply(quest, opts?)` and `agent.tell(text)`
+
+New chat-streaming primitives on `agent`, not `ai`: previously the only way to stream text into the
+current chat as a real, persisted message was internal to the platform's own agent orchestration
+code (`AIEngine.prompt(quest, opts, { ctx, listener })` built from `MessageService`) — not reachable
+from plugin code at all. `agent.reply` exposes that mechanism directly (LLM call + stream into
+chat); `agent.tell` is its no-LLM sibling for text you already have (pure passthrough, animated with
+the same word-by-word typing effect). Both fall back gracefully (`agent.reply` to a plain
+non-streamed `ai.prompt`; `agent.tell` to `{ success: false }`) when the invocation has no live chat
+session (automation/webhook/API context) — safe to call unconditionally.
+
+`agent.reply`'s `opts.rich_content: true` unlocks the model rendering *passive* rich components
+(table/chart/mermaid/media/cardview/webview/citation) — deliberately never selection/form/action,
+since those need `agent.hil()`'s suspend+lock+routing plumbing to receive a response when clicked;
+enabling them via `reply`/`tell` would render a button that looks interactive but silently does
+nothing. See [sdk/agent.md](./sdk/agent.md#rich-components-and-hil) for the full explanation.
+
+Both share a per-session rate limit (backend, default 20 pushes/60s, configurable via
+`sandbox.agent_chat_push_rate_limit`) — neither call has a cost gate that would otherwise stop a
+buggy/looping plugin from flooding a user's chat with unlimited persisted messages.
+
+### 🐛 Fixed — `code` namespace unreachable via the documented top-level import
+
+`SDKClient.ts` and `docs/sdk/code.md` both already assumed `import { code } from '@aivin-labs/sdk'`
+worked, but `globalSdk.ts` never actually exported it — only the legacy `ctx.sdk.code.executeLogic(...)`
+path worked. Added the missing `export const code = bindNamespace('code')`.
+
+### 🆕 Added — local zod validation for `automation.*` and `resource.upload`/`.remove`
+
+Following up on the `automation`/`resource` fixes below with a structural guard, not just a one-time
+correction: `automation.createJob`/`.updateJob`/`.getJobs`/`.deleteJob`/`.executeById` and
+`resource.upload`/`.remove` now validate `params` against a zod schema (`src/sdk/validation.ts`)
+*before* the call reaches the network. A wrong shape throws immediately with a clear
+`[namespace.method] invalid params - field: reason` message instead of silently sending a request
+the backend partially (or entirely) ignores — this is precisely the failure mode that let the old
+`{ name, schedule, logic }` shape below ship undetected. New dependency: `zod` (already a de facto
+standard, ~small footprint; this package was never actually "dependency-free" - see `axios`,
+`socket.io-client`, `inquirer` already in `dependencies`). Covers only these two namespaces for
+now — extend the same way (verify every field against the real backend handler first) rather than
+schema-ifying everything speculatively.
+
+### 🛠️ Added — `scripts/check-contract.mjs`, a BE↔SDK namespace drift checker
+
+A best-effort static scanner (`npm run check:contract -- --be-path <path-to-be-repo>`) that
+cross-references every `this.call('namespace.method', ...)` in `SDKClient.ts` against every real
+`PluginBridge.sdkFunction`/`.sdkMethods`/`.sdkStreamFunction` registration in the backend repo, and
+reports namespace/method names that exist on only one side. Catches the "SDKClient.ts calls
+something the backend doesn't register" class of bug going forward (a `namespace.method` STRING
+existing on both sides) — it does **not** check param shapes, so it would not have caught the
+`automation.createJob` field-name bug on its own; the zod schemas above are the shape-level guard.
+Not wired into CI yet (needs a checkout of the backend repo to run against); run it manually after
+any change to `SDKClient.ts` or when the backend's `PluginBridge` registrations change.
+
+### 📝 Improved — storage namespace guidance (`store`/`datastore`/`mongo`/`redis`)
+
+The four persistence namespaces serve genuinely different purposes, not four ways to do the same
+thing — but the docs never said so in one place before, leaving "which one do I use" to be
+reverse-engineered from four separate pages. Added a real decision guide (README and
+[SDK.md](./SDK.md#persistent-storage--store-datastore-mongo-redis)): `datastore` for user-facing
+tables the platform UI renders, `store` as the default for everything else, `mongo`/`redis` only
+for their specific niches (porting Mongo-shaped logic; ephemeral cache/counters).
+
+### 🐛 Fixed — `automation.createJob`/`.updateJob`/`.getJobs` had fictional param names
+
+A previous audit pass typed these against a guessed-at generic "cron job" shape
+(`{ name, schedule, logic }`) that never matched the real backend and was never actually verified
+against it — the real `JobRequest`/`JobListRequest` (`AutomationDTO.ts`) use `mission`/`prompt`
+(what the job does — there is no `logic`/code-string field at all) and `schedule_condition` (a
+natural-language description the backend parses itself, not a raw cron string). Using the old
+documented shape would silently create a job with the wrong mission/schedule (or, for `agent_id`,
+fail loudly — that field was already accidentally correct-shaped but wasn't documented as required).
+Fixed `SDKClient.ts`'s `automation` namespace, added a real `AutomationJob` type (was `any`/`any[]`
+throughout), and rewrote [sdk/automation.md](./sdk/automation.md) end to end. Also documents the
+server-side rate limit (10 calls/5min, shared between `createJob` and mission/schedule-changing
+`updateJob` calls) that wasn't mentioned anywhere before.
+
+### 🆕 Resolved — `resource.upload`'s previously-hedged uncertainties
+
+`docs/sdk/resource.md` had several "presumably"/"not confirmed" hedges around `file`'s accepted
+shape and `is_public`/`temp`'s actual effect. Traced through the backend's real `toBuffer()`
+normalizer and `FSIO.ts` and resolved all of them: `file` accepts exactly a base64 string, a
+`{type:'Buffer',data:number[]}` object, or a `number[]` (a raw `Buffer` does not survive the JSON
+round-trip on its own); `temp`/`is_public` behave as guessed. Added a real `ResourceMeta` return
+type (was `Promise<any>`) and an undocumented `workspace_id` param.
+
+### 🆕 Resolved — `session.newSession` vs `session.create`'s actual relationship
+
+`docs/sdk/session.md` previously said the difference between these two was unverified. Traced
+through the backend's real `SessionService`: `create()` is the higher-level call (auto-resolves a
+default workspace, builds a full session record via `buildSessionDTO`) which internally calls
+`newSession()` — the lower-level primitive, which is idempotent by `id` (touches `last_updated` and
+returns the existing record rather than duplicating if that `id` already has a session). Documented
+when to reach for each.
+
+### 🐛 Fixed — `TriggerType` missing `widget`
+
+`types/PluginTypes.ts`'s `TriggerType` const had 6 of the backend's 7 real values, missing `widget` —
+meant a plugin authored in TypeScript couldn't type-safely declare `trigger_type: [TriggerType.WIDGET]`
+even though `'widget'` is a real, host-enforced value (hides a plugin from every non-widget session;
+see [MANIFEST.md#trigger-types](./MANIFEST.md#trigger-types)).
+
+### 🆕 Added — `browser.cancel(sessionId?)`
+
+Requests cooperative cancellation of a running AI Browser mission (backend checks for it between
+agentic-loop steps — can't interrupt a step already in flight). Always targets the calling tenant's
+own mission; `sessionId` is accepted only as a self-check against that same tenant, never a way to
+cancel another tenant's mission (see security fix below). `browser.run()`'s result now also carries
+`data.session_id` so it can be passed back later. See [sdk/browser.md](./sdk/browser.md).
+
+### 🔒 Fixed — cross-tenant `browser.cancel` DoS + SSRF blocklist gaps (backend, `be` repo)
+
+Backend-side hardening alongside the new `browser.cancel`:
+
+- `browser.cancel`'s first draft trusted a caller-supplied `session_id` outright — any tenant could
+  cancel another tenant's running mission. Fixed to always resolve the tenant from the caller's own
+  context; `session_id` is now rejected unless it matches that tenant.
+- `AIBrowserService`'s SSRF hostname blocklist missed IPv4-mapped IPv6 (`::ffff:127.0.0.1`), the
+  `fd00::/8` half of the IPv6 ULA range, and CGNAT `100.64.0.0/10` (which covers Alibaba Cloud's
+  metadata IP). Rewrote it to parse real IP bytes (`net.isIP`) instead of matching hostname strings.
+- Added a DNS-rebinding backstop: `setupAdvancedPage` now checks each response's actual
+  `remoteAddress()` (the IP really connected to, not a separately-resolved one) and aborts the
+  mission if it lands on a private/internal address — closes the TOCTOU window a hostname-only
+  check can't.
+
+### 🆕 Added — SDK surface audit: wired up backend RPCs that had no client-side sugar
+
+Cross-checked every `PluginBridge.sdkFunction`/`sdkMethods` registration on the backend against
+`SDKClient.ts`'s sugar objects and added the ones that were missing (previously only reachable via
+the generic `call('namespace.method', ...)` escape hatch):
+
+- `ai`: `tts`, `stt`, `getModels`, `calculateTokens`
+- `knowledge`: `store`, `reinforce`
+- `causality`: `search` (backed by `think.search`)
+- `workspace`: `updatePlugin`
+- `agent`: `processMessage`, `resolveHil`
+- `attachment`: `upload`, and a new `extract` method (raw extracted chunks of an attachment, no AI
+  summarization — reads back what the backend's extract-engine already produced during `upload`)
+- `datastore`: `rollback`, `getAllTables`, `getTableStats`, `countRows`, `exportTable`,
+  `deduplicateTable`, `backfillColumn`, `formatRowsForContext` (previously only reachable via the
+  HTTP/UI route, not the SDK)
+- `task`: `gen`, `addComment`, `requestSupport`
+- `message`: `init`, `stream`
+- `session`: `updateAgent`
+- New top-level `getCachedUser(id)` (Redis-cached variant of `user(id)`)
+- New `code` namespace: `executeLogic`
+
+`storage.*`/`queue.scheduleJob`/`realtime.publish` were initially suspected dead (no
+`PluginBridge.sdkFunction` registration found) but turned out to be registered via the separate
+`PluginBridge.sdkMethods(...)` bulk-bind helper in `PluginStorageService.ts` — confirmed working,
+no changes needed there.
+
 ## [1.0.1] - 2026-07-27
 
 Everything below happened after `1.0.0` was already published to npm - fixes/features here ship in

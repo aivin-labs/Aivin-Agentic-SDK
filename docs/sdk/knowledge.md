@@ -17,6 +17,8 @@ import { knowledge } from '@aivin-labs/sdk';
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
 | `search` | `query: string`, `opts?: { workspace_id?: string; limit?: number; threshold?: number }` | `Promise<any[]>` | Searches the workspace's long-term knowledge base for entries relevant to `query`. Maps to `knowledge.searchKnowledge` on the host, with `opts` fields spread directly into the call params (not nested). |
+| `store` | `knowledge: any`, `scope?: Record<string, any>` | `Promise<any>` | Persists a new knowledge entry into the workspace's long-term store. Maps to `knowledge.storeKnowledge`; `client`/`orgId`/`workspaceId` are always resolved server-side from `ctx`, not from `scope`. |
+| `reinforce` | `ids: string[]` | `Promise<any>` | Boosts the relevance/recency signal of existing knowledge entries by ID. Maps to `knowledge.reinforceKnowledge`. |
 
 ## `search` example
 
@@ -35,14 +37,12 @@ export async function main(mission, input, ctx) {
 
 ## Notes & caveats
 
-- **Only `search` is confirmed** against the real `get knowledge()` in `src/base/SDK.ts`. The
-  `store`/`get`/`del`/`reinforce` methods that appear in `CodeSDK.d.ts` have **no confirmed real
-  implementation** on the backend and were deliberately removed from `SDKClient.ts`'s sugar object
-  rather than risk shipping a wrong parameter shape.
-- If you need write/delete/reinforce behavior, call the underlying namespace directly via the
-  generic escape hatch — e.g. `call('knowledge.storeKnowledge', ...)` — but treat its parameter
-  shape as **unconfirmed** until verified against the backend; don't assume it mirrors `search`'s
-  shape or `CodeSDK.d.ts`'s declared shape.
+- `search`/`store`/`reinforce` are confirmed against `BrainSDK.ts`'s `registerKnowledgeHandlers()`
+  on the backend. `get`/`del` (from `CodeSDK.d.ts`) have no confirmed real implementation on the
+  sugar object — use `call('knowledge.batchGetKnowledge', ...)` / `call('knowledge.batchDeleteKnowledge', ...)`
+  directly if you need them.
+- `store`'s `client`/`orgId`/`workspaceId` are always resolved server-side from the caller's `ctx` —
+  passing them in `scope` will not let you write into a different workspace/tenant than the current one.
 - `opts.workspace_id` lets you target a workspace other than the current one, if permitted; omit it
   to search the invoking workspace.
 

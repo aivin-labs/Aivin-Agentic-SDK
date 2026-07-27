@@ -62,6 +62,42 @@ export interface Agent {
   status: 'active' | 'inactive';
 }
 
+/**
+ * Verified against the backend's real `JobResponse` (`AutomationDTO.ts`) - the actual return shape
+ * of `automation.createJob`/`.updateJob`/`.getJobs`, not inferred from request params.
+ */
+export interface AutomationJob {
+  id: string;
+  mission: string;
+  prompt?: string;
+  workflow?: string[];
+  workspace_id: string;
+  project_id?: string;
+  user_id: string;
+  agent_id: string;
+  /** Automation scheduling trigger (schedule/interval/delay/manual/random_wakeup) - a different,
+   *  unrelated concept from the plugin manifest's `TriggerType` (manual/schedule/event/webhook/
+   *  api/chat/widget) despite sharing some member names. Left as `string` (matching the backend's
+   *  own untyped `JobResponse.trigger_type`) to avoid a colliding export name with `TriggerType`
+   *  from `PluginTypes.ts`. */
+  trigger_type?: string;
+  /** Natural-language schedule description (e.g. "mỗi 5 phút", "hàng ngày lúc 9h") - the backend
+   *  parses this into a cron/interval internally; it is NOT a raw cron string itself. */
+  schedule_condition?: string;
+  schedule_config?: Record<string, any>;
+  plugin_id?: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'limit_exceeded' | 'infeasible' | 'paused';
+  last_run?: string;
+  last_success?: string;
+  last_error?: string;
+  next_run?: string;
+  success_count?: number;
+  consecutive_errors?: number;
+  is_disabled?: boolean;
+  disabled_reason?: string;
+  created_date?: string;
+}
+
 export interface LLMPromptOptions {
   instructions?: string;
   schema?: Record<string, any>;
@@ -72,6 +108,41 @@ export interface LLMPromptOptions {
   max_tokens?: number;
   reasoning?: 'disabled' | 'low' | 'medium' | 'high';
   websearch?: 'none' | 'low' | 'medium' | 'high';
+}
+
+/**
+ * `agent.reply`-only options - a superset of `LLMPromptOptions`. `rich_content` has no meaning for
+ * `ai.prompt`/`ai.promptStream` (those never touch chat rendering), which is why it lives here and
+ * not on the shared `LLMPromptOptions` type.
+ */
+export interface AgentReplyOptions extends LLMPromptOptions {
+  /**
+   * Unlocks PASSIVE display rich components (table/chart/mermaid/media/cardview/webview/citation)
+   * so the model knows the markup the chat UI renders them from - `instructions` text alone does
+   * NOT teach it this syntax. Deliberately does NOT unlock selection/form/action: those need
+   * `agent.hil()`'s suspend+routing plumbing to actually receive a response when clicked; enabling
+   * them here would render a button that looks interactive but does nothing.
+   */
+  rich_content?: boolean;
+}
+
+/** Verified against the backend's real `ResourceMeta` (`src/base/FSIO.ts`) - the actual return
+ *  shape of `resource.upload`, not previously typed at all (was `any`). */
+export interface ResourceMeta {
+  id: string;
+  name?: string;
+  size?: number | string;
+  user_id?: string;
+  mime?: string;
+  extension?: string;
+  url: string;
+  is_public?: boolean;
+  /** True = deleted automatically after a period of time (temp upload cleanup). */
+  temp?: boolean;
+  workspace_id?: string;
+  created_date?: string;
+  /** Expiry timestamp for a `temp: true` upload. */
+  expire_at?: string;
 }
 
 export const PluginStatus = {
