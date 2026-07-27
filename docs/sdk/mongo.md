@@ -9,7 +9,7 @@ search/graph features, so reach for `store` first unless you specifically want M
 
 ```typescript
 import { mongo } from '@aivin-labs/sdk';
-// equally: ctx.sdk.mongo / import SDK from '@aivin-labs/sdk'; SDK.mongo
+// legacy (works, not recommended): ctx.sdk.mongo
 ```
 
 ## Methods
@@ -152,5 +152,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

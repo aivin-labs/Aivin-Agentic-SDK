@@ -10,7 +10,7 @@ for `resource` when you just need "put these bytes somewhere and get a URL back.
 
 ```typescript
 import { resource } from '@aivin-labs/sdk';
-// equally: ctx.sdk.resource / import SDK from '@aivin-labs/sdk'; SDK.resource
+// legacy (works, not recommended): ctx.sdk.resource
 ```
 
 ## Methods
@@ -70,5 +70,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

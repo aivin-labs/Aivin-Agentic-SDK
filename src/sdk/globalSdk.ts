@@ -2,12 +2,13 @@ import { getCurrentSDK } from './currentInvocation';
 import type { SDKClient } from './SDKClient';
 
 /**
- * Two equivalent ways to reach the platform, both backed by the exact same per-invocation
- * SDKClient (same capability token, same tenant scoping) - pick whichever reads best:
+ * The documented way to reach the platform:
  *
- *   ctx.sdk.mongo.model('users').find({...})              // via ctx (3rd arg of main())
- *   import SDK from '@aivin-labs/sdk'; SDK.mongo.model(...)      // default import
- *   import { mongo } from '@aivin-labs/sdk'; mongo.model(...)    // import just the namespace you need
+ *   import { mongo } from '@aivin-labs/sdk'; mongo.model('users').find({...})
+ *
+ * (`ctx.sdk` and the default export reach the exact same per-invocation SDKClient - same
+ * capability token, same tenant scoping - but both are legacy: still supported, no longer shown
+ * in docs or scaffolds.)
  *
  * All of these are Proxy objects that resolve `getCurrentSDK()` fresh on every property access -
  * there's no single shared instance, since a new SDKClient (bound to a fresh capability token) is
@@ -36,7 +37,8 @@ const sdkClient: SDKClient = new Proxy({} as SDKClient, {
   },
 }) as SDKClient;
 
-/** `import SDK from '@aivin-labs/sdk'` - the whole client as one object. */
+/** Default export - the whole client as one object. Kept for backwards compatibility;
+ *  not documented anymore: docs/scaffolds only show per-namespace imports. */
 export default sdkClient;
 
 // ── Per-namespace named exports - `import { mongo, redis, ai } from '@aivin-labs/sdk'` ────────────
@@ -91,4 +93,9 @@ export function wait(ms: number) {
 }
 export function user(id: string) {
   return getCurrentSDK().user(id);
+}
+// A function (not a re-exported getter) - module exports bind once at import time, but the
+// underlying value is per-invocation, so it has to be read lazily on every call.
+export function config(): Record<string, any> {
+  return getCurrentSDK().config;
 }

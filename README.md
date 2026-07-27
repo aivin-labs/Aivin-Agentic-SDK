@@ -24,7 +24,7 @@ agent in the workspace can discover and call on its own — the platform is arch
 database, call a CRM, run a browser task, generate a report — it calls out to a plugin, and
 **this SDK is how you build one**.
 
-**Write one file, ship a plugin.** The Aivin Plugin SDK is the official toolkit for building
+**Write one, use auto, zero config.** The Aivin Plugin SDK is the official toolkit for building
 plugins that run as their own Docker container inside the platform, with full access to the
 agentic engine, LLM/embeddings, vector search, tasks, persistent storage, realtime events, and
 everything else the platform offers — through one clean, fully-typed SDK surface.
@@ -53,7 +53,7 @@ export async function main(
 - [Requirements](#requirements)
 - [Getting Started](#getting-started)
 - [Anatomy of a plugin](#anatomy-of-a-plugin)
-- [Three equivalent ways to call the SDK](#three-equivalent-ways-to-call-the-sdk)
+- [Calling the SDK](#calling-the-sdk)
 - [What the SDK exposes](#what-the-sdk-exposes)
 - [manifest.json](#manifestjson)
 - [How AI Staff discovers your plugin](#how-ai-staff-discovers-your-plugin)
@@ -68,34 +68,29 @@ export async function main(
 
 ## Why the Aivin SDK
 
-- **From empty folder to deployed plugin in four commands.** `aivin create` → write `src/main.ts`
-  → `aivin start` to test → `aivin deploy` to ship. No Dockerfile, no CI pipeline, no server to
-  provision, no infra config to write — the CLI packages your code and the host builds and runs
-  the container for you.
-- **Your AI Staff finds it on its own.** You don't register routes, intents, or a tool schema by
-  hand. The platform's agentic planner reads `manifest.json`'s `selection_rules`/`description`/
-  `capabilities` and decides on its own, at run time, which plugin fits the job — see
-  [How AI Staff discovers your plugin](#how-ai-staff-discovers-your-plugin).
-- **Turn anything into a plugin.** Write custom logic in `src/main.ts`, convert a project you
-  already have with `aivin plugin convert`, or skip code entirely and proxy straight through to an
-  existing external system (an MCP server today via `aivin mcp create`; the manifest schema also
-  recognizes REST, n8n, Zapier, Make, Coze, Dify, and workflow proxies configured through the
-  platform dashboard) — whichever way, it becomes something every AI Staff agent in the workspace
-  can call like any other native capability.
-- **One entry point.** Export a single `main(mission, input, ctx)` function — the SDK's plugin
-  server resolves it (falling back to a default export, then the first exported function) and
-  handles everything else.
-- **Fully typed, zero boilerplate.** `PluginInput`, `PluginContext`, `PluginResponse`, and every
-  SDK namespace ship with complete TypeScript types generated straight from the platform's own SDK
-  contract — your editor tells you what's available before you run anything.
-- **No credentials for you to manage.** `redis`/`mongo`/`store` are host-mediated, tenant-scoped
-  storage — call them directly, no connection strings to configure, rotate, or keep out of your
-  repo, and nothing sensitive sitting in your container to leak.
-- **Test before you deploy.** `aivin start` runs the real gRPC server locally plus a `curl`-able
-  HTTP shim, so you can exercise your handler end-to-end without ever touching the platform.
-- **AI can write it for you.** `aivin plugin make "<description>"` generates a working
-  `src/main.ts` from a plain-language description, or `aivin plugin convert` generates one from a
-  project you already have.
+Because building a plugin should feel like writing one function — and here, that's really all it
+is. Everything else is handled for you:
+
+- **Four commands and you're live.** `aivin init` → write your code → `aivin start` to try it →
+  `aivin deploy` to ship it. No Dockerfile, no CI pipeline, no server to rent — the platform
+  builds and runs everything for you.
+- **Your plugin gets discovered on its own.** No routes to register, no tool schemas to wire up.
+  Just describe what your plugin does in `manifest.json`, and AI Staff figures out when to use
+  it — see [How AI Staff discovers your plugin](#how-ai-staff-discovers-your-plugin).
+- **Bring whatever you already have.** Start from scratch, convert an existing project with
+  `aivin plugin convert`, or skip code entirely and connect an MCP server with `aivin mcp create`
+  (REST, n8n, Zapier, Make, Coze, and Dify hookups work through the platform dashboard too).
+  Either way, it becomes a skill every AI Staff agent can call.
+- **One function is the whole contract.** Export `main(mission, input, ctx)` and you're done —
+  the SDK takes care of the rest.
+- **Your editor already knows everything.** Full TypeScript types for the entire SDK mean
+  autocomplete shows you what's possible before you've read a single doc.
+- **No secrets to babysit.** Need storage? `redis`, `mongo`, and `store` just work — no
+  connection strings to configure, rotate, or accidentally commit.
+- **Try it at home first.** `aivin start` spins up your plugin locally with a `curl`-able
+  endpoint, so you can poke at it end-to-end before it ever touches the platform.
+- **Or let AI write it for you.** Describe what you want in plain language —
+  `aivin plugin make "<description>"` — and get working code back.
 
 ## Requirements
 
@@ -167,7 +162,8 @@ No Dockerfile, no CI pipeline, no server to provision — the CLI packages `src/
 
 ```
 my-plugin/
-├── manifest.json      # name, description, input/output shape, triggers
+├── manifest.json      # shared fields + plugins[] — one entry per function: name,
+│                        #   description, input/output shape, triggers
 ├── src/
 │   ├── main.ts         # the entry point — main(mission, input, ctx). Fixed filename: the
 │   │                    #   runtime always loads exactly this file, never rename it.
@@ -193,7 +189,7 @@ import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk
 export async function main(
   mission: string,          // human-readable reason this run was triggered (for logging)
   input: PluginInput,       // fields declared in manifest.json's "input"
-  ctx: PluginContext,       // user, workspace, session, cert (if connection_id set), sdk
+  ctx: PluginContext,       // user, workspace, session, cert (if connection_id set)
 ): Promise<PluginResponse> {
   if (!input.text) {
     return { status: PluginStatus.FAIL, error_code: PluginErrorCode.INVALID_INPUT };
@@ -207,40 +203,39 @@ export async function main(
 ```
 
 Need more than one entry point? Export as many named functions as you like from the same
-`src/main.ts` and list each one's `func` in `manifest.json`'s `plugins: [...]` field instead of a
-single object — see [manifest.json](#manifestjson).
+`src/main.ts` and append one `plugins: []` entry per function in `manifest.json`, each naming its
+export via `func` — see [manifest.json](#manifestjson).
 
 More real, complete examples (RAG search, task automation, persistent storage, agent delegation,
 human-in-the-loop review): [docs/EXAMPLES.md](docs/EXAMPLES.md).
 
-## Three equivalent ways to call the SDK
+## Calling the SDK
 
-Every style resolves to the exact same per-invocation client (same tenant scoping, same capability
-token) — pick whichever reads best in your code:
+Import just the namespace(s) you need — that's the whole story:
 
 ```typescript
-// 1. Import just the namespace(s) you need (preferred)
 import { ai, mongo } from '@aivin-labs/sdk';
+
 await ai.prompt('Hello');
-
-// 2. Default import — the whole client as one object
-import SDK from '@aivin-labs/sdk';
-await SDK.ai.prompt('Hello');
-
-// 3. Via ctx (3rd argument of main()) — no import needed
-export async function main(mission, input, ctx) {
-  return { status: 'success', data: await ctx.sdk.ai.prompt('Hello') };
-}
+await mongo.model('notes').find({});
 ```
 
+Every import resolves to the same per-invocation client (same tenant scoping, same capability
+token), so there's nothing to construct, configure, or pass around.
+
+> **Legacy: `ctx.sdk`.** Older plugins reach the same client through `main()`'s 3rd argument
+> (`ctx.sdk.ai.prompt(...)`). It still works and isn't going away, but it's **not recommended**
+> for new code — the SDK is designed so your logic doesn't have to depend on `ctx`. Its one
+> remaining niche is code that runs outside a `main()` invocation, where the imports' async-context
+> scoping can't reach.
+
 Full details, including the generic `call('namespace.method', params)` escape hatch:
-[docs/SDK.md](docs/SDK.md#three-equivalent-ways-to-reach-it).
+[docs/SDK.md](docs/SDK.md#calling-the-sdk).
 
 ## What the SDK exposes
 
-Every namespace below is importable on its own — `import { ai, store } from '@aivin-labs/sdk'` — and
-equally reachable via `ctx.sdk` if you'd rather not import it (see
-[Three equivalent ways to call the SDK](#three-equivalent-ways-to-call-the-sdk)).
+Every namespace below is importable on its own — `import { ai, store } from '@aivin-labs/sdk'`
+(see [Calling the SDK](#calling-the-sdk)).
 
 | Namespace | Purpose | Details |
 | --- | --- | --- |
@@ -272,7 +267,7 @@ equally reachable via `ctx.sdk` if you'd rather not import it (see
 
 A few top-level functions round out the surface, imported the same way: `ask(...)`/`hil(...)` for
 human-in-the-loop input, `a2a(...)` for agent delegation, `user(id)` for a user's public profile,
-`log(...)`/`wait(...)`, and the read-only `config` getter.
+`log(...)`/`wait(...)`, and `config()` for this plugin's saved workspace config.
 
 Every method is scoped to this plugin and the invoking tenant on the host side — your container
 never receives a raw database credential. Full method-by-method reference with parameter shapes:
@@ -280,25 +275,32 @@ never receives a raw database credential. Full method-by-method reference with p
 
 ## `manifest.json`
 
-The bare minimum — everything else in the table below is optional:
+`manifest.json` is **one JSON object**: fields shared by the whole project (`version`, `author`,
+`connection_id`, ...) once at the top level, plus a `plugins` array with one entry per function
+your plugin exposes. This is the default shape — it's what `aivin create`/`aivin init` scaffold,
+and what a fresh single-function plugin looks like:
 
 ```json
 {
-  "id": "auto-generated-hex-id",
-  "name": "text-summarizer",
-  "description": "Summarize text using AI",
-  "input": { "text": "string - text to summarize" },
-  "output": { "data": "string - the summary" }
+  "version": "1.0.0",
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "text-summarizer",
+      "description": "Summarize text using AI",
+      "func": "main",
+      "input": { "text": "string - text to summarize" },
+      "output": { "data": "string - the summary" }
+    }
+  ]
 }
 ```
 
-`manifest.json` is always **one JSON object**. For the normal case above (a single-function plugin)
-that's the whole file — its one entry point is resolved from `src/main.ts`'s `main` export. For a
-multi-function plugin, it's a *group*: shared fields (`version`, `connection_id`, ...) written once
-at the top level, plus a `plugins` array holding each function's own config - `aivin deploy`/`aivin
-test` copy the shared fields onto every entry automatically before sending. Each entry is a full
-manifest plus a `func` field naming which export of the *same* shared `src/main.ts` it calls, and is
-deployed/discovered as its own independent plugin `id`:
+Each entry's `func` names the export of the shared `src/main.ts` it calls (`"main"` for the
+scaffold's single entry), and each entry is deployed/discovered as its own independent plugin
+`id` — so growing from one function to several is just exporting more named functions and
+appending entries, nothing to restructure. `aivin deploy`/`aivin test` copy the shared top-level
+fields onto every entry automatically before sending:
 
 ```json
 {
@@ -327,6 +329,10 @@ deployed/discovered as its own independent plugin `id`:
 }
 ```
 
+A legacy flat shape — the entry's fields directly at the top level, no `plugins` array, entry
+point resolved from the `main` export — is still accepted everywhere, as are codeless
+`proxy_config` manifests (which keep the flat shape, having no `func` to name).
+
 | Field | Type | Description |
 | --- | --- | --- |
 | `name` | `string` | Required. Unique identifier, lowercase-hyphen (`"task-manager"`). |
@@ -334,7 +340,7 @@ deployed/discovered as its own independent plugin `id`:
 | `selection_rules` | `string[]` | **The strongest discovery signal** — see [How AI Staff discovers your plugin](#how-ai-staff-discovers-your-plugin). |
 | `input` | `object` | Required. Structure of the handler's 2nd argument — actually parsed and validated, not just descriptive text. Supports nested objects/arrays. Read by the planner's auto-mapping to fit its own output onto your fields. |
 | `output` | `string \| object` | The shape of `PluginResponse.data` callers should expect. Read by the planner for auditing/replanning and for mapping this plugin's result into a later stage's input. |
-| `func` | `string` | Multi-function manifests only. Name of the export in `src/main.ts` this `plugins[]` entry calls. |
+| `func` | `string` | Name of the export in `src/main.ts` this `plugins[]` entry calls — `"main"` in the scaffold. Required on every `plugins[]` entry. |
 | `instructions` | `string` | Extra planner guidance beyond `description` — edge cases, when *not* to use it. |
 | `capabilities` | `string[]` | Free-text tags for discovery/ranking against other plugins. |
 | `category` / `scope` | `string` / `string[]` | Single primary domain for display; broader domain tags as a secondary ranking signal. |
@@ -407,6 +413,7 @@ variable: [docs/CLI.md](docs/CLI.md).
 | `aivin plugin convert` | Already have a project? Turn it into a plugin — AI-generate `src/main.ts` from the code you already have, in the current directory. |
 | `aivin plugin search "<query>"` | Search the platform's plugin ecosystem for something to reuse before writing new logic. |
 | `aivin plugin trigger "<mission>" '<input>'` | Invoke an already-deployed plugin for real and print the result — like the platform's Playground. `-a "<prompt>"` lets the platform auto-map free text onto the input schema instead. |
+| `aivin plugin logs [pluginId]` | Tail an already-deployed plugin's own console output live — defaults to the current directory's `manifest.json` id. |
 | `aivin validate` | Validate `manifest.json` in the current directory (or `--json <config>`/`--stdin` for scripted/CI use). |
 | `aivin start` | Run the plugin locally: real gRPC server + an HTTP test shim on `:4001`. |
 | `aivin test` | Deploy to a non-production test instance, then smoke-test it with generated input and save a report to `.test/`. Blocked in production. |
@@ -421,7 +428,7 @@ machine — there's no per-project credential to manage.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `SDK_GRPC_ENDPOINT` | Backend gRPC endpoint for `ctx.sdk.*` calls | `api.aivin.cloud:50051` |
+| `SDK_GRPC_ENDPOINT` | Backend gRPC endpoint for the SDK's outbound calls | `api.aivin.cloud:50051` |
 | `AIVIN_BASE_URL` | Aivin API base URL (only for a self-hosted/staging instance) | `https://api.aivin.cloud` |
 | `AIVIN_WEB_URL` | Platform web app URL, used by `aivin login`'s browser flow | `https://brain.aivin.cloud` |
 | `LOCAL_TEST_PORT` | Port for the local HTTP test shim (`POST /invoke`) | `4001` |
@@ -433,7 +440,7 @@ That's it — everything else is zero-config. Full list: [docs/CLI.md#environmen
 - Your plugin runs in its **own Docker container**, managed entirely by the Aivin host — you
   never touch Docker yourself, `aivin deploy` handles it.
 - The host and your plugin talk over **gRPC**, one symmetric `Invoke` RPC in each direction: the
-  host calls your container to run `main()`, and `ctx.sdk` calls back out to the host for
+  host calls your container to run `main()`, and the SDK calls back out to the host for
   everything else (LLM, vector search, storage, tasks, ...). Adding a new backend capability never
   requires a proto change — just a new `namespace` string on the host side.
 - Every `Invoke` call carries a shared-secret bearer token, plus a short-lived, per-invocation
@@ -443,7 +450,9 @@ That's it — everything else is zero-config. Full list: [docs/CLI.md#environmen
   `trigger_type` and similar unions are plain `const` objects instead of TS `enum`s — only
   *erasable* TypeScript syntax is supported at runtime.
 
-Full internals (proto shape, directory layout, auth flow, local testing without a host):
+Want the full picture of how your plugin communicates with the platform — the two-direction
+`Invoke` diagram and the life of an invocation from trigger to response — plus internals (proto
+shape, directory layout, auth flow, local testing without a host)?
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). You don't need to read it to build a plugin.
 
 ## Security model
@@ -451,7 +460,7 @@ Full internals (proto shape, directory layout, auth flow, local testing without 
 - **No raw credentials.** `store`/`redis`/`mongo` are host-mediated and tenant-scoped; your
   container never receives a database connection string.
 - **Identity can't be spoofed.** The per-invocation capability token means your own code can never
-  claim to be a different tenant, even though it shares a process with `ctx.sdk`.
+  claim to be a different tenant, even though it shares a process with the SDK client.
 - **Response size is capped.** Whatever `main()` returns is capped at **1MB** once
   JSON-serialized; page/paginate large result sets instead of returning everything at once.
 
@@ -497,6 +506,7 @@ Full reference, including the `sse` transport for remote MCP servers:
 
 - 🧰 **[SDK Reference](docs/SDK.md)** — every namespace: AI, vector/knowledge, tasks, storage, realtime, and more
 - 📋 **[Manifest Reference](docs/MANIFEST.md)** — every `manifest.json` field, including MCP proxy plugins
+- 🪪 **[Plugin Context](docs/CONTEXT.md)** — every field of `ctx`, the runtime identity your handler receives
 - 🖥️ **[CLI Reference](docs/CLI.md)** — every command, flag, and environment variable
 - 📖 **[Plugin Development Guide](docs/PLUGIN_DEVELOPMENT_GUIDE.md)** — end-to-end walkthrough
 - 🏗️ **[Architecture](docs/ARCHITECTURE.md)** — how the gRPC transport and container model work

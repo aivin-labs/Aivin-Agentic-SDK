@@ -34,6 +34,11 @@ async function startPluginServer() {
       );
     }
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    // The default manifest shape is { ...sharedFields, plugins: [...] } - name lives on the
+    // entries there; the legacy flat single-object shape has it at the top level.
+    const entries = Array.isArray(manifest.plugins) ? manifest.plugins : [manifest];
+    const displayName = entries.map((e) => e.name).filter(Boolean).join(', ') || '(unnamed)';
+    const displayVersion = manifest.version || entries[0]?.version || '0.0.0';
 
     // One fewer env var to think about: the local HTTP test shim just follows NODE_ENV - on unless
     // you're in production. Set LOCAL_TEST_PORT if you need a specific port (default 4001 - not
@@ -42,7 +47,7 @@ async function startPluginServer() {
     const testPort = parseInt(process.env.LOCAL_TEST_PORT || '4001');
 
     console.log('Server configuration:');
-    console.log(`   Plugin: ${manifest.name} v${manifest.version || '0.0.0'}`);
+    console.log(`   Plugin: ${displayName} v${displayVersion}`);
     console.log(`   Plugin directory: ${currentDir}`);
     console.log(`   gRPC bind: ${process.env.SDK_GRPC_SERVER_BIND || '0.0.0.0:50051'}`);
     console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);

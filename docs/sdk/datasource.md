@@ -9,7 +9,7 @@ connected for training, or kick off a (re-)learn pass on a specific source.
 
 ```typescript
 import { datasource } from '@aivin-labs/sdk';
-// equally: ctx.sdk.datasource / import SDK from '@aivin-labs/sdk'; SDK.datasource
+// legacy (works, not recommended): ctx.sdk.datasource
 ```
 
 ## Methods
@@ -62,5 +62,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

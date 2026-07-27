@@ -9,7 +9,7 @@ session's status/seen state for UI purposes.
 
 ```typescript
 import { session } from '@aivin-labs/sdk';
-// equally: ctx.sdk.session / import SDK from '@aivin-labs/sdk'; SDK.session
+// legacy (works, not recommended): ctx.sdk.session
 ```
 
 ## The `MessageSession` shape
@@ -147,5 +147,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

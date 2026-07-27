@@ -2,19 +2,29 @@
 
 Real plugins across common use cases. Each one is the complete `manifest.json` + `src/main.ts` pair.
 
-These use the preferred style — import just the namespace(s) you need. `ctx.sdk.ai.prompt(...)`
-and `import SDK from '@aivin-labs/sdk'; SDK.ai.prompt(...)` work identically; see
-[SDK.md](./SDK.md#three-equivalent-ways-to-reach-it).
+These use the one recommended style — import just the namespace(s) you need. (`ctx.sdk.*` is
+the legacy alternative: still works, not recommended for new code.) See
+[SDK.md](./SDK.md#calling-the-sdk).
 
 ## 1. Text Summarizer
 
 ```json
 {
-  "name": "text-summarizer",
-  "description": "AI text summarization plugin",
   "version": "1.0.0",
-  "input": { "text": "string - text to summarize" },
-  "output": { "data": "string - the summary" }
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "text-summarizer",
+      "description": "AI text summarization plugin",
+      "func": "main",
+      "input": {
+        "text": "string - text to summarize"
+      },
+      "output": {
+        "data": "string - the summary"
+      }
+    }
+  ]
 }
 ```
 
@@ -41,14 +51,22 @@ export async function main(
 
 ```json
 {
-  "name": "todo-manager",
-  "description": "Add and list personal tasks",
   "version": "1.0.0",
-  "input": {
-    "action": "enum - what to do. enum: add, list. default: list",
-    "task": "string - task content (only for action=add)"
-  },
-  "output": { "data": "object|array - created todo, or the list" }
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "todo-manager",
+      "description": "Add and list personal tasks",
+      "func": "main",
+      "input": {
+        "action": "enum - what to do. enum: add, list. default: list",
+        "task": "string - task content (only for action=add)"
+      },
+      "output": {
+        "data": "object|array - created todo, or the list"
+      }
+    }
+  ]
 }
 ```
 
@@ -84,11 +102,23 @@ export async function main(mission, input, ctx) {
 
 ```json
 {
-  "name": "weather-notifier",
-  "description": "Cache a weather reading and notify the workspace",
   "version": "1.0.0",
-  "input": { "city": "string", "temperature": "number", "condition": "string" },
-  "output": { "message": "string" }
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "weather-notifier",
+      "description": "Cache a weather reading and notify the workspace",
+      "func": "main",
+      "input": {
+        "city": "string",
+        "temperature": "number",
+        "condition": "string"
+      },
+      "output": {
+        "message": "string"
+      }
+    }
+  ]
 }
 ```
 
@@ -124,16 +154,24 @@ export async function main(mission, input, ctx) {
 
 ```json
 {
-  "name": "email-sender",
-  "description": "Send an email, retrying via the queue if it fails",
   "version": "1.0.0",
-  "input": {
-    "to": "string",
-    "subject": "string",
-    "body": "string",
-    "attempt": "number - optional, internal"
-  },
-  "output": { "message": "string" }
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "email-sender",
+      "description": "Send an email, retrying via the queue if it fails",
+      "func": "main",
+      "input": {
+        "to": "string",
+        "subject": "string",
+        "body": "string",
+        "attempt": "number - optional, internal"
+      },
+      "output": {
+        "message": "string"
+      }
+    }
+  ]
 }
 ```
 
@@ -171,11 +209,21 @@ export async function main(mission, input, ctx) {
 
 ```json
 {
-  "name": "smart-search",
-  "description": "Semantic search over the workspace knowledge base",
   "version": "1.0.0",
-  "input": { "query": "string" },
-  "output": { "data": "array - matching results" }
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "smart-search",
+      "description": "Semantic search over the workspace knowledge base",
+      "func": "main",
+      "input": {
+        "query": "string"
+      },
+      "output": {
+        "data": "array - matching results"
+      }
+    }
+  ]
 }
 ```
 
@@ -193,11 +241,22 @@ export async function main(mission, input, ctx) {
 
 ```json
 {
-  "name": "expense-approval",
-  "description": "Route an expense for approval, escalating to a human above a threshold",
   "version": "1.0.0",
-  "input": { "amount": "number", "description": "string" },
-  "output": { "data": "string - approval status" }
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "expense-approval",
+      "description": "Route an expense for approval, escalating to a human above a threshold",
+      "func": "main",
+      "input": {
+        "amount": "number",
+        "description": "string"
+      },
+      "output": {
+        "data": "string - approval status"
+      }
+    }
+  ]
 }
 ```
 
@@ -243,11 +302,21 @@ export async function main(mission, input, ctx) {
 
 ```json
 {
-  "name": "user-directory",
-  "description": "Look up and upsert users in an isolated Mongo-backed collection",
   "version": "1.0.0",
-  "input": { "email": "string" },
-  "output": { "data": "object - the user record" }
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "user-directory",
+      "description": "Look up and upsert users in an isolated Mongo-backed collection",
+      "func": "main",
+      "input": {
+        "email": "string"
+      },
+      "output": {
+        "data": "object - the user record"
+      }
+    }
+  ]
 }
 ```
 

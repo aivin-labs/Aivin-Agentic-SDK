@@ -2,14 +2,14 @@
 
 The `message` namespace manages individual messages within a chat session: save a new message,
 page through a session's history, fetch the most recent messages, look one up by ID, full-text
-search across messages, or update an existing message. This is distinct from `ctx.sdk.session`,
+search across messages, or update an existing message. This is distinct from `session`,
 which manages the session/thread container itself (not the messages inside it).
 
 ## Import
 
 ```typescript
 import { message } from '@aivin-labs/sdk';
-// equally: ctx.sdk.message / import SDK from '@aivin-labs/sdk'; SDK.message
+// legacy (works, not recommended): ctx.sdk.message
 ```
 
 ## Methods
@@ -85,7 +85,7 @@ export async function main(mission, input, ctx) {
   their named fields — the named fields are the confirmed-required/common ones, but the backend
   handlers may accept additional filter/update fields beyond what's typed. When in doubt about an
   extra field's real name, verify against the backend rather than guessing.
-- `message` (individual messages) and `session` (`ctx.sdk.session`, the chat/thread container) are
+- `message` (individual messages) and `session` (the chat/thread container) are
   separate namespaces — use `session.get`/`session.getList`/`session.create`/`session.updateStatus`
   to manage sessions themselves, and `message.*` for the messages inside one.
 - None of this namespace's methods carry an "unconfirmed sugar" warning in `SDKClient.ts` beyond the
@@ -95,5 +95,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

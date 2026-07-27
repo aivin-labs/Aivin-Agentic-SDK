@@ -11,7 +11,7 @@ and pass the resulting URL/metadata into `file.create`.
 
 ```typescript
 import { file } from '@aivin-labs/sdk';
-// equally: ctx.sdk.file / import SDK from '@aivin-labs/sdk'; SDK.file
+// legacy (works, not recommended): ctx.sdk.file
 ```
 
 ## Methods
@@ -99,5 +99,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

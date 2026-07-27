@@ -8,7 +8,7 @@ recurring work (e.g. "run this report every Monday") or manage jobs it previousl
 
 ```typescript
 import { automation } from '@aivin-labs/sdk';
-// equally: ctx.sdk.automation / import SDK from '@aivin-labs/sdk'; SDK.automation
+// legacy (works, not recommended): ctx.sdk.automation
 ```
 
 ## Methods
@@ -92,5 +92,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

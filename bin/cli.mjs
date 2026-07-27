@@ -13,6 +13,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname } from 'path';
 import { randomBytes } from 'crypto';
+import { io } from 'socket.io-client';
 // Same flatten logic PluginServer.ts uses for local/production runtime resolution - imported from
 // the built output (not src/) so deploy and runtime agree on exactly the same rules for what
 // manifest.json's { ...commonFields, plugins: [...] } authoring shape expands into.
@@ -249,8 +250,17 @@ program
         configData = fs.readFileSync(manifestPath, 'utf8');
       }
 
-      const config = JSON.parse(configData);
-      const result = validatePluginConfig(config);
+      // Expand the default { ...commonFields, plugins: [...] } shape and validate every entry -
+      // flattenManifestFile itself throws on structural problems (empty plugins[], missing
+      // id/name/func, bare top-level array).
+      const config = flattenManifestFile(JSON.parse(configData));
+      const entries = Array.isArray(config) ? config : [config];
+      const errors = entries.flatMap((entry, i) =>
+        validatePluginConfig(entry).errors.map((e) =>
+          entries.length > 1 ? `plugins[${i}] (${entry.name || 'unnamed'}): ${e}` : e,
+        ),
+      );
+      const result = { valid: errors.length === 0, errors };
 
       if (options.jsonOutput) {
         console.log(
@@ -402,12 +412,12 @@ async function createAgentsGuide(pluginDir, { usesServiceSplit = false } = {}) {
   const filesSection = usesServiceSplit
     ? `## The files that matter
 
-- **\`manifest.json\`** - id/name/description/version + \`input\`/\`output\` field descriptions (used for auto-mapping natural-language prompts onto real args). Full reference: \`node_modules/@aivin-labs/sdk/docs/MANIFEST.md\`.
+- **\`manifest.json\`** - shared fields (version/author) + a \`plugins: []\` array, one entry per exported function (the scaffold has one entry whose \`func\` points at \`main\`). Each entry's \`input\`/\`output\` field descriptions are used for auto-mapping natural-language prompts onto real args. Full reference: \`node_modules/@aivin-labs/sdk/docs/MANIFEST.md\`.
 - **\`src/service.ts\`** - the actual business logic. Edit this. A single exported \`execute(input, ctx)\` that returns plain result data, or throws a plain \`Error\` on failure - no \`PluginResponse\`/\`PluginStatus\` to think about here.
 - **\`src/main.ts\`** - a thin, static wrapper. Do NOT edit this or add logic to it - it just calls \`execute()\` and packages the result into the \`PluginResponse\` the platform expects. Its filename is fixed (the runtime always loads exactly this file), unlike \`service.ts\` which is just this project's convention.`
     : `## The two files that matter
 
-- **\`manifest.json\`** - id/name/description/version + \`input\`/\`output\` field descriptions (used for auto-mapping natural-language prompts onto real args). Full reference: \`node_modules/@aivin-labs/sdk/docs/MANIFEST.md\`.
+- **\`manifest.json\`** - shared fields (version/author) + a \`plugins: []\` array, one entry per exported function (the scaffold has one entry whose \`func\` points at \`main\`). Each entry's \`input\`/\`output\` field descriptions are used for auto-mapping natural-language prompts onto real args. Full reference: \`node_modules/@aivin-labs/sdk/docs/MANIFEST.md\`.
 - **\`src/main.ts\`** - exports exactly one \`main(mission, input, ctx)\` entry point, returning a \`PluginResponse\` (\`{ status: PluginStatus.SUCCESS | ERROR | FAIL, data?, message?, error_code? }\`).`;
 
   const regenerateCommand = usesServiceSplit
@@ -420,9 +430,9 @@ This is an Aivin plugin project (\`@aivin-labs/sdk\`). Quick orientation for a c
 
 ${filesSection}
 
-## Calling the platform - prefer the top-level import, not \`ctx.sdk\`
+## Calling the platform - import what you need from \`@aivin-labs/sdk\`
 
-Both work (they're the exact same client under the hood), but **default to this style** in any code you write or generate here:
+**Always use this style** in any code you write or generate here:
 
 \`\`\`typescript
 import { ai } from '@aivin-labs/sdk';
@@ -435,7 +445,7 @@ export async function main(mission: string, input: PluginInput, ctx: PluginConte
 }
 \`\`\`
 
-Only reach for \`ctx.sdk.*\` if you specifically need to call the platform from somewhere that isn't guaranteed to be inside a running \`main()\` invocation - the top-level import relies on \`AsyncLocalStorage\` scoping that \`ctx.sdk\` doesn't need.
+\`ctx.sdk.*\` is the legacy mechanism - it still works (same client under the hood) but is NOT recommended; don't generate new code with it. Its one remaining niche: calling the platform from somewhere that isn't guaranteed to be inside a running \`main()\` invocation, where the top-level import's \`AsyncLocalStorage\` scoping doesn't reach.
 
 Namespaces available: \`ai\`, \`vector\`, \`knowledge\`, \`datastore\`, \`task\`, \`store\`, \`redis\`, \`mongo\`, \`workspace\`, \`agent\`, \`realtime\`, \`queue\`, \`message\`, \`notification\`, \`file\`, \`session\`, \`resource\`, \`setting\`, \`usage\`, \`automation\`, \`browser\`, \`causality\`, \`attachment\`, \`datasource\`. Full per-namespace reference: \`node_modules/@aivin-labs/sdk/docs/sdk/*.md\`.
 
@@ -447,13 +457,14 @@ Before implementing something from scratch, check if a plugin already does it:
 aivin plugin search "what you're trying to do"
 \`\`\`
 
-Call one from your own \`main()\` with \`await ctx.sdk.call('<plugin_id>.<purpose>', params)\` (or the top-level \`call()\` import).
+Call one from your own \`main()\` with \`import { call } from '@aivin-labs/sdk'\` then \`await call('<plugin_id>.<purpose>', params)\`.
 
 ## Commands you'll actually use
 
 - \`aivin start\` - run this plugin locally (gRPC server + HTTP test shim on :4001).
 - \`aivin test\` - deploy to a test instance and smoke-test it with generated input.
 - \`aivin plugin trigger "<mission>" '<input JSON>'\` - invoke an already-deployed plugin for real.
+- \`aivin plugin logs\` - tail this plugin's own console output live, once deployed.
 - ${regenerateCommand}
 
 Full docs: \`node_modules/@aivin-labs/sdk/README.md\` and \`node_modules/@aivin-labs/sdk/docs/\`.
@@ -469,6 +480,14 @@ async function createGitignore(pluginDir) {
   fs.writeFileSync(gitignorePath, content);
 }
 
+// Fields that belong once at the top level of the default { ...commonFields, plugins: [...] }
+// manifest shape, shared by every entry - everything else is entry-specific.
+const SHARED_MANIFEST_FIELDS = ['version', 'author', 'email', 'license', 'connection_id'];
+
+// CLI-only config keys that may arrive via `aivin create --json` but have no business being
+// persisted into manifest.json.
+const NON_MANIFEST_CONFIG_KEYS = ['handlerCode', 'overwrite'];
+
 async function createManifest(pluginDir, name, description, aiConfig) {
   const manifestPath = path.join(pluginDir, 'manifest.json');
   let currentManifest = null;
@@ -476,37 +495,90 @@ async function createManifest(pluginDir, name, description, aiConfig) {
     currentManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   }
 
-  // Matches the backend's DeveloperPluginManifest (src/plugins/dto/PluginDTO.ts) - `id` is a
-  // local placeholder until the plugin is first deployed, at which point the server assigns
-  // (and this CLI writes back) the real one.
+  const overrides = { ...(currentManifest || {}), ...(aiConfig || {}) };
+  for (const key of NON_MANIFEST_CONFIG_KEYS) delete overrides[key];
+
+  // Proxy plugins keep the flat single-object shape: they have no src/main.ts export to name in a
+  // plugins[] entry's required `func` field.
+  if (overrides.proxy_config) {
+    const flatManifest = {
+      id: randomBytes(16).toString('hex'),
+      name,
+      description,
+      version: '1.0.0',
+      author: '',
+      email: '',
+      initial: {},
+      ...overrides,
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(flatManifest, null, 2));
+    return;
+  }
+
+  // An existing plugins[] manifest is already in the default shape - keep it, only filling in
+  // missing shared fields.
+  if (Array.isArray(overrides.plugins)) {
+    const newManifest = { version: '1.0.0', author: '', email: '', ...overrides };
+    fs.writeFileSync(manifestPath, JSON.stringify(newManifest, null, 2));
+    return;
+  }
+
+  const shared = {};
+  const entryOverrides = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    if (SHARED_MANIFEST_FIELDS.includes(key)) shared[key] = value;
+    else entryOverrides[key] = value;
+  }
+
+  // The default manifest shape: shared fields once at the top level + a plugins[] array, here with
+  // a single entry backed by src/main.ts's `main` export. Matches what deploy/runtime already
+  // understand for multi-function plugins (see docs/MANIFEST.md) - adding a second function later
+  // is just appending another entry. `id` is a local placeholder until the plugin is first
+  // deployed, at which point the server assigns (and this CLI writes back) the real one.
   const newManifest = {
-    id: randomBytes(16).toString('hex'),
-    name,
-    description,
     version: '1.0.0',
     author: '',
     email: '',
-    input: {
-      data: 'object - Input data for processing',
-    },
-    output: {
-      data: 'object - Processed data result',
-    },
-    trigger_type: ['manual', 'api', 'chat'],
-    initial: {},
-
-    ...currentManifest,
-    ...(aiConfig || {}),
+    ...shared,
+    plugins: [
+      {
+        id: randomBytes(16).toString('hex'),
+        name,
+        description,
+        func: 'main',
+        input: {
+          data: 'object - Input data for processing',
+        },
+        output: {
+          data: 'object - Processed data result',
+        },
+        trigger_type: ['manual', 'api', 'chat'],
+        initial: {},
+        ...entryOverrides,
+      },
+    ],
   };
 
   fs.writeFileSync(manifestPath, JSON.stringify(newManifest, null, 2));
+}
+
+/**
+ * The one entry of a default (single-entry plugins[]) manifest, or the manifest itself for the
+ * flat single-object shape - for CLI paths that need to read/patch entry-level fields
+ * (`id`, `input`, `description`, ...) without caring which shape is on disk. Mutating the returned
+ * object mutates the manifest it came from.
+ */
+function primaryManifestEntry(manifest) {
+  if (manifest && Array.isArray(manifest.plugins) && manifest.plugins.length > 0) {
+    return manifest.plugins[0];
+  }
+  return manifest;
 }
 
 async function createHandler(pluginDir, aiConfig) {
   const header =
     '// Import just the namespace(s) you need - see docs/SDK.md for the full list\n' +
     '// (ai, vector, knowledge, task, store, redis, mongo, workspace, agent, realtime, queue, ...).\n' +
-    "// ctx.sdk.<namespace> and `import SDK from '@aivin-labs/sdk'` work identically.\n" +
     "import { ai } from '@aivin-labs/sdk';\n" +
     "import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk';\n" +
     "import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';";
@@ -516,9 +588,9 @@ async function createHandler(pluginDir, aiConfig) {
   if (aiConfig && aiConfig.handlerCode) {
     handlerContent = `${header}\n\n${aiConfig.handlerCode}\n`;
   } else {
-    // Single entry point - the host always calls `main` (or the default export as a fallback).
-    // For a multi-function plugin, export as many named functions as you like here and list each
-    // one's `func` in manifest.json's `plugins: [...]` - see docs/MANIFEST.md#multi-function-plugins.
+    // One entry point to start with - the scaffolded manifest.json's plugins[0] points at this
+    // `main` export via its `func` field. To add more functions, export more named functions here
+    // and append one plugins[] entry per function - see docs/MANIFEST.md#multi-function-plugins.
     handlerContent = `${header}
 
 export async function main(mission: string, input: PluginInput, ctx: PluginContext): Promise<PluginResponse> {
@@ -633,7 +705,7 @@ async function createEnv(pluginDir) {
     '',
     'NODE_ENV=development',
     '',
-    '# ctx.sdk.* calls default to the production backend (api.aivin.cloud) if this is left unset -',
+    '# SDK calls default to the production backend (api.aivin.cloud) if this is left unset -',
     '# uncomment to point `npm start` / the local test HTTP shim at a local/dev backend instead.',
     '# SDK_GRPC_ENDPOINT=localhost:50051',
     '# SDK_GRPC_SECRET=',
@@ -1113,7 +1185,11 @@ ${description}`;
         // No `workspace_files` - see makePluginFromDescription's comment on why that would trip
         // the backend's surgical-edit/diff mode.
         logic,
-        code_id: manifest.id,
+        // code_id = the entry id, the stable identity of this code workspace on the server -
+        // it keys the Redis draft, the RAG index over previously generated files, and the live
+        // socket room. func = which export of src/main.ts this generation targets.
+        code_id: primaryManifestEntry(manifest).id,
+        func: primaryManifestEntry(manifest).func || 'main',
         target_file: 'src/service.ts',
         model: options.model,
         provider: options.provider,
@@ -1222,8 +1298,9 @@ async function initInteractive(options) {
     await createHandler(pluginDir, null);
     const manifestPath = path.join(pluginDir, 'manifest.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    if (Object.keys(manifest.input || {}).length === 0) manifest.input = { data: 'object - Input data for processing' };
-    if (Object.keys(manifest.output || {}).length === 0) manifest.output = { data: 'object - Processed data result' };
+    const entry = primaryManifestEntry(manifest);
+    if (Object.keys(entry.input || {}).length === 0) entry.input = { data: 'object - Input data for processing' };
+    if (Object.keys(entry.output || {}).length === 0) entry.output = { data: 'object - Processed data result' };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   }
 
@@ -1303,7 +1380,11 @@ ${description}`;
         // (CodeGenerationHelper.ts) - the real convention for this filename, confirmed by both the
         // backend's workspace template and the browser CodeEditor.
         logic: sdkConventionPreamble,
-        code_id: manifest.id,
+        // code_id = the entry id, the stable identity of this code workspace on the server -
+        // it keys the Redis draft, the RAG index over previously generated files, and the live
+        // socket room. func = which export of src/main.ts this generation targets.
+        code_id: primaryManifestEntry(manifest).id,
+        func: primaryManifestEntry(manifest).func || 'main',
         target_file: 'src/main.ts',
         model: options.model,
         provider: options.provider,
@@ -1346,21 +1427,24 @@ ${description}`;
 }
 
 /** Shared by `plugin make`/`plugin convert` - fills in whatever manifest fields the AI inferred
- *  alongside the code, but only ones you haven't already set yourself. */
+ *  alongside the code, but only ones you haven't already set yourself. Entry-level fields are
+ *  patched on the primary plugins[] entry for the default manifest shape (see
+ *  `primaryManifestEntry`), flat fields for the legacy single-object shape. */
 function applyGeneratedManifestFields(manifestPath, manifest, result) {
+  const entry = primaryManifestEntry(manifest);
   let manifestChanged = false;
-  if (result.description && !manifest.description) {
-    manifest.description = result.description;
+  if (result.description && !entry.description) {
+    entry.description = result.description;
     manifestChanged = true;
   }
   const instructions = result.instructions || result.instruction;
-  if (instructions && !manifest.instructions) {
-    manifest.instructions = instructions;
+  if (instructions && !entry.instructions) {
+    entry.instructions = instructions;
     manifestChanged = true;
   }
   const inputSchema = result.input || result.input_schema;
-  if (inputSchema && (!manifest.input || Object.keys(manifest.input).length === 0)) {
-    manifest.input = inputSchema;
+  if (inputSchema && (!entry.input || Object.keys(entry.input).length === 0)) {
+    entry.input = inputSchema;
     manifestChanged = true;
   }
   if (manifestChanged) {
@@ -1444,15 +1528,21 @@ async function convertExistingProject(hint, options = {}) {
       try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')); } catch { /* not JSON we can use */ }
     }
     const name = (pkg?.name || path.basename(currentDir)).replace('@aivin/plugin-', '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    // Same default plugins[] shape `aivin create`/`aivin init` scaffold - see createManifest.
     manifest = {
-      id: randomBytes(16).toString('hex'),
-      name,
-      description: pkg?.description || '',
       version: '1.0.0',
       author: '',
       email: '',
-      input: {},
-      initial: {},
+      plugins: [
+        {
+          id: randomBytes(16).toString('hex'),
+          name,
+          description: pkg?.description || '',
+          func: 'main',
+          input: {},
+          initial: {},
+        },
+      ],
     };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     console.log(chalk.green('✅ manifest.json created'), chalk.gray(`(name: ${name})`));
@@ -1491,7 +1581,11 @@ ${hint ? `\nAdditional guidance from the developer:\n${hint}` : ''}`;
       `${serverUrl}/code/generate`,
       {
         logic: conventionPreamble,
-        code_id: manifest.id,
+        // code_id = the entry id, the stable identity of this code workspace on the server -
+        // it keys the Redis draft, the RAG index over previously generated files, and the live
+        // socket room. func = which export of src/main.ts this generation targets.
+        code_id: primaryManifestEntry(manifest).id,
+        func: primaryManifestEntry(manifest).func || 'main',
         target_file: 'src/main.ts',
         // The existing project's own files, as context - deliberately never includes 'src/main.ts'
         // itself (gatherConversionContext excludes handlerPath), since a workspace_files entry for
@@ -1567,11 +1661,10 @@ function resolveTriggerEntry(manifest, funcOption) {
  *   `<input>` can still be given alongside `-a` for fields you want to force rather than let the AI
  *   infer - explicit `arguments` win over auto-mapped ones per field.
  *
- * Real-time log streaming (like the browser Playground's live panel) isn't available here - that
- * goes over a Socket.IO channel that only authenticates browser session JWTs, not CLI API keys, so
- * this only has what `/plugins/execute`'s response itself carries: `processing_log` (the mapping/
- * execution stage messages, all at once, not the plugin's own internal console output) and
- * `mapped_arguments` (only present when `-a` was used).
+ * This only surfaces what `/plugins/execute`'s response itself carries: `processing_log` (the
+ * mapping/execution stage messages, all at once, not the plugin's own internal console output) and
+ * `mapped_arguments` (only present when `-a` was used). Run `aivin plugin logs <id>` in another
+ * terminal first to watch the plugin's own console.log/console.error output live while this runs.
  */
 async function triggerPlugin(mission, inputJson, options) {
   const currentDir = process.cwd();
@@ -1667,6 +1760,70 @@ async function triggerPlugin(mission, inputJson, options) {
   if (!ok) process.exitCode = 1;
 }
 
+/**
+ * `aivin plugin logs [pluginId]` - tails a deployed plugin's own container stdout/stderr live, over
+ * the same Socket.IO channel the platform's own Playground log panel uses (subscribe-plugin-logs /
+ * plugin-log, see src/base/SocketIO.ts on the backend). `pluginId` defaults to the current
+ * directory's manifest.json id (like `plugin trigger`'s `--func` resolution), so `aivin plugin logs`
+ * with no args works from inside a plugin's own project directory.
+ */
+async function streamPluginLogs(pluginId, options) {
+  let resolvedId = pluginId;
+  if (!resolvedId) {
+    const manifestPath = path.join(process.cwd(), 'manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+      throw new Error('No pluginId given and manifest.json not found. Pass a pluginId or run from your plugin\'s directory.');
+    }
+    const manifest = flattenManifestFile(JSON.parse(fs.readFileSync(manifestPath, 'utf8')));
+    resolvedId = resolveTriggerEntry(manifest, options.func).id;
+  }
+
+  const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    console.log(chalk.yellow('⚠️  API_KEY not set - run `aivin login` first'));
+  }
+
+  console.log(chalk.blue(`📡 Watching live logs for ${resolvedId}... (Ctrl+C to stop)\n`));
+
+  const socket = io(serverUrl, {
+    auth: { token: apiKey || 'dev-token' },
+    transports: ['websocket'],
+    reconnection: true,
+  });
+
+  const streamColor = (stream) => (stream === 'stderr' ? chalk.red : stream === 'system' ? chalk.yellow : chalk.gray);
+
+  await new Promise((resolve) => {
+    let settled = false;
+    const stop = () => {
+      if (settled) return;
+      settled = true;
+      socket.disconnect();
+      process.off('SIGINT', stop);
+      resolve();
+    };
+    process.on('SIGINT', stop);
+
+    socket.on('connect', () => {
+      socket.emit('subscribe-plugin-logs', { plugin_id: resolvedId }, (ack) => {
+        if (!ack?.success) {
+          console.error(chalk.red('❌'), `Couldn't subscribe: ${ack?.error || 'unknown error'}`);
+          stop();
+        }
+      });
+    });
+    socket.on('plugin-log', (payload) => {
+      const time = new Date(payload.timestamp || Date.now()).toLocaleTimeString();
+      console.log(chalk.gray(`[${time}]`), streamColor(payload.stream)(payload.line));
+    });
+    socket.on('connect_error', (error) => {
+      console.error(chalk.red('❌'), `Connection failed: ${error.message}`);
+      stop();
+    });
+  });
+}
+
 async function searchPlugins(query, options) {
   const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
   const apiKey = process.env.API_KEY;
@@ -1706,7 +1863,7 @@ async function searchPlugins(query, options) {
   }
   console.log(
     chalk.gray(
-      `Call one from your own plugin with: ctx.sdk.call('<id>.<purpose>', params) - or import { call } from '@aivin-labs/sdk'.`,
+      `Call one from your own plugin with: import { call } from '@aivin-labs/sdk'; await call('<id>.<purpose>', params).`,
     ),
   );
 }
@@ -1765,6 +1922,19 @@ pluginCommand
   .action(async (mission, input, options) => {
     try {
       await triggerPlugin(mission, input, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+pluginCommand
+  .command('logs [pluginId]')
+  .description('Tail a deployed plugin\'s own console output live (defaults to the current directory\'s manifest.json id)')
+  .option('--func <name>', 'Which function\'s id to resolve, for a multi-function plugin (only used when pluginId is omitted)')
+  .action(async (pluginId, options) => {
+    try {
+      await streamPluginLogs(pluginId, options);
     } catch (error) {
       console.error(chalk.red('❌'), error.message);
       process.exit(1);

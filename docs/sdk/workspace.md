@@ -11,7 +11,7 @@ allowed to do something*, rather than operating on tasks/projects/messages thems
 
 ```typescript
 import { workspace } from '@aivin-labs/sdk';
-// equally: ctx.sdk.workspace / import SDK from '@aivin-labs/sdk'; SDK.workspace
+// legacy (works, not recommended): ctx.sdk.workspace
 ```
 
 ## Methods
@@ -115,5 +115,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

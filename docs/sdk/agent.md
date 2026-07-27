@@ -9,7 +9,7 @@ those live as top-level `ask()`/`hil()` functions, not on this namespace (see No
 
 ```typescript
 import { agent } from '@aivin-labs/sdk';
-// equally: ctx.sdk.agent / import SDK from '@aivin-labs/sdk'; SDK.agent
+// legacy (works, not recommended): ctx.sdk.agent
 ```
 
 ## Methods
@@ -96,7 +96,7 @@ use whichever reads better at the call site; there is no behavioral difference.
   `workspace.searchAgents({ query: target, limit: 1 })` — throwing `No agent found matching: <target>`
   if nothing matches.
 - `user(id)` is a **separate top-level function**, not part of the `agent` namespace — it returns a
-  user's public profile (`ctx.sdk.user(id)` / `import { user } from '@aivin-labs/sdk'`), unrelated to
+  user's public profile (`import { user } from '@aivin-labs/sdk'`), unrelated to
   agent delegation.
 - `ask()` and `hil()` block the current plugin run waiting on a human response (or time out) — they
   are for human-in-the-loop workflows, distinct from `agent.delegate`'s agent-to-agent handoff:
@@ -105,5 +105,5 @@ use whichever reads better at the call site; there is no behavioral difference.
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

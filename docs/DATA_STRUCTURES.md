@@ -263,11 +263,11 @@ function main(mission: string, input: PluginInput, ctx: PluginContext): Promise<
 
 - `mission: string` — human-readable reason this run was triggered (logging only, not routing).
 - `input: PluginInput` — `Record<string, any>`, shaped per `manifest.json`'s `input` description.
-- `ctx: PluginContext`:
+- `ctx: PluginContext` — see [CONTEXT.md](./CONTEXT.md) for the full field-by-field reference:
 
 ```typescript
 interface PluginContext {
-  sdk: SDKClient; // see docs/SDK.md — or `import SDK from '@aivin-labs/sdk'`
+  sdk: SDKClient; // legacy handle - prefer `import { ai, ... } from '@aivin-labs/sdk'` (docs/SDK.md)
   user?: User;
   workspace?: Workspace;
   session?: MessageSession;
@@ -275,5 +275,6 @@ interface PluginContext {
   client?: string;
   config?: Record<string, any>;
   cert?: ConnectionInfo; // connected-account credentials, if manifest.connection_id is set
+  metadata?: Record<string, any>; // free-form invocation extras from the host
 }
 ```

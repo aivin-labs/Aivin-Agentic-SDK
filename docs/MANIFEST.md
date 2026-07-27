@@ -6,21 +6,35 @@ how it's allowed to run. It mirrors the backend's `DeveloperPluginManifest`
 platform itself (`id`, `is_verified`, `is_official`, `store_status`, `verification_status`,
 `network_config`, `checksum`, `rate_limit`, ...) and shouldn't be set by hand.
 
-## Minimal example
+## Default shape
+
+`manifest.json` is one JSON object: shared fields (`version`, `author`, ...) at the top level,
+plus a `plugins` array with one entry per function the plugin exposes. This is what
+`aivin create`/`aivin init` scaffold — a single-function plugin is simply a one-entry array whose
+`func` points at `src/main.ts`'s `main` export:
 
 ```json
 {
-  "id": "auto-generated-hex-id",
-  "name": "text-summarizer",
-  "description": "Summarize text using AI",
   "version": "1.0.0",
   "author": "Your Name",
   "email": "you@example.com",
-  "input": { "text": "string - text to summarize" },
-  "output": { "data": "string - the summary" },
-  "trigger_type": ["manual", "api", "chat"]
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "text-summarizer",
+      "description": "Summarize text using AI",
+      "func": "main",
+      "input": { "text": "string - text to summarize" },
+      "output": { "data": "string - the summary" },
+      "trigger_type": ["manual", "api", "chat"]
+    }
+  ]
 }
 ```
+
+A **legacy flat shape** — the entry's fields directly at the top level, no `plugins` array — is
+still accepted everywhere for existing plugins, and remains the shape of codeless
+[`proxy_config` manifests](#mcp-proxy-plugins) (which have no `func` to name).
 
 ## Fields
 
@@ -45,7 +59,7 @@ platform itself (`id`, `is_verified`, `is_official`, `store_status`, `verificati
 | `circuit_breaker`            | `object`                                                       | —         | Per-plugin override of the default circuit breaker: `fail_threshold` (default `3`), `window_sec` (default `300`), `cooldown_sec` (default `60`).                                                                                 |
 | `expose`                     | `string[]`                                                     | —         | Field paths from this plugin's data exposed externally (dynamic API / selection context).                                                                                                                                        |
 | `stacks`                     | `string[]`                                                     | —         | Dedicated service containers (`"REDIS_CACHE"`, `"MONGODB"`, `"BACKGROUND_JOBS"`, `"REALTIME_COMMUNICATION"`) provisioned alongside this plugin's container instead of shared, host-mediated storage. Only relevant outside shared-infrastructure deployments — omit for the normal case. |
-| `trigger_type`               | `TriggerType[]`                                                | —         | Restricts which channels can invoke this plugin: `manual`, `schedule`, `event`, `webhook`, `api`, `chat`. **Omit it entirely to allow all channels** — this is the normal default, not something you need to fill in explicitly. |
+| `trigger_type`               | `TriggerType[]`                                                | —         | Restricts which channels can invoke this plugin: `manual`, `schedule`, `event`, `webhook`, `api`, `chat`. **Omit it entirely to allow all channels** — this is the normal default, not something you need to fill in explicitly. See [Trigger Types](#trigger-types) for which channels actually enforce the restriction. |
 | `initial`                    | `object`                                                       | —         | Default config values.                                                                                                                                                                                                           |
 | `scope`                      | `string[]`                                                     | —         | Business domains this plugin applies to (ranking signal), e.g. `["finance", "sales"]`.                                                                                                                                           |
 | `category`                   | `string`                                                       | —         | Single primary domain for display/classification.                                                                                                                                                                                |
@@ -61,9 +75,10 @@ platform itself (`id`, `is_verified`, `is_official`, `store_status`, `verificati
 
 ## Multi-function plugins
 
-`manifest.json` is always **one JSON object**, never a bare array. For a plugin that exposes more
-than one function, that object is a group: fields shared by every function written once, plus a
-`plugins` array holding each function's own config:
+`manifest.json` is always **one JSON object**, never a bare array. Exposing more functions from
+the same project is just appending entries to the `plugins` array the scaffold already gives you —
+fields shared by every function stay written once at the top level, and each entry holds that
+function's own config:
 
 | Field     | Type    | Required | Description                                                                                                     |
 | --------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -87,8 +102,9 @@ Resolution at invocation time (`PluginServer.resolveTargetFunction`): the host a
 which entry (`id`) was triggered before it ever calls into the container, so it sends that entry's
 `func` explicitly with the request — the container just calls `handler[func]` directly, no local
 guessing needed. The one place local matching still applies is `aivin start` (no real host in the
-loop): pass `mission` matching an entry's `id` (or `func` directly) to pick which one runs, for
-manual `curl` testing across every function in one dev-mode process — see
+loop): a single-entry manifest always resolves straight to its one entry, whatever `mission` says;
+with several entries, pass `mission` matching an entry's `id` (or `func` directly) to pick which
+one runs, for manual `curl` testing across every function in one dev-mode process — see
 [`aivin start`](./CLI.md#aivin-start).
 
 ### Example
@@ -177,7 +193,7 @@ plugin), so the shape below is a real contract, not a suggestion.
 { "email": "string - recipient address" }
 ```
 
-- Optional: add `?` to the end of either the field name or the type - `"cc?"` and `"cc": "string? - ..."` are equivalent.
+- Optional: add `?` to the end of the **type** - `"cc": "string? - ..."`. (The `?`-on-field-name form is reserved for object/array fields, which have no type token to attach it to - see below.)
 - If a value is missing/empty and the field isn't optional, the platform blocks the call before your `main()` ever runs.
 
 **Enum**: use type `enum`, and declare the allowed values (and optionally a default) inside the description itself:
@@ -193,13 +209,20 @@ just prose; use `enum` so the platform can actually enforce it.
 **Nested object**: value is a plain object (recurses the same rules):
 
 ```json
-{ "address": { "city": "string - city name", "zip?": "string - postal code" } }
+{ "address": { "city": "string - city name", "zip": "string? - postal code" } }
 ```
 
 **Array**: value is a one-element array - `[<leaf schema>]` for a list of primitives, or `[{...}]` for a list of objects:
 
 ```json
 { "tags": ["string - a tag"], "items": [{ "sku": "string - product sku", "qty": "number - quantity" }] }
+```
+
+**Optional object/array field**: these have no type token, so here (and only here) the `?` goes on
+the field name instead:
+
+```json
+{ "address?": { "city": "string - city name" }, "items?": [{ "sku": "string - product sku" }] }
 ```
 
 **Valid `type` tokens**:
@@ -225,11 +248,12 @@ just prose; use `enum` so the platform can actually enforce it.
 
 ## Handler resolution
 
-`main()` is always the entry point the host calls. If it's missing, the default export is used;
-failing that, the first exported function. Only one of these should exist per `src/main.ts` — see
-[SINGLE_METHOD_PLUGINS.md](./SINGLE_METHOD_PLUGINS.md). This resolution order applies to a
-single-function plugin (`manifest.json` is one object); see [Multi-function
-plugins](#multi-function-plugins) below for the `plugins: [...]` case, which resolves differently.
+For the default `plugins: []` shape, each entry's `func` names exactly which export of
+`src/main.ts` it calls — `"main"` in the scaffold — see [Multi-function
+plugins](#multi-function-plugins) for how that resolves at invocation time. For the legacy flat
+shape, `main()` is always the entry point the host calls; if it's missing, the default export is
+used, failing that the first exported function — only one of these should exist per `src/main.ts`,
+see [SINGLE_METHOD_PLUGINS.md](./SINGLE_METHOD_PLUGINS.md).
 
 ```typescript
 export async function main(
@@ -243,14 +267,24 @@ export async function main(
 
 ## Trigger Types
 
-| Trigger    | Description                                           |
-| ---------- | ----------------------------------------------------- |
-| `manual`   | User-triggered (button, form).                        |
-| `schedule` | Cron-style periodic invocation.                       |
-| `event`    | Triggered by a data change or webhook-adjacent event. |
-| `webhook`  | External HTTP request.                                |
-| `api`      | Direct programmatic call.                             |
-| `chat`     | Invoked from a chat/agent conversation.               |
+| Trigger    | Description                                           | Enforcement                                                                                                     |
+| ---------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `manual`   | User-triggered (button, form).                        | Advisory — not filtered by the host.                                                                             |
+| `schedule` | Cron-style periodic invocation.                       | Advisory — not filtered by the host.                                                                             |
+| `event`    | Triggered by a data change or webhook-adjacent event. | Advisory — not filtered by the host.                                                                             |
+| `webhook`  | External HTTP request.                                | **Enforced.** If `trigger_type` is declared and does not include `webhook`, webhook endpoints respond `403`.     |
+| `api`      | Direct programmatic call.                             | **Enforced (allow-list).** Dynamic API endpoints are only registered when `api` is declared.                     |
+| `chat`     | Invoked from a chat/agent conversation.               | Advisory — declaring other triggers does not hide the plugin from chat selection; use `selection_rules` to steer discovery instead. |
+
+How the host reads `trigger_type`:
+
+- **Omitted (or empty) means default-allow** — the plugin is invocable from every channel. This is
+  the normal case; only declare `trigger_type` when you deliberately want to restrict channels.
+- Once declared, the list is **restrictive for the enforced channels**: a plugin declared as
+  `["manual"]` cannot be fired via webhook, and gets no dynamic API endpoints.
+- Webhook invocations additionally require an API key whose scopes include `webhook` (keys created
+  with the default `full_access` scope pass automatically; narrowly-scoped keys such as
+  workspace-scoped MCP keys do not).
 
 ## MCP proxy plugins
 
@@ -317,5 +351,6 @@ configured through the dashboard, not through this SDK.
 ## Related
 
 - **[SDK Reference](./SDK.md)** — what your handler can call
+- **[Plugin Context](./CONTEXT.md)** — the `ctx` your handler receives, and how `connection_id`/`initable` shape it
 - **[Single Method Pattern](./SINGLE_METHOD_PLUGINS.md)** — handler conventions
 - **[Examples](./EXAMPLES.md)** — full manifest + `src/main.ts` pairs

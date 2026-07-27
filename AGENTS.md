@@ -7,13 +7,13 @@ has its own `AGENTS.md` already; this one is for people/agents working on the SD
 ## Layout
 
 - `src/` - the published library (compiled to `dist/`). `src/sdk/SDKClient.ts` is the whole
-  `ctx.sdk`/`import { ai } from '@aivin-labs/sdk'` surface; `src/grpc/GrpcInvoker.ts` is the
+  `import { ai } from '@aivin-labs/sdk'` surface (also reachable via the legacy `ctx.sdk`); `src/grpc/GrpcInvoker.ts` is the
   transport (retry/backoff, streaming, tracing hooks); `src/PluginServer.ts` is the gRPC server a
   deployed plugin runs; `src/sdk/trace.ts` is the per-invocation execution trace.
 - `bin/cli.mjs` - the `aivin` CLI (real ESM, not part of the compiled `dist/` - runs directly).
   `bin/server.mjs` is what `aivin start` spawns.
 - `docs/` - the real reference. `docs/SDK.md` + `docs/sdk/*.md` (one file per namespace) is the
-  full `ctx.sdk` surface; `docs/MANIFEST.md` is `manifest.json`'s field reference; `docs/CLI.md` is
+  full SDK surface; `docs/MANIFEST.md` is `manifest.json`'s field reference; `docs/CLI.md` is
   every CLI command; `docs/AI-Plugin-Guide.md` is the condensed cheat sheet for an AI generating a
   plugin quickly.
 - `test/` - `node:test`, run via `npm test`. No mocking framework - fakes are passed in directly
@@ -30,9 +30,13 @@ has its own `AGENTS.md` already; this one is for people/agents working on the SD
   platform's own deploy-time security scan flags non-exact pins as a supply-chain risk. Bump it
   there whenever you publish a new version, alongside `program.version(...)` at the top of
   `cli.mjs`.
-- Prefer `import { ai, ... } from '@aivin-labs/sdk'` over `ctx.sdk.*` in every example, generated
-  scaffold, and doc snippet - both resolve to the same client, but the import style is the
-  documented default (`ctx.sdk` exists only for code that isn't guaranteed to run inside `main()`).
+- Use `import { ai, ... } from '@aivin-labs/sdk'` in every example, generated scaffold, and doc
+  snippet - never `ctx.sdk.*` or a default `import SDK from '@aivin-labs/sdk'`. `ctx.sdk` is the
+  legacy mechanism: same client, still supported, documented only as legacy (its one niche is code
+  that isn't guaranteed to run inside `main()`).
+- The default `manifest.json` shape is `{ ...sharedFields, plugins: [...] }` - one entry per
+  function, each with a required `func` naming its export (`"main"` in the scaffold). The flat
+  single-object manifest is legacy (still accepted; proxy manifests keep it).
 
 ## Before publishing
 

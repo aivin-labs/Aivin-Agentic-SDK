@@ -9,7 +9,7 @@ the user.
 
 ```typescript
 import { usage } from '@aivin-labs/sdk';
-// equally: ctx.sdk.usage / import SDK from '@aivin-labs/sdk'; SDK.usage
+// legacy (works, not recommended): ctx.sdk.usage
 ```
 
 ## Methods
@@ -26,11 +26,11 @@ returns at runtime.
 ## `checkBalance` example
 
 ```typescript
-import { usage } from '@aivin-labs/sdk';
+import { usage, log } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const balance = await usage.checkBalance();
-  ctx.sdk.log(`Current balance: ${JSON.stringify(balance)}`);
+  log(`Current balance: ${JSON.stringify(balance)}`);
   return { status: 'success', data: balance };
 }
 ```
@@ -58,5 +58,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

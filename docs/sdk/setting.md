@@ -3,13 +3,13 @@
 Read-only accessors for the current tenant's display settings and merchant configuration. Use this
 namespace when a plugin needs to adapt output to the workspace's configured language or pull
 merchant-level config (e.g. billing/store setup) rather than its own plugin config (that's
-`ctx.sdk.workspace.getPluginConfig`, not `setting`).
+`workspace.getPluginConfig`, not `setting`).
 
 ## Import
 
 ```typescript
 import { setting } from '@aivin-labs/sdk';
-// equally: ctx.sdk.setting / import SDK from '@aivin-labs/sdk'; SDK.setting
+// legacy (works, not recommended): ctx.sdk.setting
 ```
 
 ## Methods
@@ -53,10 +53,10 @@ export async function main(mission, input, ctx) {
   or `{}`; passing real fields isn't part of the declared contract.
 - Neither method has a documented return shape beyond `any` — unlike `attachment` or `browser`,
   there's no backend-verification comment in `SDKClient.ts` narrowing what fields come back.
-- This is distinct from `ctx.sdk.workspace.getPluginConfig({ plugin_id, workspace_id? })`, which
+- This is distinct from `workspace.getPluginConfig({ plugin_id, workspace_id? })`, which
   reads *your plugin's* saved per-workspace config, not tenant-wide display/merchant settings.
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

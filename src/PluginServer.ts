@@ -309,9 +309,10 @@ export class PluginServer extends EventEmitter {
    * - `explicitFunc` given (a real host invocation of a multi-function plugin - see
    *   `handleInvoke`): calls `handler[explicitFunc]` directly. No local manifest lookup needed -
    *   the host already resolved which entry this is.
-   * - Multi-function plugin (manifest is an array) with no `explicitFunc` - `aivin start`'s local
-   *   dev/curl testing, no real host in the loop: finds the entry whose `id` matches `mission`, or
-   *   failing that whose `func` matches `mission` directly, and calls its `func`.
+   * - plugins[] manifest (array) with no `explicitFunc` - `aivin start`'s local dev/curl testing,
+   *   no real host in the loop: a single-entry manifest resolves straight to its one entry;
+   *   otherwise finds the entry whose `id` matches `mission`, or failing that whose `func` matches
+   *   `mission` directly, and calls its `func`.
    * - Single-function plugin (manifest is one object): `main` export, then default export, then
    *   the first exported function - `mission` is just a human-readable label here, not routing.
    */
@@ -333,7 +334,13 @@ export class PluginServer extends EventEmitter {
     }
 
     if (Array.isArray(manifest)) {
-      const entry = manifest.find((m) => m.id === mission) ?? manifest.find((m) => m.func === mission);
+      // A single-entry plugins[] manifest (the default `aivin create`/`aivin init` scaffold) is
+      // unambiguous - resolve to its one entry no matter what `mission` says, so plain local
+      // curl testing works without the caller knowing the entry's id/func.
+      const entry =
+        manifest.length === 1
+          ? manifest[0]
+          : (manifest.find((m) => m.id === mission) ?? manifest.find((m) => m.func === mission));
       if (!entry) {
         const known = manifest.map((m) => `${m.id} -> ${m.func}`).join(', ');
         throw new Error(

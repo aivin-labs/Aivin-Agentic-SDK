@@ -9,7 +9,7 @@ similarity search over indexed content.
 
 ```typescript
 import { knowledge } from '@aivin-labs/sdk';
-// equally: ctx.sdk.knowledge / import SDK from '@aivin-labs/sdk'; SDK.knowledge
+// legacy (works, not recommended): ctx.sdk.knowledge
 ```
 
 ## Methods
@@ -48,5 +48,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

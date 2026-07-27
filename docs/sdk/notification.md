@@ -9,7 +9,7 @@ topic. All four methods resolve `void` — they are fire-and-forget from the plu
 
 ```typescript
 import { notification } from '@aivin-labs/sdk';
-// equally: ctx.sdk.notification / import SDK from '@aivin-labs/sdk'; SDK.notification
+// legacy (works, not recommended): ctx.sdk.notification
 ```
 
 ## Methods
@@ -92,5 +92,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

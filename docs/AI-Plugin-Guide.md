@@ -8,23 +8,28 @@ Short reference for an AI agent (or developer) generating an Aivin plugin quickl
 
 ```json
 {
-  "id": "auto-generated-hex-id",
-  "name": "plugin-name",
-  "description": "What this plugin does",
   "version": "1.0.0",
   "author": "",
   "email": "",
-  "input": { "field": "type - description" },
-  "output": { "data": "type - description of what main() returns in PluginResponse.data" }
+  "plugins": [
+    {
+      "id": "auto-generated-hex-id",
+      "name": "plugin-name",
+      "description": "What this plugin does",
+      "func": "main",
+      "input": { "field": "type - description" },
+      "output": { "data": "type - description of what main() returns in PluginResponse.data" }
+    }
+  ]
 }
 ```
 
 `trigger_type` is optional — omitting it means the plugin is open to all trigger channels
 (manual, schedule, event, webhook, api, chat). Only set it if you need to _restrict_ channels.
 
-Need more than one function? Use `{ ...commonFields, plugins: [...] }` instead of a plain object —
-each entry in `plugins` is a full manifest plus a `func` field naming which export of the shared
-`src/main.ts` it calls, and deploys as its own independent plugin `id`. See
+Need more than one function? Append more `plugins: []` entries — each is a full manifest plus a
+`func` field naming which export of the shared `src/main.ts` it calls, and deploys as its own
+independent plugin `id`. See
 [MANIFEST.md#multi-function-plugins](./MANIFEST.md#multi-function-plugins).
 
 Full field list: [MANIFEST.md](./MANIFEST.md).
@@ -45,7 +50,7 @@ export async function main(
 ): Promise<PluginResponse> {
   // mission: human-readable reason this run was triggered (for logging, not routing)
   // input:   fields described in manifest.json's "input"
-  // ctx:     user, workspace, session, cert (if connection_id is set), sdk
+  // ctx:     user, workspace, session, cert (if connection_id is set)
 
   return {
     status: PluginStatus.SUCCESS,
@@ -69,8 +74,8 @@ redis.get/set(key, value)           // simple cache
 mongo.model(name).find(...)         // Mongoose-style isolated collection
 ```
 
-Two other equally-valid ways to reach the same client: `ctx.sdk.<namespace>.<method>`, or
-`import SDK from '@aivin-labs/sdk'; SDK.<namespace>.<method>`. Full reference:
+`ctx.sdk.<namespace>.<method>` is the legacy way to reach the same client — still works, but
+do not generate new code with it. Full reference:
 [SDK.md](./SDK.md).
 
 For anything without a dedicated import, use the generic escape hatch:

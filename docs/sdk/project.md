@@ -8,7 +8,7 @@ lifecycle management is not exposed to plugins through this namespace.
 
 ```typescript
 import { project } from '@aivin-labs/sdk';
-// equally: ctx.sdk.project / import SDK from '@aivin-labs/sdk'; SDK.project
+// legacy (works, not recommended): ctx.sdk.project
 ```
 
 ## Methods
@@ -60,11 +60,11 @@ list (subject to whatever default limit the backend applies).
   dedicated `Project` interface in `SDKTypes.ts` to reference for exact field names. Treat the
   shape as whatever the backend's `project.getProject`/`project.searchProject` handlers return and
   inspect at runtime if you need specific fields.
-- The two datastore-related namespaces (`ctx.sdk.datastore`, project-scoped tables/rows) are a
+- The two datastore-related namespaces (`datastore`, project-scoped tables/rows) are a
   separate, much larger surface — don't confuse `project.search` (finds project records) with
   `datastore.getRows`/`getTables` (queries data *within* a project's tables).
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

@@ -10,7 +10,7 @@ existing ones.
 
 ```typescript
 import { task } from '@aivin-labs/sdk';
-// equally: ctx.sdk.task / import SDK from '@aivin-labs/sdk'; SDK.task
+// legacy (works, not recommended): ctx.sdk.task
 ```
 
 ## Methods
@@ -118,5 +118,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

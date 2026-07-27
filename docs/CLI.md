@@ -154,15 +154,16 @@ curl -X POST http://localhost:4001/invoke -H 'content-type: application/json' \
   -d '{"input":{"text":"hello"}}'
 ```
 
-For a multi-function plugin (`manifest.json`'s `plugins: [...]` shape), pass `mission` to pick which
-entry's `func` runs - it's matched against each entry's `id`, falling back to `func`:
+With more than one `plugins: []` entry, pass `mission` to pick which entry's `func` runs - it's
+matched against each entry's `id`, falling back to `func` (a single-entry manifest, the scaffold
+default, always resolves to its one entry - no `mission` needed):
 
 ```bash
 curl -X POST http://localhost:4001/invoke -H 'content-type: application/json' \
   -d '{"mission":"summarize-ticket","input":{"text":"hello"}}'
 ```
 
-`ctx.sdk.*` calls made while running default to the **production** backend (`api.aivin.cloud`) if
+SDK calls made while running default to the **production** backend (`api.aivin.cloud`) if
 `SDK_GRPC_ENDPOINT` isn't set in `.env` - point it at a local/dev backend instead if you don't want
 that (see [Environment variables](#environment-variables) below).
 
@@ -174,11 +175,10 @@ Deploys the plugin in the current directory (`manifest.json` + every project fil
 the public store" path today (that only exists through the browser CodeEditor's publish flow, a
 different runtime).
 
-- `manifest.json` can be one object (single-function plugin), or the
-  `{ ...commonFields, plugins: [...] }` group shape (multi-function - see
-  [MANIFEST.md#multi-function-plugins](./MANIFEST.md#multi-function-plugins)) - common fields are
-  copied onto each entry in `plugins` before upload. A multi-function manifest's entries all deploy
-  together and share one running container.
+- `manifest.json` is normally the default `{ ...commonFields, plugins: [...] }` shape (see
+  [MANIFEST.md#default-shape](./MANIFEST.md#default-shape)) - common fields are copied onto each
+  entry in `plugins` before upload, and all entries deploy together, sharing one running
+  container. The legacy flat single-object shape is still accepted.
 - If every entry's `manifest.proxy_config` is set (MCP proxy plugins - see `aivin mcp create`
   below), no files are read or sent at all - just the manifest.
 - `package-lock.json` is auto-generated (`npm install --package-lock-only`) before upload if missing
@@ -194,7 +194,7 @@ aivin deploy
 
 Same payload/logic as `aivin deploy`, but against `POST /plugins/test/deploy` - a non-production
 instance for verifying the plugin runs end-to-end on real infra (real container, real gRPC, real
-`ctx.sdk`) before anyone else can see it. This endpoint is blocked by the backend in production.
+the SDK) before anyone else can see it. This endpoint is blocked by the backend in production.
 
 After a successful deploy, it also **smoke-tests** every plugin entry: generates sample input from
 `manifest.json`'s `input` schema (`POST /code/generate-sample-data`), invokes the plugin for real
@@ -217,7 +217,7 @@ aivin test --no-smoke-test         # deploy only, same as before this flag exist
 
 AI-generates `src/main.ts` from a natural-language description, via the real `POST /code/generate`
 endpoint (the same one the browser CodeEditor uses) - prompted to reinforce this SDK's conventions
-(`main(mission, input, ctx)`, `ctx.sdk.*`/`import { ai } from '@aivin-labs/sdk'`, `PluginResponse`).
+(`main(mission, input, ctx)`, `import { ai } from '@aivin-labs/sdk'`, `PluginResponse`).
 Requires `manifest.json` to already exist (`aivin create` first).
 
 ```
@@ -281,7 +281,7 @@ Options:
 ```
 
 Prints each match's id, name, description, and version. Call one from your own plugin with
-`await ctx.sdk.call('<id>.<purpose>', params)` (or `import { call } from '@aivin-labs/sdk'`).
+`import { call } from '@aivin-labs/sdk'` then `await call('<id>.<purpose>', params)`.
 
 ## `aivin plugin trigger [mission] [input]`
 
@@ -323,13 +323,35 @@ infer - explicit values win over auto-mapped ones per field.
 
 What gets printed:
 - `--- Log ---` - the backend's own mapping/execution stage messages (`processing_log`), if any.
-  This is **not** real-time and **not** your plugin's own `console.log()` output from inside
-  `main.ts` - true live log streaming goes over a Socket.IO channel that only authenticates browser
-  session JWTs, not a CLI API key, so it isn't available here. This is everything the HTTP response
-  itself carries, printed after the call completes.
+  This is **not** your plugin's own `console.log()` output from inside `main.ts` - it's everything
+  the HTTP response itself carries, printed after the call completes. Run `aivin plugin logs` in
+  another terminal first if you want to watch your plugin's own console output live while this runs.
 - `--- Auto-mapped input ---` - what `-a`'s prompt actually got mapped to (`mapped_arguments`),
   only present in auto mode.
 - `--- Result: <status> ---` - the plugin's real `status`/`message`/`error_code`/`data`.
+
+## `aivin plugin logs [pluginId]`
+
+Tails an **already-deployed** plugin's own container stdout/stderr live - the same real-time feed
+the platform's own Playground log panel uses. `pluginId` defaults to the current directory's
+`manifest.json` id (`--func <name>` picks the entry for a multi-function plugin), so plain
+`aivin plugin logs` works from inside the plugin's own project directory; pass an explicit id to
+watch a plugin you're not standing inside.
+
+```
+Options:
+  --func <name>   Which function's id to resolve, for a multi-function plugin
+                  (only used when pluginId is omitted)
+```
+
+```bash
+aivin plugin logs
+aivin plugin logs my-plugin-id
+```
+
+Prints each line as it's written (`console.log` → gray, `console.error` → red), with a local
+timestamp. Runs until you press Ctrl+C. If the container restarts (redeploy/crash) mid-stream,
+the connection ends - re-run the command to resume watching.
 
 ## `aivin mcp create <name>`
 
@@ -430,7 +452,7 @@ machine picks it up automatically - there's no per-project credential to manage.
 
 | Variable            | Used by                                          | Default                     | When you'd touch it                                          |
 | -------------------- | -------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------- |
-| `SDK_GRPC_ENDPOINT`  | `ctx.sdk.*` calls, `aivin start`                   | `api.aivin.cloud:50051`      | Point `main()`'s SDK calls at a local/dev backend instead of production. |
+| `SDK_GRPC_ENDPOINT`  | SDK calls, `aivin start`                   | `api.aivin.cloud:50051`      | Point `main()`'s SDK calls at a local/dev backend instead of production. |
 | `AIVIN_BASE_URL`     | `deploy`, `test`, `plugin make/convert/trigger`, `login --basic` | `https://api.aivin.cloud`    | Only for a self-hosted or staging instance.                   |
 | `AIVIN_WEB_URL`      | `login` (browser flow)                             | `https://brain.aivin.cloud`  | Only for a self-hosted or staging instance.                   |
 | `LOCAL_TEST_PORT`    | `aivin start`                                       | `4001`                       | Only if `4001` is already taken on your machine.              |
@@ -443,4 +465,4 @@ not something you're expected to set by hand.
 
 - [MANIFEST.md](./MANIFEST.md) - every `manifest.json` field, including MCP proxy plugins
 - [PLUGIN_DEVELOPMENT_GUIDE.md](./PLUGIN_DEVELOPMENT_GUIDE.md) - end-to-end walkthrough using these commands
-- [SDK.md](./SDK.md) - everything `ctx.sdk` exposes inside `main()`
+- [SDK.md](./SDK.md) - everything the SDK exposes inside `main()`

@@ -10,7 +10,7 @@ follow-ups, retry-after-cooldown logic, and multi-step workflows that need to pa
 
 ```typescript
 import { queue } from '@aivin-labs/sdk';
-// equally: ctx.sdk.queue / import SDK from '@aivin-labs/sdk'; SDK.queue
+// legacy (works, not recommended): ctx.sdk.queue
 ```
 
 ## Methods
@@ -65,10 +65,10 @@ export async function main(mission, input, ctx) {
   specific wait, always pass `delay_ms` explicitly.
 - The returned `job_id` is for reference/logging — there is no `queue.cancelJob` or
   `queue.getJob` sugar method on `SDKClient.ts`; if the platform exposes one at the host level,
-  use `ctx.sdk.call('queue.cancelJob', ...)` etc. directly, but its existence/shape is
+  use `call('queue.cancelJob', ...)` etc. directly, but its existence/shape is
   **unconfirmed** here.
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

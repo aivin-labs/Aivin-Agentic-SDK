@@ -23,54 +23,37 @@ export async function main(
 }
 ```
 
-## Three equivalent ways to reach it
+## Calling the SDK
 
-All three resolve to the exact same per-invocation client (same tenant scoping, same capability
-token) — but they're not interchangeable by preference alone. **Default to style 1** (import just
-the namespaces you need) in any code you write or generate; reach for `ctx.sdk` only when you
-specifically need it (see below).
+Import just the namespace(s) you need and call their shorthand methods — this is the one style to
+use in any code you write or generate:
 
 ```typescript
-// 1. RECOMMENDED — import just the namespace(s) you need
 import { ai, mongo } from '@aivin-labs/sdk';
+
 await ai.prompt('Hello');
 mongo.model('users').find({});
-
-// 2. Default import - the whole client as one object (same client as style 1, just one import)
-import SDK from '@aivin-labs/sdk';
-await SDK.ai.prompt('Hello');
-
-// 3. Via ctx (3rd argument of main()) - use only when you need to call the platform from
-// somewhere not guaranteed to run inside main() itself (see below); not the default choice.
-export async function main(mission, input, ctx) {
-  return { status: 'success', data: await ctx.sdk.ai.prompt('Hello') };
-}
 ```
 
-Styles 1–2 only resolve while a `main()` invocation is actively running (backed by
-`AsyncLocalStorage`, scoped per-invocation) — calling them outside that window throws a clear
-error. That's the *only* reason `ctx.sdk` (style 3) exists at all: for the rare case where you're
-calling the platform from code that isn't guaranteed to run inside `main()`'s async context. It is
-not a "simpler for beginners" alternative to style 1 - both are the same client, same call, same
-cost; style 1 is just the one to default to.
+Every import resolves to the same per-invocation client (same tenant scoping, same capability
+token) — nothing to construct or pass around.
 
-Within any of these, two equivalent call styles are always available:
+(A generic `call('namespace.method', params)` escape hatch exists under the hood — `import { call }
+from '@aivin-labs/sdk'` — but only reach for it when a namespace has no sugar method yet; see the
+notes per section below.)
 
-```typescript
-import { ai, call } from '@aivin-labs/sdk';
+### Legacy: `ctx.sdk`
 
-await ai.prompt('Hello'); // shorthand (recommended)
-await call('ai.prompt', { quest: 'Hello' }); // generic escape hatch — same call underneath
-```
+Older plugins reach the same client through `main()`'s 3rd argument (`ctx.sdk.ai.prompt(...)`).
+It still works — same client, same call, same cost — but it's **not recommended**: the SDK is
+designed so your logic doesn't have to depend on `ctx`. Don't write or generate new code with it.
 
-Use the shorthand form unless you need a namespace that has no sugar method yet — `.call()`
-accepts any `"namespace.method"` string the platform exposes.
+Its one remaining niche: the imports only resolve while a `main()` invocation is actively running
+(backed by `AsyncLocalStorage`, scoped per-invocation) and throw a clear error outside that
+window, so code that isn't guaranteed to run inside `main()`'s async context still needs the
+`ctx.sdk` reference handed to it.
 
-> Section headers below say `ctx.sdk.<namespace>` for brevity — every method listed is equally
-> reachable as `import { <namespace> } from '@aivin-labs/sdk'` (e.g. `ctx.sdk.ai.prompt` ≡ `ai.prompt`
-> after `import { ai } from '@aivin-labs/sdk'`).
-
-## AI & LLM — `ctx.sdk.ai`
+## AI & LLM — `ai`
 
 Full reference: [sdk/ai.md](./sdk/ai.md).
 
@@ -85,9 +68,9 @@ All four verified against the backend's real `get ai()` (`src/base/SDK.ts`) - `g
 | `rerank(query, docs, opts?)`      | Re-rank a list of documents by relevance to `query`.                                                                                 |
 
 `tts`/`stt`/`getModels`/`calculateTokens` are not confirmed to exist as sugar - use
-`ctx.sdk.call('ai.tts', ...)` etc. directly if you need them.
+`call('ai.tts', ...)` etc. directly if you need them.
 
-## Knowledge & Vector (RAG) — `ctx.sdk.knowledge`, `ctx.sdk.vector`
+## Knowledge & Vector (RAG) — `knowledge`, `vector`
 
 Full reference: [sdk/knowledge.md](./sdk/knowledge.md), [sdk/vector.md](./sdk/vector.md).
 
@@ -98,9 +81,9 @@ Full reference: [sdk/knowledge.md](./sdk/knowledge.md), [sdk/vector.md](./sdk/ve
 | `vector.index({ content, type?, id?, metadata? })`     | Index a document for vector search.                                      |
 
 `knowledge.store`/`.get`/`.del`/`.reinforce` are not confirmed to exist as sugar - use
-`ctx.sdk.call('knowledge.storeKnowledge', ...)` etc. directly if you need them.
+`call('knowledge.storeKnowledge', ...)` etc. directly if you need them.
 
-## Workspace, Users, Agents — `ctx.sdk.workspace`, `ctx.sdk.agent`
+## Workspace, Users, Agents — `workspace`, `agent`
 
 Full reference: [sdk/workspace.md](./sdk/workspace.md), [sdk/agent.md](./sdk/agent.md).
 
@@ -116,12 +99,12 @@ Full reference: [sdk/workspace.md](./sdk/workspace.md), [sdk/agent.md](./sdk/age
 | `agent.status(id?)`                                       | Current run status for an agent.                                              |
 | `agent.cancel(sessionId, threadId?)`                      | Cancel an in-flight agent response.                                           |
 | `agent.delegate(target, data, purpose)`                   | Hand off a task to another agent (by ID or search query - auto-resolved via `workspace.searchAgents` if `target` doesn't look like an ID) and await its result. Same as top-level `a2a()`. |
-| `ctx.sdk.user(id)`                                        | Public profile for a user in the current tenant.                               |
+| `user(id)`                                        | Public profile for a user in the current tenant.                               |
 
-`agent.ask`/`agent.hil` don't exist - use the top-level `ctx.sdk.ask(...)`/`ctx.sdk.hil(...)` instead
+`agent.ask`/`agent.hil` don't exist - use the top-level `ask(...)`/`hil(...)` instead
 (see below).
 
-## Tasks & Projects — `ctx.sdk.task`, `ctx.sdk.project`
+## Tasks & Projects — `task`, `project`
 
 Full reference: [sdk/task.md](./sdk/task.md), [sdk/project.md](./sdk/project.md).
 
@@ -134,7 +117,7 @@ Full reference: [sdk/task.md](./sdk/task.md), [sdk/project.md](./sdk/project.md)
 | `task.list(params)` / `.listMine(params?)`                     | List tasks / tasks assigned to the current user.                   |
 | `project.get({ id })` / `.search({ workspace_id?, keyword? })` | Read-only project lookup.                                          |
 
-## Persistent storage — `ctx.sdk.store`, `ctx.sdk.redis`, `ctx.sdk.mongo`
+## Persistent storage — `store`, `redis`, `mongo`
 
 Full reference: [sdk/store.md](./sdk/store.md), [sdk/redis.md](./sdk/redis.md), [sdk/mongo.md](./sdk/mongo.md).
 
@@ -145,13 +128,13 @@ credentials, so there's nothing to leak even if the container is compromised.
   (`link`/`unlink`/`getLinks`), semantic/keyword/hybrid `search`, `aggregate`, cursor pagination,
   and atomic `transaction`.
   ```typescript
-  await ctx.sdk.store.set('orders', orderId, { total, status: 'paid' });
-  const recent = await ctx.sdk.store.query('orders', { status: 'paid' }, { created_at: -1 }, 20);
+  await store.set('orders', orderId, { total, status: 'paid' });
+  const recent = await store.query('orders', { status: 'paid' }, { created_at: -1 }, 20);
   ```
 - **`redis`** — simple isolated key-value cache (`get/set/setex/incr/hget/hset/...`) when `store` is overkill.
 - **`mongo`** — isolated document collections (`insert/find/update/aggregate/...`) for teams that prefer Mongo query shapes.
 
-## Realtime & background work — `ctx.sdk.realtime`, `ctx.sdk.queue`
+## Realtime & background work — `realtime`, `queue`
 
 Full reference: [sdk/realtime.md](./sdk/realtime.md), [sdk/queue.md](./sdk/queue.md).
 
@@ -187,14 +170,16 @@ Full reference: [sdk/file.md](./sdk/file.md), [sdk/resource.md](./sdk/resource.m
 
 ## Top-level shorthands
 
+Imported the same way as the namespaces: `import { ask, hil, a2a, log, wait, config } from '@aivin-labs/sdk'`.
+
 | Method                               | Description                                              |
 | ------------------------------------ | -------------------------------------------------------- |
-| `ctx.sdk.ask(question, schema?)`     | Ask the human user a question, block until answered (or timeout). |
-| `ctx.sdk.hil(key, prompt, options?)` | Human-in-the-loop review gate with selectable options + optional free text. |
-| `ctx.sdk.a2a(target, data, purpose)` | Same as `agent.delegate`.                                |
-| `ctx.sdk.log(msg, level?)`           | Structured log line.                                     |
-| `ctx.sdk.wait(ms)`                   | Sleep without blocking the event loop.                   |
-| `ctx.sdk.config`                     | This plugin's saved workspace config (read-only getter). |
+| `ask(question, schema?)`     | Ask the human user a question, block until answered (or timeout). |
+| `hil(key, prompt, options?)` | Human-in-the-loop review gate with selectable options + optional free text. |
+| `a2a(target, data, purpose)` | Same as `agent.delegate`.                                |
+| `log(msg, level?)`           | Structured log line.                                     |
+| `wait(ms)`                   | Sleep without blocking the event loop.                   |
+| `config()`                   | This plugin's saved workspace config (read-only; also available as `ctx.config`). |
 
 ## What's in `ctx`
 
@@ -204,7 +189,7 @@ export async function main(mission: string, input: PluginInput, ctx: PluginConte
   ctx.workspace; // current workspace
   ctx.session; // current chat/automation session, if any
   ctx.cert; // connected-account credentials, if manifest.connection_id is set
-  ctx.sdk; // the client documented above
+  ctx.sdk; // legacy handle to the same client - prefer the imports (see Calling the SDK)
   // `mission` (1st arg) is the human-readable reason this run was triggered — for logging, not routing.
 }
 ```

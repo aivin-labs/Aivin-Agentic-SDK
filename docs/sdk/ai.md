@@ -9,7 +9,7 @@ credentials, rate limits, or model selection — the host resolves all of that s
 
 ```typescript
 import { ai } from '@aivin-labs/sdk';
-// equally: ctx.sdk.ai / import SDK from '@aivin-labs/sdk'; SDK.ai
+// legacy (works, not recommended): ctx.sdk.ai
 ```
 
 ## Methods
@@ -20,7 +20,7 @@ import { ai } from '@aivin-labs/sdk';
 | `promptStream` | `quest: string \| any[]`, `opts?: LLMPromptOptions` | `{ textStream: AsyncIterable<string>, text: Promise<string> }` | Streaming counterpart of `prompt` — text deltas arrive as the model generates them instead of waiting for the whole response. Maps to `ai.promptStream` on the host, over a dedicated server-streaming gRPC RPC (`InvokeStream`), not the plain unary `Invoke` every other call here uses. |
 | `getEmbedding` | `text: string \| string[]`, `opts?: LLMPromptOptions` | `Promise<Float32Array \| Float32Array[]>` | Single embedding call. Pass a string for one vector back, or a string array for an array of vectors back (shape of return mirrors shape of input). |
 | `getEmbeddings` | `texts: string[]`, `opts?: LLMPromptOptions` | `Promise<Float32Array[]>` | Batch embeddings — faster than looping `getEmbedding` per string. **`texts` is a bare array, not wrapped in an object** — this differs from `CodeSDK.d.ts`'s declared `getEmbeddings({texts, opts})` shape, which does not match the real backend. |
-| `rerank` | `query: string`, `docs: string[]`, `opts?: any` | `Promise<{ index: number; score: number }[]>` | Re-ranks `docs` by relevance to `query`. Returns one `{index, score}` entry per input doc, `index` referring back into the original `docs` array — **not** the reranked documents themselves. `opts` is nested as a single object (not spread as `{query, docs, ...opts}` — that's `CodeSDK.d.ts`'s wrong, unimplemented shape). |
+| `rerank` | `query: string`, `docs: string[]`, `opts?: any` | `Promise<{ index: number; score: number }[]>` | Re-ranks `docs` by relevance to `query`. Returns one `{index, score}` entry per input doc, `index` referring back into the original `docs` array — **not** the reranked documents themselves. `opts` is accepted by the SDK signature but **currently ignored by the host** — the backend handler calls its reranker with `(query, docs)` only, so options like `top_k` have no effect today. |
 
 `LLMPromptOptions` (from `src/types/SDKTypes.ts`), applies to `prompt`, `getEmbedding`, and
 `getEmbeddings`:
@@ -78,14 +78,14 @@ Same shape as Vercel AI SDK's `streamText()` — a `textStream` you can iterate 
 deltas, and a `text` promise for the full result:
 
 ```typescript
-import { ai } from '@aivin-labs/sdk';
+import { ai, call } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const result = ai.promptStream(`Write a short summary of: ${input.text}`);
 
   for await (const delta of result.textStream) {
     // e.g. forward progress to the user via realtime.publish as it's generated
-    await ctx.sdk.call('realtime.publish', { event: 'summary.progress', data: delta });
+    await call('realtime.publish', { event: 'summary.progress', data: delta });
   }
 
   const summary = await result.text; // full text, resolves once the stream ends
@@ -123,10 +123,13 @@ import { ai } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   const docs = input.candidates as string[];
-  const ranked = await ai.rerank(input.query, docs, { top_k: 5 });
+  const ranked = await ai.rerank(input.query, docs);
 
-  // ranked entries reference the original docs array by index
-  const ordered = ranked.map((r) => ({ text: docs[r.index], score: r.score }));
+  // ranked entries reference the original docs array by index;
+  // slice yourself if you only want the top N — opts like top_k are ignored by the host
+  const ordered = ranked
+    .map((r) => ({ text: docs[r.index], score: r.score }))
+    .slice(0, 5);
 
   return { status: 'success', data: ordered };
 }
@@ -139,14 +142,14 @@ export async function main(mission, input, ctx) {
   places: it declares `getEmbeddings({texts, opts})` (object-wrapped) when the real code takes
   `getEmbeddings(texts, opts)` (bare array first arg), and it declares `rerank(query, docs, ...opts)`
   (spread) when the real code nests rerank options under a single `opts` object.
-- `tts`, `stt`, `getModels`, and `calculateTokens` are **not** present on the real `ai` sugar object,
-  despite appearing plausible/expected. If you need them, call `call('ai.tts', ...)`,
-  `call('ai.stt', ...)`, etc. directly via the generic escape hatch — but their exact parameter
-  shape is unconfirmed against the backend, so treat them as unverified until you've checked.
-- `rerank`'s `opts` type is `any` in `SDKClient.ts` — there is no confirmed field list for it beyond
-  "an options object passed through as-is."
+- `tts`, `stt`, `getModels`, and `calculateTokens` are **not** present on the `ai` sugar object, but
+  they **are registered on the host** — call them via the generic escape hatch with these verified
+  param shapes: `call('ai.tts', { text, opts })`, `call('ai.stt', { audio, opts })`,
+  `call('ai.getModels', { provider })`, `call('ai.calculateTokens', { data })`.
+- `rerank`'s `opts` is accepted client-side but **dropped server-side** (see the method table) — do
+  not rely on any field in it; post-process the returned `{index, score}` list yourself instead.
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

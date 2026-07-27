@@ -163,7 +163,7 @@ aivin create
 aivin plugin make "Tóm tắt ticket hỗ trợ và gắn nhãn mức độ khẩn cấp"
 ```
 
-Toàn bộ năng lực nền tảng (AI, vector search, task, storage, realtime...) đều đi qua `ctx.sdk` —
+Toàn bộ năng lực nền tảng (AI, vector search, task, storage, realtime...) đều đi qua SDK client —
 xem [docs/SDK.md](./SDK.md).
 
 ### 3. **Phát triển & Test**

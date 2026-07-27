@@ -12,7 +12,7 @@ a raw cache or Mongo query shapes.
 
 ```typescript
 import { store } from '@aivin-labs/sdk';
-// equally: ctx.sdk.store / import SDK from '@aivin-labs/sdk'; SDK.store
+// legacy (works, not recommended): ctx.sdk.store
 ```
 
 ## Wire mapping note
@@ -279,5 +279,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

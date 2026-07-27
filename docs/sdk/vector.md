@@ -9,7 +9,7 @@ to [`knowledge`](./knowledge.md)'s curated long-term knowledge base.
 
 ```typescript
 import { vector } from '@aivin-labs/sdk';
-// equally: ctx.sdk.vector / import SDK from '@aivin-labs/sdk'; SDK.vector
+// legacy (works, not recommended): ctx.sdk.vector
 ```
 
 ## Methods
@@ -69,5 +69,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview

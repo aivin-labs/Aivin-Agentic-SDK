@@ -9,7 +9,7 @@ plugin needs to reason over files a user has attached rather than raw text passe
 
 ```typescript
 import { attachment } from '@aivin-labs/sdk';
-// equally: ctx.sdk.attachment / import SDK from '@aivin-labs/sdk'; SDK.attachment
+// legacy (works, not recommended): ctx.sdk.attachment
 ```
 
 ## Methods
@@ -119,5 +119,5 @@ export async function main(mission, input, ctx) {
 
 ## See also
 
-- [SDK Reference](../SDK.md) — the full `ctx.sdk` surface
+- [SDK Reference](../SDK.md) — the full SDK surface
 - [README](../../README.md#what-the-sdk-exposes) — SDK overview
