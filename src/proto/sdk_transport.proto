@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package sdktransport;
+
+service SdkTransportService {
+  rpc Invoke (SdkInvokeRequest) returns (SdkInvokeResponse);
+}
+
+message SdkInvokeRequest {
+  string namespace = 1;
+  string params_json = 2;
+  string context_json = 3;
+}
+
+message SdkInvokeResponse {
+  bool success = 1;
+  string data_json = 2;
+  string error = 3;
+}

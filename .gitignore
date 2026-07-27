@@ -1,18 +1,9 @@
-# Development files
-tsconfig.json
-.eslintrc.*
-jest.config.*
-*.test.*
-*.spec.*
-
-# Build artifacts
-examples/
-tests/
+# Build output
+dist/
 
 # IDE
 .vscode/
 .idea/
-dist/
 
 # OS
 .DS_Store
@@ -24,13 +15,13 @@ logs/
 
 # Dependencies
 node_modules/
-package-lock.json
 
 # Cache
 .cache/
 .tmp/
-dist/
 
+# Claude Code agent worktrees (ephemeral, per-session)
+.claude/
 
 # Environment
 .env

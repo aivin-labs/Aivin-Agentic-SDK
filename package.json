@@ -1,48 +1,66 @@
 {
-  "name": "@leanez/sdk",
-  "version": "1.0.2",
-  "description": "LeanEZ Plugin SDK for distributed plugin development",
+  "name": "@aivin/sdk",
+  "version": "1.0.0",
+  "description": "Aivin Plugin SDK - gRPC client/server for building plugins that run inside the Aivin platform (agentic engine, vector search, workspace, tasks, and more)",
+  "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./types/*": {
+      "types": "./dist/types/*.d.ts",
+      "default": "./dist/types/*.js"
+    }
+  },
   "bin": {
-    "leanez": "./bin/cli.mjs"
+    "aivin": "./bin/cli.mjs"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run copy:proto",
+    "copy:proto": "node -e \"require('fs').mkdirSync('dist/proto',{recursive:true});require('fs').copyFileSync('src/proto/sdk_transport.proto','dist/proto/sdk_transport.proto')\"",
     "dev": "tsc --watch",
     "clean": "rimraf dist",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "node --import tsx --test test/cli.validate.test.mjs test/pluginTypes.test.ts",
     "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
-    "leanez",
+    "aivin",
     "plugin",
     "sdk",
-    "distributed",
+    "grpc",
+    "agentic",
+    "vector-search",
     "ai",
     "automation"
   ],
-  "author": "LeanEZ Team",
+  "author": "Aivin Team",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.6.0",
-    "chalk": "^5.4.1",
-    "commander": "^14.0.0",
-    "dotenv": "^16.4.5",
-    "express": "^5.1.0",
-    "inquirer": "^12.6.3"
-  },
-  "optionalDependencies": {
-    "bull": "^4.16.5",
-    "mongoose": "^8.16.0",
-    "redis": "^5.5.6"
+    "@grpc/grpc-js": "^1.14.3",
+    "@grpc/proto-loader": "^0.8.1",
+    "axios": "^1.18.1",
+    "chalk": "^5.6.2",
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
+    "inquirer": "^14.0.2"
   },
   "devDependencies": {
-    "@types/bull": "^4.10.0",
-    "@types/express": "^5.0.3",
-    "@types/inquirer": "^9.0.8",
-    "@types/node": "^24.0.4",
-    "rimraf": "^6.0.1",
-    "typescript": "^5.3.0"
+    "@eslint/js": "^10.0.1",
+    "@types/inquirer": "^9.0.10",
+    "@types/node": "^26.1.1",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.6",
+    "rimraf": "^6.1.3",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.65.0"
   },
   "files": [
     "dist/**/*",
@@ -50,14 +68,14 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=22.0.0"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/leanez-ai/sdk"
+    "url": "https://github.com/aivin-ai/sdk"
   },
   "bugs": {
-    "url": "https://github.com/leanez-ai/sdk/issues"
+    "url": "https://github.com/aivin-ai/sdk/issues"
   },
-  "homepage": "https://github.com/leanez-ai/sdk#readme"
+  "homepage": "https://github.com/aivin-ai/sdk#readme"
 }

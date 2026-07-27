@@ -1,771 +1,321 @@
 # 📋 Manifest File Documentation
 
-Manifest file (`manifest.json`) là file mô tả chính của plugin. Dựa vào file này các AI Agent trên LeanEZ có thể sử dụng và triển khai tự động hóa một cách tự động.
-File này sẽ định nghĩa cách sử dụng, metadata, functions và input/output schema.
+`manifest.json` describes your plugin to the platform — its identity, what it expects/returns, and
+how it's allowed to run. It mirrors the backend's `DeveloperPluginManifest`
+(`src/plugins/dto/PluginDTO.ts`) field-for-field; anything not listed here is assigned by the
+platform itself (`id`, `is_verified`, `is_official`, `store_status`, `verification_status`,
+`network_config`, `checksum`, `rate_limit`, ...) and shouldn't be set by hand.
 
-## 🏗️ Cấu trúc tổng quan
+## Minimal example
 
 ```json
 {
-  "name": "plugin-name",
+  "id": "auto-generated-hex-id",
+  "name": "text-summarizer",
+  "description": "Summarize text using AI",
   "version": "1.0.0",
-  "description": "Plugin description",
-  "author": "Author Name",
-  "email": "author@example.com",
-  "agent_specialized": ["*"],
-  "agent_designated": [],
-  "functions": [
-    {
-      "name": "functionName",
-      "trigger_type": ["manual", "api", "chat"],
-      "description": "Function description",
-      "inputs": [...],
-      "outputs": [...],
-      "exceptions": [...],
-      "next_trigger": "pluginName:functionName"
-    }
-  ]
+  "author": "Your Name",
+  "email": "you@example.com",
+  "input": { "text": "string - text to summarize" },
+  "output": { "data": "string - the summary" },
+  "trigger_type": ["manual", "api", "chat"]
 }
 ```
 
-## 📊 Plugin Metadata Properties
+## Fields
 
-| Property | Type | Required | Description | Example |
-|----------|------|----------|-------------|---------|
-| `name` | `string` | ✅ | Tên plugin (unique identifier) | `"text-summarizer"` |
-| `version` | `string` | ✅ | Phiên bản plugin (semantic versioning) | `"1.0.0"` |
-| `description` | `string` | ✅ | Mô tả ngắn gọn về plugin | `"Summarize text using AI"` |
-| `author` | `string` | ❌ | Tên tác giả hoặc tổ chức | `"LeanEZ Team"` |
-| `email` | `string` | ❌ | Email để gửi/nhận thông báo về plugin | `"support@leanez.app"` |
-| `agent_specialized` | `string[]` | ❌ | Danh sách agents được chuyên biệt hóa | `["*"]` hoặc `["sales", "support"]` |
-| `agent_designated` | `string[]` | ❌ | Danh sách agents được chỉ định cụ thể | `["agent-1", "agent-2"]` |
-| `functions` | `PluginFunction[]` | ✅ | Danh sách các functions của plugin | `[{...}]` |
+| Field                        | Type                                                           | Required  | Description                                                                                                                                                                                                                      |
+| ---------------------------- | -------------------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                         | `string`                                                       | ✅ (auto) | Assigned by `aivin create`; the platform confirms/rewrites it on first deploy. Never edit by hand.                                                                                                                               |
+| `name`                       | `string`                                                       | ✅        | Unique identifier, lowercase-hyphen (`"task-manager"`).                                                                                                                                                                          |
+| `description`                | `string`                                                       | ✅        | Short, human-readable summary — also what the AI planner reads to decide when to use this plugin.                                                                                                                                |
+| `version`                    | `string`                                                       | —         | Semantic version. `aivin deploy`/`aivin test` auto-increment the patch on success.                                                                                                                                               |
+| `author`                     | `string`                                                       | —         | Your name.                                                                                                                                                                                                                         |
+| `email`                      | `string`                                                       | —         | Your contact email.                                                                                                                                                                                                                |
+| `input`                      | `object`                                                       | ✅        | Structure of the handler's 2nd argument (`input`) - see [Field type convention](#field-type-convention) below. Not a strict JSON Schema, but it IS actually parsed/validated by the platform (`PluginDataHelper`), not just descriptive text. Supports nested objects/arrays. Read by the planner's auto-mapping (see `mapping_reasoning` below) to fit its own output onto your fields. |
+| `output`                     | `string \| object`                                             | —         | Describes the actual data your plugin returns — `PluginResponse`'s `data` field (and any other fields callers should expect) — not a generic wrapper description. Read by the planner for auditing/replanning and for mapping this plugin's result into a later stage's input. |
+| `instructions`               | `string`                                                       | —         | Standing guidance for the AI on how to use this plugin — read beyond initial selection too: disambiguating between candidates, mapping its output onto `input`, and auditing/replanning a mission that didn't go as expected.   |
+| `capabilities`               | `string[]`                                                     | —         | Free-text capability tags used for discovery/ranking.                                                                                                                                                                            |
+| `selection_rules`            | `string[]`                                                     | —         | **The strongest discovery signal.** Explicit natural-language triggering conditions, shown to the planner as `Rules: ...` right next to `description` when it picks between candidate plugins — weighted above `capabilities`/`instructions`. See [How AI Staff discovers your plugin](../README.md#how-ai-staff-discovers-your-plugin). |
+| `initable`                   | `string[]`                                                     | —         | Fields that must be configured once per workspace before the plugin can run (e.g. an API key) — surfaced to the user as a setup prompt.                                                                                          |
+| `depend_on`                  | `string \| PluginDependency \| (string \| PluginDependency)[]` | —         | Other plugin(s) this one depends on — the dependency is scheduled into an earlier execution stage, so it always runs (and its result is available) before this plugin does. A bare string is required; an object (`{ plugin, optional, condition, fallback_field }`) is conditional. |
+| `mapping_reasoning`          | `boolean \| string[]`                                          | —         | How the planner maps its output onto `input` before calling this plugin: `true` = every field via LLM reasoning; `string[]` = only those fields via reasoning, rest mapped directly by key; omitted = all fields mapped directly by key. |
+| `connection_id`              | `string`                                                       | —         | Namespace for a shared connection — plugins with the same `connection_id` share one set of credentials.                                                                                                                          |
+| `timeout_ms`                 | `number`                                                       | —         | Execution timeout. The host also enforces its own hard cap regardless of this value.                                                                                                                                             |
+| `circuit_breaker`            | `object`                                                       | —         | Per-plugin override of the default circuit breaker: `fail_threshold` (default `3`), `window_sec` (default `300`), `cooldown_sec` (default `60`).                                                                                 |
+| `expose`                     | `string[]`                                                     | —         | Field paths from this plugin's data exposed externally (dynamic API / selection context).                                                                                                                                        |
+| `stacks`                     | `string[]`                                                     | —         | Dedicated service containers (`"REDIS_CACHE"`, `"MONGODB"`, `"BACKGROUND_JOBS"`, `"REALTIME_COMMUNICATION"`) provisioned alongside this plugin's container instead of shared, host-mediated storage. Only relevant outside shared-infrastructure deployments — omit for the normal case. |
+| `trigger_type`               | `TriggerType[]`                                                | —         | Restricts which channels can invoke this plugin: `manual`, `schedule`, `event`, `webhook`, `api`, `chat`. **Omit it entirely to allow all channels** — this is the normal default, not something you need to fill in explicitly. |
+| `initial`                    | `object`                                                       | —         | Default config values.                                                                                                                                                                                                           |
+| `scope`                      | `string[]`                                                     | —         | Business domains this plugin applies to (ranking signal), e.g. `["finance", "sales"]`.                                                                                                                                           |
+| `category`                   | `string`                                                       | —         | Single primary domain for display/classification.                                                                                                                                                                                |
+| `metadata`                   | `object`                                                       | —         | Free-form extra info (complexity, use case, etc.).                                                                                                                                                                               |
+| `license`                    | `string`                                                       | —         | License name (e.g. `MIT`, `Apache-2.0`).                                                                                                                                                                                          |
+| `repository_url`             | `string`                                                       | —         | Link to the plugin's source repo.                                                                                                                                                                                                 |
+| `compute_factor`             | `number`                                                       | —         | Relative resource weight vs. a baseline plugin (default `1`); affects usage accounting.                                                                                                                                          |
+| `side_effect`                | `boolean`                                                      | —         | Set `false` only for pure-read plugins (find/list/get/search). Default (unset) = assumed to have side effects, for safe retry behavior.                                                                                          |
+| `requires_human`             | `boolean`                                                      | —         | Set `true` if this task fundamentally needs a human in the loop (can't be fully automated) — the agentic planner marks it infeasible rather than substituting an automated plugin.                                               |
+| `request_hil`                | `boolean`                                                      | —         | Marks this plugin as sensitive, requiring human-in-the-loop review before running. Usually assigned automatically by the platform's own indexing/audit process rather than set by hand.                                          |
+| `hard_confirm`               | `boolean`                                                      | —         | "Action gate" — only a human admin sets this (never the LLM or an automated audit), for severe/irreversible actions. Unlike `request_hil`, it has no bypass and blocks entirely on automation/system-triggered channels.          |
+| `proxy_config`                | `object`                                                       | —         | Set this to proxy an external system instead of running code — see [MCP proxy plugins](#mcp-proxy-plugins) below. Only the `mcp` variant is meant to be authored through this SDK.                                              |
 
-## 🔧 PluginFunction Properties
+## Multi-function plugins
 
-| Property | Type | Required | Description | Example |
-|----------|------|----------|-------------|---------|
-| `name` | `string` | ✅ | Tên function (phải match với export trong handler) | `"main"`, `"processData"` |
-| `trigger_type` | `string[]` | ✅ | Các trigger types được hỗ trợ | `["manual", "api", "chat"]` |
-| `description` | `string` | ✅ | Mô tả chức năng của function | `"Process user input"` |
-| `inputs` | `PluginInput[]` | ❌ | Danh sách input fields | `[{...}]` |
-| `outputs` | `PluginOutput[]` | ❌ | Schema định nghĩa output structure | `[{...}]` |
-| `exceptions` | `PluginException[]` | ❌ | Định nghĩa error handling và fallback | `[{...}]` |
-| `next_trigger` | `string` | ❌ | Function tiếp theo được trigger | `"pluginName:functionName"` |
+`manifest.json` is always **one JSON object**, never a bare array. For a plugin that exposes more
+than one function, that object is a group: fields shared by every function written once, plus a
+`plugins` array holding each function's own config:
 
-### 🤖 Function Roles trong AI System
+| Field     | Type    | Required | Description                                                                                                     |
+| --------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `plugins` | `array` | ✅       | One entry per function. Each entry is a partial manifest (all the same fields from [Fields](#fields) apply) plus a required `func`. |
 
-#### **Main Function** - Entry Point mặc định
-- **Tên**: Luôn là `"main"`
-- **Vai trò**: Được AI gọi tự động khi sử dụng plugin
-- **Trigger**: Chủ yếu `["chat", "api", "manual"]`
-- **Mục đích**: Xử lý logic chính của plugin
+Every field *outside* `plugins` (`version`, `author`, `email`, `license`, `connection_id`, ...) is
+copied onto each entry in `plugins` before anything else processes this file -
+an entry's own value wins if it sets the same field itself. Each entry also needs its own `func`:
 
-#### **Tool Functions** - AI Tool Calls
-- **Tên**: Tùy chỉnh (vd: `"searchData"`, `"createUser"`, `"sendEmail"`)
-- **Vai trò**: AI gọi khi cần thực hiện tác vụ cụ thể
-- **Trigger**: Thường có `["api", "chat"]`
-- **Mục đích**: Cung cấp specialized capabilities cho AI
+| Field  | Type     | Required (per entry) | Description                                                                                   |
+| ------ | -------- | --------------------- | ----------------------------------------------------------------------------------------------- |
+| `func` | `string` | ✅                     | Name of the exported function in the shared `src/main.ts` that this entry calls, e.g. `"summarizeTicket"` for `export async function summarizeTicket(mission, input, ctx) { ... }`. |
 
-**Workflow AI sử dụng plugin:**
-1. AI gọi `main()` để khởi động plugin
-2. Nếu cần, AI gọi các tool functions cụ thể
-3. Plugin có thể chain functions với `next_trigger`
+Each entry is deployed and discovered as its **own independent plugin `id`** — its own entry in the
+plugin store/catalog, with its own `description`/`selection_rules`/`input`/`output`/etc. for the
+planner — even though every entry shares one uploaded `src/main.ts` and **one running container**.
+`aivin deploy`/`aivin test` upload the code once; every entry's `proxy_config.code_id` (assigned by
+the platform) points at that same shared container, so N plugin ids all route to it.
 
-## 🚀 Function Input Format
+Resolution at invocation time (`PluginServer.resolveTargetFunction`): the host already knows exactly
+which entry (`id`) was triggered before it ever calls into the container, so it sends that entry's
+`func` explicitly with the request — the container just calls `handler[func]` directly, no local
+guessing needed. The one place local matching still applies is `aivin start` (no real host in the
+loop): pass `mission` matching an entry's `id` (or `func` directly) to pick which one runs, for
+manual `curl` testing across every function in one dev-mode process — see
+[`aivin start`](./CLI.md#aivin-start).
 
-**Tất cả functions nhận input dưới dạng object với structure sau:**
+### Example
 
 ```typescript
-// Function signature trong handler.ts
-export async function todoManager({
-  ctx,        // MessageContextDTO - context từ LeanEZ
-  title,      // Args từ manifest inputs
-  priority,   // Args từ manifest inputs
-  ...args     // Tất cả args khác từ manifest
-}) {
-  // Function implementation
+// src/main.ts — two named exports, no `main`/default export needed
+import { ai } from '@aivin/sdk';
+import { PluginStatus } from '@aivin/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
+
+export async function summarizeTicket(
+  mission: string,
+  input: PluginInput,
+  ctx: PluginContext,
+): Promise<PluginResponse> {
+  const summary = await ai.prompt(`Summarize this support ticket:\n\n${input.text}`);
+  return { status: PluginStatus.SUCCESS, data: summary };
+}
+
+export async function tagUrgency(
+  mission: string,
+  input: PluginInput,
+  ctx: PluginContext,
+): Promise<PluginResponse> {
+  const urgency = await ai.prompt(
+    `Classify the urgency of this support ticket as low/medium/high:\n\n${input.text}`,
+  );
+  return { status: PluginStatus.SUCCESS, data: urgency };
 }
 ```
 
-**Trong đó:**
-- `ctx: MessageContextDTO` - Context thông tin từ LeanEZ system
-- `...args` - Các arguments được định nghĩa trong manifest `inputs`
-
-**Ví dụ manifest inputs:**
 ```json
 {
-  "name": "todoManager",
-  "trigger_type": ["chat", "api"],
-  "inputs": [
-    {
-      "field": "title",
-      "required": true,
-      "description": "Task title",
-      "type": "string"
-    },
-    {
-      "field": "priority", 
-      "required": false,
-      "description": "Task priority",
-      "type": "string",
-      "default": "medium"
-    }
-  ]
-}
-```
-
-**Function implementation:**
-```typescript
-export async function todoManager({ ctx, title, priority = "medium" }) {
-  // ctx.session - Session information
-  // ctx.user - Current user
-  // ctx.workspace - Current workspace
-  // title, priority - từ manifest inputs
-  
-  return {
-    success: true,
-    data: { title, priority },
-    message: "Task created successfully"
-  };
-}
-```
-
-## 📥 PluginInput Properties
-
-| Property | Type | Required | Description | Example |
-|----------|------|----------|-------------|---------|
-| `field` | `string` | ✅ | Tên field trong input object | `"text"`, `"userId"` |
-| `required` | `boolean` | ✅ | Field có bắt buộc hay không | `true`, `false` |
-| `description` | `string` | ✅ | Mô tả ý nghĩa và cách sử dụng field | `"Text to be processed"` |
-| `type` | `string` | ❌ | Kiểu dữ liệu của field | `"string"`, `"number"`, `"boolean"` |
-| `default` | `any` | ❌ | Giá trị mặc định nếu không được cung cấp | `""`, `0`, `{}` |
-
-## 📤 PluginOutput Properties
-
-| Property | Type | Required | Description | Example |
-|----------|------|----------|-------------|---------|
-| `field` | `string` | ✅ | Tên field trong output object | `"result"`, `"message"`, `"success"` |
-| `description` | `string` | ✅ | Mô tả ý nghĩa của output field | `"Processing result data"` |
-| `type` | `string` | ❌ | Kiểu dữ liệu của field | `"string"`, `"number"`, `"boolean"`, `"object"`, `"array"` |
-| `example` | `any` | ❌ | Ví dụ giá trị output | `"Hello World"`, `123`, `true` |
-
-## ⚠️ PluginException Properties
-
-| Property | Type | Required | Description | Example |
-|----------|------|----------|-------------|---------|
-| `code` | `string` | ✅ | Mã lỗi để identify exception | `"INVALID_INPUT"`, `"API_TIMEOUT"`, `"AUTH_FAILED"` |
-| `message` | `string` | ✅ | Human-readable error message | `"Invalid input format provided"` |
-| `description` | `string` | ✅ | Chi tiết về khi nào error xảy ra | `"Triggered when input validation fails"` |
-| `fallback` | `string` | ❌ | Function được trigger khi error xảy ra | `"pluginName:handleError"`, `"error-handler:processException"` |
-| `retry` | `boolean` | ❌ | Có thể retry operation hay không | `true`, `false` |
-
-**Lưu ý về Fallback Function:**
-- Fallback function sẽ nhận input với format: `{code, message, data}`
-- `code`: Mã error code từ exception
-- `message`: Error message từ exception  
-- `data`: Dữ liệu gốc từ function call bị lỗi
-
-## 🎯 Trigger Types
-
-| Trigger | Description | Use Case |
-|---------|-------------|----------|
-| `manual` | Được gọi thủ công bởi user | Button clicks, form submissions |
-| `schedule` | Được gọi theo lịch trình | Cron jobs, periodic tasks |
-| `event` | Được gọi khi có event xảy ra | Data changes, webhooks |
-| `webhook` | Được gọi từ external HTTP requests | API integrations |
-| `api` | Được gọi từ API endpoints | Direct function calls |
-| `chat` | Được gọi từ chat interface | Chatbot interactions |
-
-## 🔤 Data Types
-
-| Type | JavaScript Type | Description | Example |
-|------|-----------------|-------------|---------|
-| `string` | `string` | Text data | `"Hello World"` |
-| `number` | `number` | Numeric data | `123`, `45.67` |
-| `boolean` | `boolean` | True/false values | `true`, `false` |
-| `object` | `object` | Complex objects | `{"key": "value"}` |
-| `array` | `Array` | Lists of items | `[1, 2, 3]`, `["a", "b"]` |
-
-## 📝 Examples
-
-### Basic Plugin với Main Function
-```json
-{
-  "name": "hello-world",
   "version": "1.0.0",
-  "description": "Simple greeting plugin",
-  "author": "Developer",
-  "email": "dev@example.com",
-  "agent_specialized": ["*"],
-  "agent_designated": [],
-  "functions": [
+  "author": "Your Name",
+  "email": "you@example.com",
+  "license": "MIT",
+  "plugins": [
     {
-      "name": "main",
-      "trigger_type": ["manual", "api", "chat"],
-      "description": "Say hello to user - Entry point cho AI",
-      "inputs": [
-        {
-          "field": "name",
-          "required": true,
-          "description": "User's name",
-          "type": "string"
-        }
-      ],
-      "outputs": [
-        {
-          "field": "message",
-          "description": "Generated greeting message",
-          "type": "string",
-          "example": "Hello, John!"
-        },
-        {
-          "field": "success",
-          "description": "Operation success status",
-          "type": "boolean",
-          "example": true
-        }
-      ],
-      "exceptions": [
-        {
-          "code": "EMPTY_NAME",
-          "message": "Name cannot be empty or undefined",
-          "description": "Triggered when name input is missing or empty string",
-          "fallback": "hello-world:handleEmptyName",
-          "retry": false
-        },
-        {
-          "code": "INVALID_NAME_FORMAT",
-          "message": "Name contains invalid characters",
-          "description": "Triggered when name contains special characters or numbers",
-          "fallback": "hello-world:handleInvalidFormat",
-          "retry": true
-        }
-      ]
+      "id": "auto-generated-hex-id",
+      "name": "summarize-ticket",
+      "description": "Summarize a support ticket",
+      "input": { "text": "string - ticket content" },
+      "output": { "data": "string - the summary" },
+      "func": "summarizeTicket"
     },
     {
-      "name": "handleEmptyName",
-      "trigger_type": ["event"],
-      "description": "Handle empty name error case",
-      "inputs": [
-        {
-          "field": "code",
-          "required": true,
-          "description": "Error code",
-          "type": "string"
-        },
-        {
-          "field": "message",
-          "required": true,
-          "description": "Error message",
-          "type": "string"
-        },
-        {
-          "field": "data",
-          "required": true,
-          "description": "Original function input data",
-          "type": "object"
-        }
-      ],
-      "outputs": [
-        {
-          "field": "success",
-          "description": "Error handling success status",
-          "type": "boolean",
-          "example": false
-        },
-        {
-          "field": "message",
-          "description": "Fallback greeting message",
-          "type": "string",
-          "example": "Hello, Anonymous!"
-        },
-        {
-          "field": "error",
-          "description": "Error code for client handling",
-          "type": "string",
-          "example": "EMPTY_NAME"
-        }
-      ]
-    },
-    {
-      "name": "handleInvalidFormat",
-      "trigger_type": ["event"],
-      "description": "Handle invalid name format error case",
-      "inputs": [
-        {
-          "field": "code",
-          "required": true,
-          "description": "Error code",
-          "type": "string"
-        },
-        {
-          "field": "message",
-          "required": true,
-          "description": "Error message",
-          "type": "string"
-        },
-        {
-          "field": "data",
-          "required": true,
-          "description": "Original function input data",
-          "type": "object"
-        }
-      ],
-      "outputs": [
-        {
-          "field": "success",
-          "description": "Error handling success status",
-          "type": "boolean",
-          "example": false
-        },
-        {
-          "field": "message",
-          "description": "Error guidance message",
-          "type": "string",
-          "example": "Please provide a valid name without special characters"
-        },
-        {
-          "field": "error",
-          "description": "Error code for client handling",
-          "type": "string",
-          "example": "INVALID_NAME_FORMAT"
-        }
-      ]
+      "id": "auto-generated-hex-id",
+      "name": "tag-urgency",
+      "description": "Tag a support ticket's urgency",
+      "input": { "text": "string - ticket content" },
+      "output": { "data": "string - urgency level (low/medium/high)" },
+      "func": "tagUrgency"
     }
   ]
 }
 ```
 
-### Advanced Plugin với Main + Tool Functions
+Each of these deploys/discovers as a fully separate plugin (`summarize-ticket` and `tag-urgency`),
+each independently callable and rankable by the planner, both backed by the one `src/main.ts` above
+and sharing the `version`/`author`/`email`/`license` written once at the top level.
+
+### When to use this vs. separate plugin projects
+
+Reach for a multi-function manifest when you have several small, related functions that logically
+belong together and would otherwise duplicate most of their boilerplate/config (shared
+`connection_id`, dependencies, `package.json`, deploy pipeline, ...) across separate
+`aivin create` projects. If the functions are unrelated or independently versioned/owned, prefer
+separate plugin projects instead.
+
+### See also
+
+- [../README.md#manifestjson](../README.md#manifestjson) — the same feature introduced with a
+  quick-start example
+- [Fields](#fields) — the full per-entry field reference every array entry draws from
+
+## Field type convention
+
+`input`/`output` aren't just descriptive - the platform actually parses and validates against them
+(the same engine the agentic planner uses to check for missing/invalid fields before calling your
+plugin), so the shape below is a real contract, not a suggestion.
+
+**Leaf field**: `"field_name": "type - description"`
+
+```json
+{ "email": "string - recipient address" }
+```
+
+- Optional: add `?` to the end of either the field name or the type - `"cc?"` and `"cc": "string? - ..."` are equivalent.
+- If a value is missing/empty and the field isn't optional, the platform blocks the call before your `main()` ever runs.
+
+**Enum**: use type `enum`, and declare the allowed values (and optionally a default) inside the description itself:
+
+```json
+{ "status": "enum - order status. enum: pending, paid, cancelled. default: pending" }
+```
+
+The values after `enum:` are comma/pipe/slash-separated and read up to the next `.`/`;`/newline.
+Don't describe fixed choices as `"string - 'a' or 'b'"` - that isn't parsed as a constraint at all,
+just prose; use `enum` so the platform can actually enforce it.
+
+**Nested object**: value is a plain object (recurses the same rules):
+
+```json
+{ "address": { "city": "string - city name", "zip?": "string - postal code" } }
+```
+
+**Array**: value is a one-element array - `[<leaf schema>]` for a list of primitives, or `[{...}]` for a list of objects:
+
+```json
+{ "tags": ["string - a tag"], "items": [{ "sku": "string - product sku", "qty": "number - quantity" }] }
+```
+
+**Valid `type` tokens**:
+
+| Type                     | Checks                                                                                     |
+| ------------------------- | -------------------------------------------------------------------------------------------- |
+| `string`                  | Non-empty (the default/fallback type if omitted).                                            |
+| `number` / `int` / `float` | Numeric.                                                                                     |
+| `boolean` / `bool`        | `true`/`false`/`1`/`0`.                                                                       |
+| `email`                   | Valid email format.                                                                           |
+| `phone`                   | Valid phone number format.                                                                    |
+| `url`                     | Valid URL.                                                                                     |
+| `password`                | >6 chars, needs upper+lowercase+special char.                                                 |
+| `id`                      | Non-empty string.                                                                              |
+| `uuid`                    | UUID format.                                                                                    |
+| `date` / `datetime`       | Parseable date with a 4-digit year.                                                            |
+| `file`                    | Presence check only - actual file handling is upload-layer concern.                            |
+| `json`                    | Valid JSON string.                                                                              |
+| `object`                  | An object (or a JSON string of one).                                                           |
+| `any`                     | Always passes.                                                                                  |
+| `enum`                    | Value must be one of the options declared in the description (see above).                      |
+| `agent` / `project` / `member` | Must exist in the current workspace - a workspace-entity lookup, not a format check.       |
+
+## Handler resolution
+
+`main()` is always the entry point the host calls. If it's missing, the default export is used;
+failing that, the first exported function. Only one of these should exist per `src/main.ts` — see
+[SINGLE_METHOD_PLUGINS.md](./SINGLE_METHOD_PLUGINS.md). This resolution order applies to a
+single-function plugin (`manifest.json` is one object); see [Multi-function
+plugins](#multi-function-plugins) below for the `plugins: [...]` case, which resolves differently.
+
+```typescript
+export async function main(
+  mission: string,
+  input: PluginInput,
+  ctx: PluginContext,
+): Promise<PluginResponse> {
+  return { status: PluginStatus.SUCCESS, data: {/* ... */}, message: 'Processed successfully' };
+}
+```
+
+## Trigger Types
+
+| Trigger    | Description                                           |
+| ---------- | ----------------------------------------------------- |
+| `manual`   | User-triggered (button, form).                        |
+| `schedule` | Cron-style periodic invocation.                       |
+| `event`    | Triggered by a data change or webhook-adjacent event. |
+| `webhook`  | External HTTP request.                                |
+| `api`      | Direct programmatic call.                             |
+| `chat`     | Invoked from a chat/agent conversation.               |
+
+## MCP proxy plugins
+
+A plugin can also just forward calls to an existing [MCP](https://modelcontextprotocol.io) server
+instead of running your own code — one of its tools, resources, or prompts becomes callable like
+any other plugin, with no `src/main.ts` at all:
+
+```bash
+aivin mcp create doc-search \
+  --url https://example.com/mcp --tool-name search_docs \
+  --description "Search external docs via MCP"
+```
+
+This writes a manifest-only plugin — just `manifest.json`, no `src/main.ts`/`package.json`:
+
 ```json
 {
-  "name": "task-manager",
-  "version": "2.1.0",
-  "description": "Advanced task management plugin",
-  "author": "LeanEZ Team",
-  "agent_specialized": ["productivity", "workflow"],
-  "functions": [
-    {
-      "name": "main",
-      "trigger_type": ["chat", "api", "manual"],
-      "description": "Main entry point - AI sử dụng để khởi động plugin",
-      "inputs": [
-        {
-          "field": "action",
-          "required": true,
-          "description": "Action to perform: 'list', 'create', 'update', 'delete'",
-          "type": "string"
-        },
-        {
-          "field": "data",
-          "required": false,
-          "description": "Action data payload",
-          "type": "object",
-          "default": {}
-        }
-      ],
-      "outputs": [
-        {
-          "field": "success",
-          "description": "Operation success status",
-          "type": "boolean",
-          "example": true
-        },
-        {
-          "field": "result",
-          "description": "Action result data",
-          "type": "object",
-          "example": {"taskId": "123", "title": "New Task"}
-        },
-        {
-          "field": "message",
-          "description": "Human-readable response message",
-          "type": "string",
-          "example": "Task created successfully"
-        }
-      ],
-      "exceptions": [
-        {
-          "code": "UNKNOWN_ACTION",
-          "message": "Action not supported by this plugin",
-          "description": "Triggered when action is not in supported list",
-          "fallback": "task-manager:handleUnknownAction",
-          "retry": true
-        },
-        {
-          "code": "DATABASE_ERROR",
-          "message": "Failed to connect to database",
-          "description": "Triggered when MongoDB connection fails",
-          "fallback": "task-manager:handleDatabaseError",
-          "retry": true
-        }
-      ]
-    },
-    {
-      "name": "createTask",
-      "trigger_type": ["api", "chat"],
-      "description": "Tool function - AI gọi để tạo task cụ thể",
-      "inputs": [
-        {
-          "field": "title",
-          "required": true,
-          "description": "Task title",
-          "type": "string"
-        },
-        {
-          "field": "description",
-          "required": false,
-          "description": "Task description",
-          "type": "string",
-          "default": ""
-        },
-        {
-          "field": "priority",
-          "required": false,
-          "description": "Task priority level",
-          "type": "number",
-          "default": 1
-        },
-        {
-          "field": "assignees",
-          "required": false,
-          "description": "List of user IDs to assign",
-          "type": "array",
-          "default": []
-        }
-      ],
-      "outputs": [
-        {
-          "field": "success",
-          "description": "Task creation success status",
-          "type": "boolean",
-          "example": true
-        },
-        {
-          "field": "taskId",
-          "description": "ID of the created task",
-          "type": "string",
-          "example": "task_123456"
-        },
-        {
-          "field": "task",
-          "description": "Complete task object",
-          "type": "object",
-          "example": {"_id": "task_123456", "title": "New Task", "status": "pending"}
-        },
-        {
-          "field": "message",
-          "description": "Creation status message",
-          "type": "string",
-          "example": "Task 'New Task' created successfully"
-        }
-      ],
-      "exceptions": [
-        {
-          "code": "TITLE_TOO_LONG",
-          "message": "Task title exceeds maximum length",
-          "description": "Triggered when title is longer than 200 characters",
-          "fallback": "task-manager:handleTitleTooLong",
-          "retry": true
-        },
-        {
-          "code": "INVALID_ASSIGNEE",
-          "message": "One or more assignees not found",
-          "description": "Triggered when assignee ID doesn't exist in workspace",
-          "fallback": "task-manager:handleInvalidAssignee",
-          "retry": true
-        },
-        {
-          "code": "QUOTA_EXCEEDED",
-          "message": "Maximum number of tasks reached",
-          "description": "Triggered when workspace task limit is exceeded",
-          "fallback": "task-manager:handleQuotaExceeded",
-          "retry": false
-        }
-      ],
-      "next_trigger": "task-manager:sendNotification"
-    },
-    {
-      "name": "searchTasks",
-      "trigger_type": ["api", "chat"],
-      "description": "Tool function - AI gọi để tìm kiếm tasks",
-      "inputs": [
-        {
-          "field": "query",
-          "required": true,
-          "description": "Search query string",
-          "type": "string"
-        },
-        {
-          "field": "filters",
-          "required": false,
-          "description": "Search filters (status, priority, assignee)",
-          "type": "object",
-          "default": {}
-        }
-      ],
-      "outputs": [
-        {
-          "field": "tasks",
-          "description": "Array of matching tasks",
-          "type": "array",
-          "example": [{"_id": "123", "title": "Task 1"}, {"_id": "456", "title": "Task 2"}]
-        },
-        {
-          "field": "total",
-          "description": "Total number of matching tasks",
-          "type": "number",
-          "example": 15
-        },
-        {
-          "field": "success",
-          "description": "Search operation success status",
-          "type": "boolean",
-          "example": true
-        }
-      ],
-      "exceptions": [
-        {
-          "code": "QUERY_TOO_SHORT",
-          "message": "Search query must be at least 2 characters",
-          "description": "Triggered when query length is less than 2 characters",
-          "fallback": "task-manager:handleShortQuery",
-          "retry": true
-        },
-        {
-          "code": "SEARCH_TIMEOUT",
-          "message": "Search operation timed out",
-          "description": "Triggered when search takes longer than 30 seconds",
-          "fallback": "task-manager:handleSearchTimeout",
-          "retry": true
-        }
-      ]
-    },
-    {
-      "name": "sendNotification",
-      "trigger_type": ["event"],
-      "description": "Internal function - Được trigger sau khi tạo task",
-      "inputs": [
-        {
-          "field": "taskId",
-          "required": true,
-          "description": "ID of the created task",
-          "type": "string"
-        }
-      ],
-      "outputs": [
-        {
-          "field": "notificationSent",
-          "description": "Whether notification was sent successfully",
-          "type": "boolean",
-          "example": true
-        },
-        {
-          "field": "recipients",
-          "description": "Number of users who received notification",
-          "type": "number",
-          "example": 3
-        }
-      ],
-      "exceptions": [
-        {
-          "code": "TASK_NOT_FOUND",
-          "message": "Task ID does not exist",
-          "description": "Triggered when taskId is not found in database",
-          "fallback": "task-manager:handleTaskNotFound",
-          "retry": false
-        },
-        {
-          "code": "NOTIFICATION_SERVICE_DOWN",
-          "message": "Unable to send notifications",
-          "description": "Triggered when PubSub service is unavailable",
-          "fallback": "task-manager:handleNotificationFailure",
-          "retry": true
-        }
-      ]
-    }
-  ]
-}
-```
-
-## ✅ Best Practices
-
-### Naming Conventions
-- **Plugin names**: lowercase, hyphen-separated (`task-manager`, `email-sender`)
-- **Function names**: camelCase (`createTask`, `sendEmail`, `processData`)
-- **Field names**: camelCase (`userId`, `taskTitle`, `maxResults`)
-
-### Versioning
-- Sử dụng [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`
-- `1.0.0` → Initial release
-- `1.0.1` → Bug fixes
-- `1.1.0` → New features (backward compatible)
-- `2.0.0` → Breaking changes
-
-### Input Design
-- **Tên fields rõ ràng**: `userName` thay vì `n`
-- **Descriptions chi tiết**: Giải thích rõ ràng mục đích và format
-- **Default values hợp lý**: Cung cấp defaults cho optional fields
-- **Type consistency**: Luôn specify type cho clarity
-
-### Output Design
-- **Meaningful data**: Include các thông tin cần thiết cho client
-- **Clear field names**: Sử dụng tên fields rõ ràng và consistent
-- **Appropriate types**: Specify đúng data types cho từng field
-
-### Function Design cho AI Integration
-
-#### **Main Function Best Practices**
-- **Đơn giản và linh hoạt**: Nhận action parameter để route đến logic phù hợp
-- **Comprehensive outputs**: Trả về đầy đủ thông tin để AI hiểu kết quả
-- **Error handling**: Luôn có fallback và error messages rõ ràng
-- **Documentation**: Description phải giải thích rõ AI nên sử dụng khi nào
-
-```javascript
-// ✅ Good main function
-export async function main(input) {
-  const { action, data = {} } = input;
-  
-  switch (action) {
-    case 'create':
-      return await createTask(data);
-    case 'search':
-      return await searchTasks(data);
-    default:
-      return {
-        success: false,
-        message: `Unknown action: ${action}. Available: create, search, list, update, delete`,
-        availableActions: ['create', 'search', 'list', 'update', 'delete']
-      };
+  "id": "auto-generated-hex-id",
+  "name": "doc-search",
+  "description": "Search external docs via MCP",
+  "version": "1.0.0",
+  "input": { "data": "object - parameters forwarded to the MCP tool/resource/prompt as-is" },
+  "output": { "data": "object - the MCP server response content, unwrapped" },
+  "proxy_config": {
+    "type": "mcp",
+    "mcp_transport": "sse",
+    "mcp_url": "https://example.com/mcp",
+    "mcp_kind": "tool",
+    "mcp_tool_name": "search_docs"
   }
 }
 ```
 
-#### **Tool Function Best Practices**
-- **Single responsibility**: Mỗi function làm 1 việc cụ thể
-- **Descriptive names**: Tên function phải rõ ràng về chức năng
-- **Minimal inputs**: Chỉ yêu cầu parameters thực sự cần thiết
-- **Structured outputs**: Format consistent để AI dễ parse
+`aivin deploy`/`aivin test` detect `proxy_config` automatically and send the manifest alone — no
+code is uploaded or scanned.
 
-```javascript
-// ✅ Good tool function
-export async function createTask(input) {
-  const { title, description = '', priority = 1, assignees = [] } = input;
-  
-  try {
-    const task = await TaskModel.create({
-      title,
-      description,
-      priority,
-      assignees,
-      createdAt: new Date()
-    });
-    
-    return {
-      success: true,
-      taskId: task._id,
-      task: task.toObject(),
-      message: `Task "${title}" created successfully`
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message,
-      message: 'Failed to create task'
-    };
-  }
-}
-```
+| `proxy_config` field                    | Applies when                | Description                                                                                        |
+| ---------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------- |
+| `type`                                   | always                        | Always `"mcp"` for plugins created through `aivin mcp create`.                                     |
+| `mcp_transport`                          | always                        | `"stdio"` (launch a local command) or `"sse"` (remote Streamable HTTP server).                     |
+| `mcp_command` / `mcp_args`               | `mcp_transport: "stdio"`      | Command (+ args) that launches the MCP server.                                                      |
+| `mcp_url`                                | `mcp_transport: "sse"`        | URL of the remote MCP server.                                                                       |
+| `mcp_kind`                               | always                        | `"tool"` (default), `"resource"`, or `"prompt"` — decides which MCP JSON-RPC method gets called.    |
+| `mcp_tool_name`                          | `mcp_kind: "tool"`            | The real tool name per the MCP protocol.                                                            |
+| `mcp_resource_uri` / `mcp_resource_mime_type` | `mcp_kind: "resource"`   | URI (and optional MIME type) of the resource.                                                       |
+| `mcp_prompt_name`                        | `mcp_kind: "prompt"`          | The real prompt name per the MCP protocol.                                                          |
+| `auth_secret_key`                        | server requires auth          | Name of a secret already stored in your workspace's credential store, used as the Bearer token — never the raw secret itself. |
 
-#### **Exception Handling Best Practices**
-- **Specific error codes**: Sử dụng codes rõ ràng và consistent
-- **Helpful fallback functions**: Tạo dedicated functions để xử lý từng loại error
-- **Function naming**: Fallback functions nên có prefix `handle` (vd: `handleInvalidInput`)
-- **Retry logic**: Chỉ cho phép retry với errors có thể recover
+Run `aivin mcp create <name>` without any options for an interactive prompt instead, or pass
+`--json`-style flags (see `aivin mcp create --help`) to script it.
 
-```javascript
-// ✅ Good exception handling với fallback function
-export async function processData(input) {
-  try {
-    // Validate input
-    if (!input.data || typeof input.data !== 'string') {
-      throw new Error('INVALID_INPUT');
-    }
-    
-    if (input.data.length > 10000) {
-      throw new Error('DATA_TOO_LARGE');
-    }
-    
-    // Process data
-    const result = await processLargeData(input.data);
-    
-    return {
-      success: true,
-      result: result,
-      message: 'Data processed successfully'
-    };
-    
-  } catch (error) {
-    // Let the system trigger fallback function
-    throw error;
-  }
-}
+The platform also supports other proxy types server-side (REST, n8n, Coze, Dify, ...) — those are
+configured through the dashboard, not through this SDK.
 
-// Fallback function để xử lý INVALID_INPUT error
-export async function handleInvalidInput(input) {
-  const { code, message, data } = input;
-  
-  // Log error cho monitoring
-  console.error(`Error ${code}: ${message}`, data);
-  
-  // Return fallback response
-  return {
-    success: false,
-    result: null,
-    message: 'Please provide valid string data',
-    error: code,
-    originalData: data
-  };
-}
+## Common mistakes
 
-// Fallback function để xử lý DATA_TOO_LARGE error
-export async function handleDataTooLarge(input) {
-  const { code, message, data } = input;
-  
-  return {
-    success: false,
-    result: null,
-    message: 'Data must be less than 10,000 characters',
-    error: code,
-    dataLength: data.data?.length || 0,
-    maxLength: 10000
-  };
-}
-```
+| ❌ Wrong                     | ✅ Right                                    | Why                                                                                |
+| ---------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `"name": "My Plugin"`        | `"name": "my-plugin"`                       | Must be lowercase, hyphen-separated.                                               |
+| Hand-editing `"id"`          | Let `aivin create`/`aivin deploy` manage it | The platform owns plugin identity.                                                 |
+| `"functions": [...]`         | `"plugins": [...]`                          | `functions` isn't a recognized field — see [Multi-function plugins](#multi-function-plugins).      |
+| `manifest.json` as a bare `[...]` array | `{ "plugins": [...] }` (shared fields at the top level) | `manifest.json` is always one JSON object — see [Multi-function plugins](#multi-function-plugins). |
 
-#### **Fallback Function Guidelines**
+## Related
 
-| Pattern | Description | Example |
-|---------|-------------|---------|
-| **Validation Errors** | Trả về guidance message cho user | `handleInvalidEmail`, `handleMissingField` |
-| **System Errors** | Log error và trả về generic message | `handleDatabaseError`, `handleApiTimeout` |
-| **Business Logic Errors** | Trả về specific business context | `handleQuotaExceeded`, `handleInsufficientPermission` |
-| **Retry Scenarios** | Include retry instructions | `handleRateLimit`, `handleTemporaryFailure` |
-
-## 🚫 Common Mistakes
-
-| ❌ Sai | ✅ Đúng | Giải thích |
-|---------|---------|------------|
-| `"name": "My Plugin"` | `"name": "my-plugin"` | Plugin names phải lowercase, hyphen-separated |
-| `"field": "data"` không có description | `"field": "data", "description": "Input data to process"` | Luôn cung cấp description rõ ràng |
-| `"required": "true"` | `"required": true` | Required field phải là boolean, không phải string |
-| Không specify triggers | `"trigger_type": ["manual", "api"]` | Luôn define triggers cho function |
-| `"outputs": "string"` | `"outputs": {"result": "string"}` | Outputs phải là object hoặc null |
-
-## 🔗 Related Documentation
-
-- **[Plugin Development Guide](../README.md)** - Hướng dẫn tổng quan
-- **[Examples](./EXAMPLES.md)** - Các ví dụ thực tế
-- **[CLI Commands](../README.md#cli-commands)** - Lệnh CLI để tạo và deploy
-- **[Services Overview](../README.md#services-overview)** - Các services có sẵn 
+- **[SDK Reference](./SDK.md)** — what your handler can call
+- **[Single Method Pattern](./SINGLE_METHOD_PLUGINS.md)** — handler conventions
+- **[Examples](./EXAMPLES.md)** — full manifest + `src/main.ts` pairs

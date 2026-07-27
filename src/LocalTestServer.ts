@@ -1,167 +1,96 @@
 import * as http from 'http';
-import express from 'express';
-import { 
-    PluginExecutionResult, 
-    PluginManifest,
-    LogLevel 
-} from './types/PluginTypes';
+import { PluginServer } from './PluginServer';
+import { PluginIdentity } from './sdk/SDKClient';
 
 export interface LocalTestServerConfig {
-    port?: number;
-    pluginsPath?: string;
-    logLevel?: LogLevel;
-    enableCors?: boolean;
+  port?: number;
+  pluginsPath?: string;
 }
 
 /**
- * Local Test Server for Plugin Development
- * 
- * Provides a local HTTP server for testing plugins during development.
- * Mimics the LeanEZ server environment for plugin execution.
+ * Local Test Server for plugin development.
+ *
+ * A tiny dependency-free HTTP shim (no Express) around `PluginServer.testInvoke()`, so a plugin's
+ * `main()` can be exercised with plain `curl` during development without needing a gRPC client
+ * (e.g. grpcurl) or a running Aivin backend. `ctx.sdk.*` calls still work for real if
+ * SDK_GRPC_ENDPOINT/SDK_GRPC_SECRET are pointed at an actual (e.g. local dev) backend.
  */
 export class LocalTestServer {
-    private server?: http.Server;
-    private app: express.Application;
-    private config: Required<LocalTestServerConfig>;
+  private readonly port: number;
+  private readonly pluginServer: PluginServer;
+  private server?: http.Server;
 
-    constructor(config: LocalTestServerConfig = {}) {
-        this.config = {
-            port: config.port || 3001,
-            pluginsPath: config.pluginsPath || '.',
-            logLevel: config.logLevel || 'info',
-            enableCors: config.enableCors ?? true
-        };
+  constructor(config: LocalTestServerConfig = {}) {
+    // Not 3000/3001/8080/etc - those collide with almost every other local dev server (including
+    // the Aivin backend's own default of 3001) if you're running this alongside one.
+    this.port = config.port || 4001;
+    this.pluginServer = new PluginServer({ plugins_path: config.pluginsPath });
+  }
 
-        this.app = express();
-        this.setupMiddleware();
-        this.setupRoutes();
+  async start(): Promise<void> {
+    this.server = http.createServer((req, res) => this.handleRequest(req, res));
+
+    await new Promise<void>((resolve) => {
+      this.server!.once('error', (error: NodeJS.ErrnoException) => {
+        console.warn(
+          `Local Test Server could not start on port ${this.port}: ${error.message} (gRPC server is unaffected)`,
+        );
+        resolve();
+      });
+      this.server!.listen(this.port, () => {
+        console.log(`Local Test Server started on http://localhost:${this.port}`);
+        console.log(
+          `  curl -X POST http://localhost:${this.port}/invoke -H 'content-type: application/json' -d '{"input":{}}'`,
+        );
+        resolve();
+      });
+    });
+  }
+
+  async stop(): Promise<void> {
+    if (!this.server) return;
+    await new Promise<void>((resolve) => this.server!.close(() => resolve()));
+  }
+
+  private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    if (req.method === 'GET' && req.url === '/health') {
+      this.sendJson(res, 200, { status: 'healthy', timestamp: new Date().toISOString() });
+      return;
     }
 
-    /**
-     * Setup Express middleware
-     */
-    private setupMiddleware(): void {
-        // JSON parsing
-        this.app.use(express.json({ limit: '10mb' }));
-
-        // CORS
-        if (this.config.enableCors) {
-            this.app.use((req, res, next) => {
-                res.header('Access-Control-Allow-Origin', '*');
-                res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-                res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-                
-                if (req.method === 'OPTIONS') {
-                    res.sendStatus(200);
-                } else {
-                    next();
-                }
-            });
-        }
-
-        // Request logging
-        this.app.use((req, res, next) => {
-            this.log('debug', `${req.method} ${req.path}`);
-            next();
-        });
+    if (req.method !== 'POST' || req.url !== '/invoke') {
+      this.sendJson(res, 404, { success: false, error: 'POST /invoke is the only route.' });
+      return;
     }
 
-    /**
-     * Setup API routes
-     */
-    private setupRoutes(): void {
-        // Health check
-        this.app.get('/health', (req, res) => {
-            res.json({
-                status: 'healthy',
-                timestamp: new Date().toISOString(),
-                version: '1.0.0'
-            });
-        });
-
-        // List loaded plugins
-        this.app.get('/plugins', (req, res) => {
-            res.json({
-                success: true,
-                message: 'Use individual plugin endpoints for testing',
-                plugins: [],
-                count: 0
-            });
-        });
-
-        // Execute plugin function
-        this.app.post('/plugins/:pluginId/execute', async (req, res) => {
-            res.json({
-                success: false,
-                error: 'Direct plugin execution not supported in simplified mode. Use individual plugin servers instead.'
-            });
-        });
-
-        // Test plugin (simplified endpoint)
-        this.app.post('/test/:pluginId/:functionName', async (req, res) => {
-            res.json({
-                success: false,
-                error: 'Direct plugin testing not supported in simplified mode. Run plugin servers individually.'
-            });
-        });
-
-        // Error handling
-        this.app.use((error: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-            this.log('error', `Unhandled error: ${error.message}`);
-            res.status(500).json({
-                success: false,
-                error: 'Internal server error'
-            });
-        });
+    try {
+      const body = await this.readBody(req);
+      const {
+        mission = 'local-test',
+        input = {},
+        ctx = {},
+      }: { mission?: string; input?: any; ctx?: Partial<PluginIdentity> } = body
+        ? JSON.parse(body)
+        : {};
+      const result = await this.pluginServer.testInvoke(input, ctx, mission);
+      this.sendJson(res, 200, { success: true, result });
+    } catch (error) {
+      const err = error as Error;
+      this.sendJson(res, 500, { success: false, error: err.message });
     }
+  }
 
-    /**
-     * Start the test server
-     */
-    async start(): Promise<void> {
-        try {
-            // Start HTTP server
-            this.server = this.app.listen(this.config.port, () => {
-                this.log('info', `Local Test Server started on port ${this.config.port}`);
-                this.log('info', `Test your plugins at: http://localhost:${this.config.port}`);
-            });
+  private readBody(req: http.IncomingMessage): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => resolve(body));
+      req.on('error', reject);
+    });
+  }
 
-            this.server.on('error', (error: Error) => {
-                this.log('error', `Server error: ${error.message}`);
-            });
-        } catch (error) {
-            const err = error as Error;
-            this.log('error', `Failed to start server: ${err.message}`);
-            throw error;
-        }
-    }
-
-    /**
-     * Stop the test server
-     */
-    async stop(): Promise<void> {
-        return new Promise((resolve) => {
-            if (this.server) {
-                this.server.close(() => {
-                    this.log('info', 'Local Test Server stopped');
-                    resolve();
-                });
-            } else {
-                resolve();
-            }
-        });
-    }
-
-    /**
-     * Log message with level
-     */
-    private log(level: LogLevel, message: string): void {
-        const levels = ['debug', 'info', 'warn', 'error'];
-        const currentLevel = levels.indexOf(this.config.logLevel);
-        const messageLevel = levels.indexOf(level);
-
-        if (messageLevel >= currentLevel) {
-            console[level](`[LocalTestServer] ${message}`);
-        }
-    }
-} 
+  private sendJson(res: http.ServerResponse, statusCode: number, payload: unknown): void {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(payload));
+  }
+}

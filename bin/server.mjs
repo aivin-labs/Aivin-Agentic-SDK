@@ -4,123 +4,80 @@ import { PluginServer } from '../dist/PluginServer.js';
 import { LocalTestServer } from '../dist/LocalTestServer.js';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import os from 'os';
+import dotenv from 'dotenv';
 
-// ES6 equivalent of __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+// Load `.env` from the current directory (the plugin project) first, then `~/.aivin/credentials`
+// (written by `aivin login`) as a fallback for API_KEY - same precedence as bin/cli.mjs. `quiet`
+// suppresses dotenv's stdout "tip" line, which would otherwise mix into this server's own logging.
+dotenv.config({ quiet: true });
+const globalCredentialsPath = path.join(os.homedir(), '.aivin', 'credentials');
+if (fs.existsSync(globalCredentialsPath)) {
+  dotenv.config({ path: globalCredentialsPath, quiet: true });
+}
 
 /**
  * Plugin Server Entry Point
- * Khởi động server để chạy plugins phân tán
+ * Starts the gRPC server the Aivin host calls into (see PluginRunner.handleDockerRuntime on the
+ * backend) to trigger this plugin's `main()`. Bound on port 50051 inside the plugin's container.
  */
 async function startPluginServer() {
   try {
-    console.log('🚀 Starting LeanEZ Plugin Server...');
-    
-    // Load manifest từ thư mục hiện tại
+    console.log('Starting Aivin Plugin Server...');
+
     const currentDir = process.cwd();
     const manifestPath = path.join(currentDir, 'manifest.json');
-    
-    let manifest = null;
-    if (fs.existsSync(manifestPath)) {
-      const manifestContent = fs.readFileSync(manifestPath, 'utf8');
-      manifest = JSON.parse(manifestContent);
-    } else {
-      throw new Error('manifest.json not found in current directory. Please run this command in your plugin directory.');
-    }
-    
-    // Lấy config từ environment variables hoặc manifest
-    const isProduction = process.env.NODE_ENV === 'production';
-    const isDevelopment = process.env.NODE_ENV === 'development';
-    
-    const config = {
-      server_id: `node:${manifest.id}`,
-      queue_name: process.env.PLUGIN_QUEUE_NAME || 'plugin-execution',
-      enable_local_testing: isDevelopment,
-      port: parseInt(process.env.PORT || '8080'),
-      plugins_path: currentDir, // Thư mục hiện tại
-      leanez_base_url: process.env.LEANEZ_BASE_URL || (isProduction ? 'https://api.leanez.app' : 'http://localhost:3000'),
-      leanez_api_key: process.env.API_KEY,
-      log_level: process.env.LOG_LEVEL || 'info'
-    };
 
-    console.log('📋 Server Configuration:');
-    console.log(`   Server ID: ${config.server_id}`);
-    console.log(`   Queue Name: ${config.queue_name}`);
-    console.log(`   Plugin Directory: ${config.plugins_path}`);
-    console.log(`   LeanEZ URL: ${config.leanez_base_url}`);
+    if (!fs.existsSync(manifestPath)) {
+      throw new Error(
+        'manifest.json not found in current directory. Please run this command in your plugin directory.',
+      );
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+    // One fewer env var to think about: the local HTTP test shim just follows NODE_ENV - on unless
+    // you're in production. Set LOCAL_TEST_PORT if you need a specific port (default 4001 - not
+    // 3001, which collides with the Aivin backend's own default dev port).
+    const enableLocalTesting = process.env.NODE_ENV !== 'production';
+    const testPort = parseInt(process.env.LOCAL_TEST_PORT || '4001');
+
+    console.log('Server configuration:');
+    console.log(`   Plugin: ${manifest.name} v${manifest.version || '0.0.0'}`);
+    console.log(`   Plugin directory: ${currentDir}`);
+    console.log(`   gRPC bind: ${process.env.SDK_GRPC_SERVER_BIND || '0.0.0.0:50051'}`);
     console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`   Local Testing: ${config.enable_local_testing ? 'Enabled' : 'Disabled'}`);
-    if (config.enable_local_testing) {
-      console.log(`   Port: ${config.port}`);
-    }
-    console.log(`   Plugin: ${manifest.name} v${manifest.version}`);
+    console.log(
+      `   Local test HTTP shim: ${enableLocalTesting ? `enabled on port ${testPort}` : 'disabled'}`,
+    );
 
-    // Tạo Plugin Server
-    const pluginServer = new PluginServer(config);
-    
-    // Tạo Local Test Server nếu được bật
-    let testServer = null;
-    if (config.enable_local_testing) {
-      testServer = new LocalTestServer({
-        port: config.port,
-        pluginsPath: config.plugins_path, // Sử dụng thư mục hiện tại (plugin directory)
-        logLevel: config.log_level,
-        enableCors: true
-      });
-    }
+    const pluginServer = new PluginServer({ plugins_path: currentDir });
+    const testServer = enableLocalTesting
+      ? new LocalTestServer({ port: testPort, pluginsPath: currentDir })
+      : null;
 
-    // Handle graceful shutdown
-    process.on('SIGINT', async () => {
-      console.log('\n🛑 Shutting down gracefully...');
-      
+    const shutdown = async (signal) => {
+      console.log(`\nReceived ${signal}, shutting down...`);
       try {
-        if (testServer) {
-          await testServer.stop();
-        }
+        if (testServer) await testServer.stop();
         await pluginServer.stop();
         process.exit(0);
       } catch (error) {
         console.error('Error during shutdown:', error);
         process.exit(1);
       }
-    });
+    };
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-    process.on('SIGTERM', async () => {
-      console.log('\n🛑 Received SIGTERM, shutting down...');
-      
-      try {
-        if (testServer) {
-          await testServer.stop();
-        }
-        await pluginServer.stop();
-        process.exit(0);
-      } catch (error) {
-        console.error('Error during shutdown:', error);
-        process.exit(1);
-      }
-    });
-
-    // Start servers
     await pluginServer.start();
-    
-    if (testServer) {
-      await testServer.start();
-    }
+    if (testServer) await testServer.start();
 
-    console.log('🎉 Plugin Server is running!');
-    console.log('   Press Ctrl+C to stop');
-    
-    // Keep process alive
+    console.log('Plugin Server is running! Press Ctrl+C to stop.');
     process.stdin.resume();
-    
   } catch (error) {
-    console.error('❌ Failed to start Plugin Server:', error.message);
+    console.error('Failed to start Plugin Server:', error.message);
     process.exit(1);
   }
 }
 
-// Start server
-startPluginServer(); 
+startPluginServer();

@@ -1,498 +1,143 @@
 # Single Method Plugin Pattern
 
-## Tổng quan
+## Overview
 
-Plugin bây giờ sử dụng **Single Method Pattern** - mỗi plugin chỉ expose một entry point duy nhất:
-- Plugin register với một channel: `plugin.{pluginName}`
-- Tất cả requests đều đi qua entry point này
-- Đơn giản hóa nghiệp vụ và giảm complexity
-
-## Cấu trúc Plugin
-
-### 1. Manifest (Simplified)
-
-```json
-{
-  "id": "auto-generated-hex-id",
-  "name": "my-plugin",
-  "description": "Simple plugin with single method",
-  "author": "Developer Name",
-  "input": "Bạn nhận về yêu cầu từ user",
-  "output": {
-    "success": "boolean - Trạng thái xử lý",
-    "data": "any - Dữ liệu kết quả", 
-    "message": "string - Thông điệp. default: 'Success'"
-  },
-  "version": "1.0.0",
-  "trigger_type": ["manual", "api", "chat"],
-  "initial": {
-    "config": "default values"
-  }
-}
-```
-
-### 2. Handler Structure
+Every plugin exposes exactly **one** entry point: `main`. There's no manifest of multiple
+callable functions — the platform triggers your container, the host resolves your handler's
+entry point (`main`, then default export, then first exported function, in that order), and your
+code routes internally on whatever input it receives.
 
 ```typescript
-// handler.ts - Single entry point
-export async function main({ ctx, data, options = {} }) {
-  // Tất cả logic của plugin ở đây
-  
-  // Call server handlers khi cần
-  const result = await PubSubIO.request('server.processData', {
-    input: data,
-    config: options
-  });
-  
-  return {
-    success: true,
-    data: result,
-    message: 'Processed successfully'
-  };
-}
+import { PluginStatus } from '@aivin/sdk';
+import type { PluginInput, PluginContext, PluginResponse } from '@aivin/sdk';
 
-// Hoặc default export
-export default async function({ ctx, input }) {
-  // Logic here
-  return { success: true, data: input };
+export async function main(
+  mission: string,
+  input: PluginInput,
+  ctx: PluginContext,
+): Promise<PluginResponse> {
+  // All of your plugin's logic lives here.
+  return { status: PluginStatus.SUCCESS, data: {/* ... */}, message: 'Processed successfully' };
 }
 ```
 
-## Communication Pattern
+- `mission` — human-readable reason this run was triggered (for logging, not routing).
+- `input` — the fields described in `manifest.json`'s `input`.
+- `ctx` — `user`, `workspace`, `session`, `cert` (connected-account credentials, if
+  `manifest.connection_id` is set), and `sdk` (the full platform surface — see [SDK.md](./SDK.md)).
 
-### Server → Plugin
+## Why single-method
 
-```typescript
-// Server gọi plugin qua single channel
-const result = await PubSubIO.request('plugin.my-plugin', {
-  ctx: userContext,
-  data: inputData,
-  options: { timeout: 30000 }
-});
-```
+Keeping one entry point per plugin means:
 
-### Plugin → Server
-
-```typescript
-// Plugin gọi server handlers
-export async function main({ ctx, taskData }) {
-  // Create task via server
-  const task = await PubSubIO.request('task.create', {
-    workspaceId: ctx.workspace.id,
-    title: taskData.title,
-    assigneeId: taskData.assigneeId
-  });
-  
-  // Send notification via server
-  await PubSubIO.request('notification.send', {
-    userId: taskData.assigneeId,
-    message: `New task: ${task.title}`,
-    type: 'task'
-  });
-  
-  return {
-    success: true,
-    data: task,
-    message: 'Task created and notification sent'
-  };
-}
-```
-
-## Plugin Registration
-
-### Server Side
-Plugin server tự động register single channel:
-
-```typescript
-// PluginServer tự động làm việc này:
-await PubSubIO.emit('plugin-server-register', {
-  server_id: 'node:my-plugin',
-  plugin_channel: 'plugin.my-plugin', // Single channel
-  plugin_info: {
-    id: manifestId,
-    name: 'my-plugin',
-    version: '1.0.0',
-    method: 'single'
-  }
-});
-
-// Listen on single channel
-await PubSubIO.listen('plugin.my-plugin', async (jobData) => {
-  // Route to main entry point
-  return await executeMainFunction(jobData);
-});
-```
-
-### Entry Point Resolution
-
-Plugin server tự động resolve entry point:
-
-1. **Specified entry_point**: Dùng `manifest.entry_point` (mặc định: "main")
-2. **Default export**: Nếu handler.ts export default function
-3. **First function**: Fallback đến function đầu tiên tìm thấy
-
-```typescript
-// Priority order:
-const entryPoint = manifest.entry_point || 'main';
-
-// 1. Try specified entry point
-if (handler[entryPoint] && typeof handler[entryPoint] === 'function') {
-  targetFunction = handler[entryPoint];
-}
-// 2. Try default export
-else if (typeof handler === 'function') {
-  targetFunction = handler;
-}
-// 3. Try first available function
-else {
-  const functions = Object.keys(handler).filter(k => typeof handler[k] === 'function');
-  if (functions.length > 0) {
-    targetFunction = handler[functions[0]];
-  }
-}
-```
+- One manifest, one handler file, no routing table to keep in sync.
+- The host's trigger contract stays simple: same `Invoke` RPC, same resolution rule, every time.
+- Branching on `input.action`/similar inside `main()` (see below) covers the same use cases a
+  multi-function manifest would, without a second layer of dispatch.
 
 ## Examples
 
-### 1. Text Processing Plugin
+### Simple, single-purpose plugin
 
-**manifest.json:**
-```json
-{
-  "name": "text-processor",
-  "description": "Process text with various transformations",
-  "input": {
-    "text": "string - Text cần xử lý",
-    "operation": "string - Loại xử lý (uppercase, lowercase, reverse). default: uppercase"
-  },
-  "output": {
-    "success": "boolean - Trạng thái xử lý",
-    "data": "string - Text đã xử lý",
-    "operation": "string - Loại xử lý đã thực hiện",
-    "original_length": "number - Độ dài text gốc",
-    "processed_length": "number - Độ dài text sau xử lý"
-  }
+```typescript
+export async function main(mission, input, ctx) {
+  const { text, operation = 'uppercase' } = input;
+  const result =
+    operation === 'uppercase'
+      ? text.toUpperCase()
+      : operation === 'lowercase'
+        ? text.toLowerCase()
+        : operation === 'reverse'
+          ? text.split('').reverse().join('')
+          : text;
+
+  return { status: 'success', data: result };
 }
 ```
 
-**handler.ts:**
+### Multi-action plugin (branch inside `main`)
+
 ```typescript
-export async function main({ ctx, text, operation = 'uppercase' }) {
-  let result;
-  
-  switch (operation) {
-    case 'uppercase':
-      result = text.toUpperCase();
-      break;
-    case 'lowercase':
-      result = text.toLowerCase();
-      break;
-    case 'reverse':
-      result = text.split('').reverse().join('');
-      break;
+export async function main(mission, input, ctx) {
+  switch (input.action) {
+    case 'create':
+      return createItem(ctx, input);
+    case 'list':
+      return listItems(ctx, input);
     default:
-      result = text;
+      return { status: 'fail', message: `Unknown action: ${input.action}` };
   }
-  
-  // Log activity
-  await PubSubIO.request('activity.log', {
-    userId: ctx.user.id,
-    action: 'text_processed',
-    data: { operation, length: text.length }
+}
+
+async function createItem(ctx, { title }) {
+  const row = await ctx.sdk.store.set('items', crypto.randomUUID(), {
+    title,
+    createdAt: Date.now(),
   });
-  
-  return {
-    success: true,
-    data: result,
-    operation,
-    original_length: text.length,
-    processed_length: result.length
-  };
+  return { status: 'success', data: row };
+}
+
+async function listItems(ctx, { limit = 20 }) {
+  const rows = await ctx.sdk.store.query('items', {}, { createdAt: -1 }, limit);
+  return { status: 'success', data: rows };
 }
 ```
 
-### 2. AI Chat Plugin
+### Default export (also valid)
 
-**manifest.json:**
-```json
-{
-  "name": "ai-chat-assistant",
-  "description": "AI-powered chat assistant",
-  "input": {
-    "message": "string - Tin nhắn từ user",
-    "model": "string - AI model sử dụng. default: gpt-4"
-  },
-  "output": {
-    "success": "boolean - Trạng thái xử lý",
-    "data": "string - Phản hồi từ AI",
-    "model": "string - Model đã sử dụng",
-    "usage": "object - Thống kê sử dụng token"
-  }
-}
-```
-
-**handler.ts:**
 ```typescript
-export async function main({ ctx, message, model = 'gpt-4' }) {
-  try {
-    // Get user conversation history
-    const history = await PubSubIO.request('conversation.getHistory', {
-      userId: ctx.user.id,
-      limit: 10
-    });
-    
-    // Build messages array
-    const messages = [
-      { role: 'system', content: 'You are a helpful assistant.' },
-      ...history,
-      { role: 'user', content: message }
-    ];
-    
-    // Call AI service
-    const response = await PubSubIO.request('ai.chat', {
-      messages,
-      model,
-      max_tokens: 1000
-    });
-    
-    // Save conversation
-    await PubSubIO.request('conversation.save', {
-      userId: ctx.user.id,
-      messages: [
-        { role: 'user', content: message },
-        { role: 'assistant', content: response.content }
-      ]
-    });
-    
-    return {
-      success: true,
-      data: response.content,
-      model: response.model,
-      usage: response.usage
-    };
-    
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message,
-      fallback: "I'm sorry, I'm having trouble processing your request right now."
-    };
-  }
-}
-```
-
-### 3. Workflow Plugin
-
-**manifest.json:**
-```json
-{
-  "name": "task-workflow", 
-  "description": "Automated task workflow management",
-  "input": {
-    "workflow": "object - Workflow definition với steps",
-    "data": "any - Dữ liệu đầu vào cho workflow"
-  },
-  "output": {
-    "success": "boolean - Workflow thành công hay không",
-    "data": "object - Kết quả workflow với logs chi tiết"
-  }
-}
-```
-
-**handler.ts:**
-```typescript
-// Default export pattern
-export default async function({ ctx, workflow, data }) {
+export default async function (mission, input, ctx) {
   const results = [];
-  
-  for (const step of workflow.steps) {
-    try {
-      // Execute each step via server
-      const stepResult = await PubSubIO.request(`workflow.${step.type}`, {
-        workspaceId: ctx.workspace.id,
-        userId: ctx.user.id,
-        config: step.config,
-        input: data
-      });
-      
-      results.push({
-        step: step.name,
-        success: true,
-        result: stepResult,
-        timestamp: Date.now()
-      });
-      
-      // Update data for next step
-      data = stepResult.output || data;
-      
-    } catch (error) {
-      results.push({
-        step: step.name,
-        success: false,
-        error: error.message,
-        timestamp: Date.now()
-      });
-      
-      // Stop on error unless continue_on_error is true
-      if (!step.continue_on_error) {
-        break;
-      }
-    }
+  for (const step of input.workflow.steps) {
+    results.push(await ctx.sdk.call(step.namespace, { ...step.params, data: input.data }));
   }
-  
-  // Log workflow completion
-  await PubSubIO.request('workflow.logCompletion', {
-    workflowId: workflow.id,
-    userId: ctx.user.id,
-    results,
-    duration: Date.now() - workflow.startTime
-  });
-  
-  return {
-    success: results.every(r => r.success),
-    data: {
-      workflow_id: workflow.id,
-      steps_completed: results.length,
-      steps_successful: results.filter(r => r.success).length,
-      final_data: data,
-      execution_log: results
-    }
-  };
+  return { status: 'success', data: { steps_completed: results.length, results } };
 }
 ```
 
-## Development Workflow
+## Best practices
 
-### 1. Create Plugin
-```bash
-leanez create my-single-plugin
-cd my-single-plugin
-```
+- **Keep `main` focused.** Route on an explicit `input.action`/`input.type` field rather than
+  trying to infer intent from arbitrary shaped input — it's easier for the AI planner (and future
+  you) to call correctly.
+- **Delegate to the platform, don't reimplement it.** Use `ctx.sdk.task.create(...)`,
+  `ctx.sdk.notification.push(...)`, etc. instead of hand-rolling equivalents — you get tenant
+  scoping and observability for free.
+- **Use `status`/`error_code`, not ad-hoc shapes.** Returning `PluginResponse`'s
+  `{ status: PluginStatus.X, ... }` (rather than an invented `{ success: boolean }` shape) is what
+  downstream tooling (agentic planner, retry/replan logic) actually reads.
 
-### 2. Edit handler.ts
 ```typescript
-export async function main({ ctx, input }) {
-  // Your business logic
-  return { success: true, data: processedInput };
-}
-```
+import { PluginStatus, PluginErrorCode } from '@aivin/sdk';
 
-### 3. Test Locally
-```bash
-leanez start
-
-# Test single method
-curl -X POST http://localhost:8080/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": {"data": "test"}}'
-```
-
-### 4. Deploy
-```bash
-leanez deploy
-```
-
-## Best Practices
-
-### 1. Keep Entry Point Simple
-```typescript
-// ✅ Good - single responsibility
-export async function main({ ctx, text }) {
-  const result = await processText(text);
-  await logActivity(ctx.user.id, 'text_processed');
-  return { success: true, data: result };
-}
-
-// ❌ Avoid - complex branching
-export async function main({ ctx, action, data }) {
-  if (action === 'process') {
-    // Complex logic
-  } else if (action === 'analyze') {
-    // More complex logic
-  }
-  // Too many responsibilities
-}
-```
-
-### 2. Use Server Handlers
-```typescript
-// ✅ Delegate to server
-const user = await PubSubIO.request('user.getById', { id: userId });
-const file = await PubSubIO.request('file.upload', { data: fileData });
-
-// ❌ Don't reimplement server logic
-const user = await queryDatabaseDirectly(userId);
-```
-
-### 3. Error Handling
-```typescript
-export async function main({ ctx, data }) {
+export async function main(mission, input, ctx) {
   try {
-    const result = await PubSubIO.request('server.process', data);
-    return { success: true, data: result };
+    const result = await ctx.sdk.call('server.process', input.data);
+    return { status: PluginStatus.SUCCESS, data: result };
   } catch (error) {
-    // Log error but don't throw
-    await PubSubIO.request('log.error', {
-      plugin: 'my-plugin',
-      error: error.message,
-      userId: ctx.user?.id
-    }).catch(() => {}); // Don't fail if logging fails
-    
+    ctx.sdk.log(`processing failed: ${error.message}`, 'error');
     return {
-      success: false,
-      error: 'PROCESSING_FAILED',
+      status: PluginStatus.ERROR,
       message: 'Unable to process request',
-      fallback: defaultResult
+      error_code: PluginErrorCode.EXECUTION_FAILED,
     };
   }
 }
 ```
 
-## Migration từ Multi-Method
+## Local development workflow
 
-### Before (Multi-method):
-```json
-{
-  "functions": [
-    { "name": "processText", "trigger_type": ["api"] },
-    { "name": "analyzeText", "trigger_type": ["api"] },
-    { "name": "saveResult", "trigger_type": ["api"] }
-  ]
-}
+```bash
+aivin create my-plugin
+cd my-plugin
+
+# edit src/main.ts
+aivin start                                       # local gRPC server + HTTP test shim
+
+curl -X POST http://localhost:4001/invoke \
+  -H 'content-type: application/json' \
+  -d '{"input": {"action": "list"}}'
+
+aivin test                                        # deploy to a test instance
+aivin deploy                                      # ship it
 ```
-
-```typescript
-export async function processText(data) { ... }
-export async function analyzeText(data) { ... }
-export async function saveResult(data) { ... }
-```
-
-### After (Single method):
-```json
-{
-  "entry_point": "main",
-  "description": "Text processing and analysis"
-}
-```
-
-```typescript
-export async function main({ ctx, action, data }) {
-  switch (action) {
-    case 'process':
-      return await processText(data);
-    case 'analyze':
-      return await analyzeText(data);
-    case 'save':
-      return await saveResult(data);
-    default:
-      return { error: 'Unknown action' };
-  }
-}
-
-// Private helper functions
-async function processText(data) { ... }
-async function analyzeText(data) { ... }
-async function saveResult(data) { ... }
-```
-
-Single method pattern đơn giản hơn nhiều cho cả development và deployment! 🚀 
