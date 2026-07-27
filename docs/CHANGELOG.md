@@ -5,6 +5,47 @@
 First published release (`npm install @aivin-labs/sdk`). Everything below accumulated during
 development before this release - kept as-is rather than squashed, since the detail is useful.
 
+### 🐛 Fixed — real end-to-end Docker test uncovered 2 deployment-blocking backend bugs
+
+Set up a genuinely fresh project (`aivin create`, real `npm install` from the public registry now
+that `@aivin-labs/sdk` is published) and deployed it for real - built Docker image, ran the
+container, invoked it - to verify the whole chain actually works, not just the SDK in isolation.
+Found and fixed two real bugs on the backend (`c:\Project\be`), both severe enough to block
+*every* freshly-scaffolded plugin, not just this test:
+
+1. **The AI security scan didn't know the platform's own SDK is first-party.** A completely
+   unmodified `aivin create` scaffold got blocked at deploy with `"@aivin-labs/sdk": "Unknown
+   third-party dependency may contain malicious code"` and `"aivin start": "could execute arbitrary
+   operations"` - the scanner had zero awareness that these are the platform's own required
+   conventions, not arbitrary third-party code. Fixed in `CodeSecurityHelper.ts`: added a
+   `KNOWN_SAFE_PLATFORM_CONVENTIONS` block, and - prompted by a sharp catch mid-review - restructured
+   the whole call so the task instructions go through `AIEngine.prompt()`'s `instructions` option
+   (trusted, system-level) instead of being concatenated into the same string as the file content
+   being analyzed (untrusted, now relies on `AIEngine`'s existing `<user_input>` auto-wrapping for a
+   real instruction/data boundary - the old concatenated-string version had no such boundary, an
+   actual prompt-injection gap a malicious plugin's code could have exploited to talk its way past
+   the scanner).
+2. **`aivin create`'s own scaffold pinned dependencies to `"latest"`**, which is exactly the
+   anti-pattern the security scanner (correctly) flags as a supply-chain risk - a second,
+   independent way every fresh scaffold was guaranteed to fail its own platform's deploy check.
+   Now pins `@aivin-labs/sdk` to an exact version and `typescript`/`@types/node` to `^` ranges
+   instead of `latest`.
+
+Also fixed: `aivin login --basic`'s default `--client` was `"aivin.vn"`, inconsistent with the
+platform's real default domain `aivin.cloud`.
+
+With both backend fixes in place, verified a full real cycle end to end: `aivin create` →
+`npm install` (real registry) → `aivin test` → AI security scan passes → Docker image builds →
+container starts and runs the real published SDK's `aivin start` (previously impossible to verify
+in a sandbox with no registry access - see the `aivin plugin make` self-heal fix below, from
+*before* this SDK was published). The final hop - the backend process actually invoking the running
+container over gRPC - could not be verified in this specific sandbox: plugin containers get their
+own isolated Docker network per deployment, and the backend here runs bare-metal (not itself
+containerized on that network), so it can't reach the container's IP or resolve its Docker-internal
+DNS name. This is a property of how this sandbox runs the backend for testing, not a code defect -
+production backend deployments run containerized on the shared Docker network stack, per the
+already-running `aivin-be` service confirmed alongside this test.
+
 ### 🐛 Fixed — `aivin create --json`/`--stdin` never told you to `cd` into the new project
 
 Found during a post-publish DX audit: `createFromJSON()` (the non-interactive/scripted path behind

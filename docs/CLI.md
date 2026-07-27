@@ -309,7 +309,7 @@ Options:
   -k, --api-key <key>  Set API key directly (skip login entirely)
   --basic              Log in with email/password directly in the terminal instead of a browser
   --google             Alias of the default browser flow - pick Google once the page opens
-  --client <client>    Client/org id to use with --basic (default: "aivin.vn")
+  --client <client>    Client/org id to use with --basic (default: "aivin.cloud")
 ```
 
 **Default (no flags) - browser flow, recommended:**
@@ -336,7 +336,7 @@ aivin login --basic
 ```
 
 Prompts for email/password directly and logs in against the default/shared client only (`--client`,
-falls back to `"aivin.vn"`). If your account belongs to a custom-domain organization, this won't
+falls back to `"aivin.cloud"`). If your account belongs to a custom-domain organization, this won't
 resolve that domain for you - use the default browser flow instead, which handles it the same way
 the web login page does.
 

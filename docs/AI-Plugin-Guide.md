@@ -25,9 +25,9 @@ Short reference for an AI agent (or developer) generating an Aivin plugin quickl
 Need more than one function? Use `{ ...commonFields, plugins: [...] }` instead of a plain object —
 each entry in `plugins` is a full manifest plus a `func` field naming which export of the shared
 `src/main.ts` it calls, and deploys as its own independent plugin `id`. See
-[docs/MANIFEST.md#multi-function-plugins](./docs/MANIFEST.md#multi-function-plugins).
+[MANIFEST.md#multi-function-plugins](./MANIFEST.md#multi-function-plugins).
 
-Full field list: [docs/MANIFEST.md](./docs/MANIFEST.md).
+Full field list: [MANIFEST.md](./MANIFEST.md).
 
 ### `src/main.ts`
 
@@ -71,7 +71,7 @@ mongo.model(name).find(...)         // Mongoose-style isolated collection
 
 Two other equally-valid ways to reach the same client: `ctx.sdk.<namespace>.<method>`, or
 `import SDK from '@aivin-labs/sdk'; SDK.<namespace>.<method>`. Full reference:
-[docs/SDK.md](./docs/SDK.md).
+[SDK.md](./SDK.md).
 
 For anything without a dedicated import, use the generic escape hatch:
 `import { call } from '@aivin-labs/sdk'; call('namespace.method', params)`.
@@ -107,7 +107,7 @@ aivin plugin trigger "<mission>" '<input>'  # invoke it for real, like the platf
 
 ## See also
 
-- [SDK.md](./docs/SDK.md) — every namespace, and all three ways to import them
-- [MANIFEST.md](./docs/MANIFEST.md) — every manifest field
-- [SINGLE_METHOD_PLUGINS.md](./docs/SINGLE_METHOD_PLUGINS.md) — handler pattern + more examples
-- [EXAMPLES.md](./docs/EXAMPLES.md) — real plugins across common use cases
+- [SDK.md](./SDK.md) — every namespace, and all three ways to import them
+- [MANIFEST.md](./MANIFEST.md) — every manifest field
+- [SINGLE_METHOD_PLUGINS.md](./SINGLE_METHOD_PLUGINS.md) — handler pattern + more examples
+- [EXAMPLES.md](./EXAMPLES.md) — real plugins across common use cases

@@ -487,7 +487,7 @@ Full reference, including the `sse` transport for remote MCP servers:
 - 🤝 **[Contributing](docs/CONTRIBUTING.md)**
 
 For a quick, AI-agent-focused cheat sheet (the two files every plugin needs, in one page), see
-[AI-Plugin-Guide.md](AI-Plugin-Guide.md).
+[AI-Plugin-Guide.md](docs/AI-Plugin-Guide.md).
 
 ## Contributing
 

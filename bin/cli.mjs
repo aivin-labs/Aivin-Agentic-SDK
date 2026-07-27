@@ -457,11 +457,15 @@ async function createPackageJson(pluginDir, name, description, currentPackageJso
       start: 'aivin start',
     },
     dependencies: {
-      '@aivin-labs/sdk': 'latest',
+      // Pinned to an exact version, not "latest" - the platform's own AI security scan flags
+      // "latest"/range dependency pins as a supply-chain risk (a later, unreviewed version could
+      // get pulled in silently) and blocks deployment over it. Bump this alongside this CLI's own
+      // version() call above when publishing a new @aivin-labs/sdk release.
+      '@aivin-labs/sdk': '1.0.0',
     },
     devDependencies: {
-      '@types/node': 'latest',
-      typescript: 'latest',
+      '@types/node': '^24.0.0',
+      typescript: '^5.9.3',
     },
     keywords: ['aivin', 'plugin'],
     engines: { node: '>=22.0.0' },
@@ -1713,14 +1717,14 @@ async function browserLogin() {
 
 /**
  * `aivin login --basic`: prompts for email/password directly in the terminal, no browser. Only
- * supports the platform's default/shared client (`--client`, falls back to the same 'aivin.vn'
+ * supports the platform's default/shared client (`--client`, falls back to the same 'aivin.cloud'
  * default the web app itself falls back to when no custom-domain org is resolved) - accounts under
  * a custom-domain organization need that domain resolved first, which is exactly what the web
  * login page normally does. Use the default `aivin login` (browser) flow for those.
  */
 async function basicLogin(options) {
   const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
-  const client = options.client || 'aivin.vn';
+  const client = options.client || 'aivin.cloud';
 
   const answers = await inquirer.prompt([
     {
@@ -1796,7 +1800,7 @@ program
   .option('-k, --api-key <key>', 'Set API key directly (skip login entirely)')
   .option('--basic', 'Log in with email/password directly in the terminal instead of a browser')
   .option('--google', 'Alias of the default browser flow - pick Google once the page opens')
-  .option('--client <client>', 'Client/org id to use with --basic (default: "aivin.vn")')
+  .option('--client <client>', 'Client/org id to use with --basic (default: "aivin.cloud")')
   .action(async (options) => {
     try {
       if (options.apiKey) {
