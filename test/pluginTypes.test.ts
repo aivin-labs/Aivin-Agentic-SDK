@@ -43,3 +43,17 @@ test('flattenManifestFile rejects a bare top-level array', () => {
     /cannot be a bare JSON array/,
   );
 });
+
+test('flattenManifestFile rejects an empty plugins array', () => {
+  assert.throws(
+    () => flattenManifestFile({ version: '1.0.0', plugins: [] }),
+    /"plugins" array is empty/,
+  );
+});
+
+test('flattenManifestFile rejects a plugins entry missing required fields', () => {
+  assert.throws(
+    () => flattenManifestFile({ plugins: [{ id: 'a', name: 'a', description: 'x', input: {} }] }),
+    /plugins\[0\]" is missing required field\(s\): func/,
+  );
+});

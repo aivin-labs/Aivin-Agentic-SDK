@@ -1,4 +1,4 @@
-import { invokeHost } from '../grpc/GrpcInvoker';
+import { invokeHost, invokeHostStream, type InvokeRequest, type StreamHandle } from '../grpc/GrpcInvoker';
 import type {
   Agent,
   ConnectionInfo,
@@ -15,11 +15,28 @@ export interface SDKClientOptions {
   cap?: string;
   /** Default timeout for `call()` when the caller doesn't override it. */
   defaultTimeoutMs?: number;
+  /** Transport override, real gRPC by default - lets tests inject a fake transport instead of
+   *  mocking the proto/network layer. Not meant to be set in production plugin code. */
+  invoke?: <T = any>(request: InvokeRequest) => Promise<T>;
+  /** Streaming transport override, mirrors `invoke` - lets tests inject a fake stream instead of a
+   *  real gRPC server-streaming call. Not meant to be set in production plugin code. */
+  invokeStream?: <T = any>(request: InvokeRequest) => StreamHandle<T>;
 }
 
 /** Identity fields needed to build an SDKClient - `PluginContext` minus the `sdk` field itself
  * (which *is* the SDKClient being constructed - can't require an instance of itself as input). */
 export type PluginIdentity = Omit<PluginContext, 'sdk'>;
+
+/**
+ * Heuristic used by `a2a()`/`agent.delegate()` to tell an actual agent ID apart from a natural
+ * language search query, without a network round-trip. Real agent IDs are short hex/UUID-like
+ * strings with no spaces; anything else (contains a space, too long, or has non-hex characters)
+ * is treated as a search query and resolved via `workspace.searchAgents` first. Exported as a pure
+ * function so this decision is unit-testable without mocking the gRPC transport.
+ */
+export function looksLikeAgentId(target: string): boolean {
+  return !target.includes(' ') && target.length <= 32 && /^[0-9a-fA-F-]+$/.test(target);
+}
 
 /**
  * Client-side implementation of the platform's unified SDK surface.
@@ -35,6 +52,8 @@ export type PluginIdentity = Omit<PluginContext, 'sdk'>;
 export class SDKClient {
   private readonly cap?: string;
   private readonly defaultTimeoutMs: number;
+  private readonly invoke: <T = any>(request: InvokeRequest) => Promise<T>;
+  private readonly invokeStream: <T = any>(request: InvokeRequest) => StreamHandle<T>;
 
   constructor(
     private readonly context: PluginIdentity,
@@ -42,6 +61,8 @@ export class SDKClient {
   ) {
     this.cap = options.cap;
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000;
+    this.invoke = options.invoke ?? invokeHost;
+    this.invokeStream = options.invokeStream ?? invokeHostStream;
   }
 
   private buildContext(): Record<string, any> {
@@ -61,7 +82,7 @@ export class SDKClient {
 
   /** Generic escape hatch: call any host namespace directly. */
   async call<T = any>(func: string, params?: any, timeoutMs?: number): Promise<T> {
-    return invokeHost<T>({
+    return this.invoke<T>({
       namespace: func,
       params,
       context: this.buildContext(),
@@ -104,7 +125,7 @@ export class SDKClient {
   ): Promise<T> {
     let agentId = target;
 
-    if (target && (target.includes(' ') || target.length > 32 || !/^[0-9a-fA-F-]+$/.test(target))) {
+    if (target && !looksLikeAgentId(target)) {
       const results = await this.call<any[]>('workspace.searchAgents', {
         query: target,
         workspace_id: this.context.workspace?.id || this.context.session?.workspace_id,
@@ -176,6 +197,27 @@ export class SDKClient {
   readonly ai = {
     prompt: (quest: string | any[], opts?: LLMPromptOptions): Promise<any> =>
       this.call('ai.prompt', { quest, opts }),
+    /**
+     * Streaming counterpart of `prompt()` - text deltas arrive as they're generated instead of
+     * waiting for the whole response, same shape as Vercel AI SDK's `streamText()`:
+     * ```ts
+     * const result = ctx.sdk.ai.promptStream("write a haiku");
+     * for await (const delta of result.textStream) process.stdout.write(delta);
+     * const full = await result.text; // full text, resolves once the stream ends
+     * ```
+     * Falls back to a single "chunk" (the whole response, then done) if the model/provider
+     * resolved server-side doesn't support token-level streaming - `textStream` and `text` behave
+     * the same either way, just with coarser granularity.
+     */
+    promptStream: (quest: string | any[], opts?: LLMPromptOptions): { textStream: AsyncIterable<string>; text: Promise<string> } => {
+      const handle = this.invokeStream<string>({
+        namespace: 'ai.promptStream',
+        params: { quest, opts },
+        context: this.buildContext(),
+        timeoutMs: this.defaultTimeoutMs,
+      });
+      return { textStream: handle.chunks, text: handle.final };
+    },
     getEmbedding: (
       text: string | string[],
       opts?: LLMPromptOptions,

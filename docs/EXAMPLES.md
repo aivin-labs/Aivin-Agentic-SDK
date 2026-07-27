@@ -4,7 +4,7 @@ Real plugins across common use cases. Each one is the complete `manifest.json` +
 
 These use the preferred style — import just the namespace(s) you need. `ctx.sdk.ai.prompt(...)`
 and `import SDK from '@aivin/sdk'; SDK.ai.prompt(...)` work identically; see
-[SDK.md](./SDK.md#four-equivalent-ways-to-reach-it).
+[SDK.md](./SDK.md#three-equivalent-ways-to-reach-it).
 
 ## 1. Text Summarizer
 

@@ -353,13 +353,16 @@ Skips login entirely - just saves the given key to `~/.aivin/credentials`.
 `aivin login` saves your key once to `~/.aivin/credentials` and every plugin project on the
 machine picks it up automatically - there's no per-project credential to manage.
 
-| Variable            | Used by       | Default | When you'd touch it                              |
-| -------------------- | -------------- | -------- | -------------------------------------------------- |
-| `LOCAL_TEST_PORT`    | `aivin start`  | `4001`  | Only if `4001` is already taken on your machine.  |
+| Variable            | Used by                                          | Default                     | When you'd touch it                                          |
+| -------------------- | -------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------- |
+| `SDK_GRPC_ENDPOINT`  | `ctx.sdk.*` calls, `aivin start`                   | `api.aivin.cloud:50051`      | Point `main()`'s SDK calls at a local/dev backend instead of production. |
+| `AIVIN_BASE_URL`     | `deploy`, `test`, `plugin make/convert/trigger`, `login --basic` | `https://api.aivin.cloud`    | Only for a self-hosted or staging instance.                   |
+| `AIVIN_WEB_URL`      | `login` (browser flow)                             | `https://brain.aivin.cloud`  | Only for a self-hosted or staging instance.                   |
+| `LOCAL_TEST_PORT`    | `aivin start`                                       | `4001`                       | Only if `4001` is already taken on your machine.              |
 
-Everything else (`SDK_GRPC_ENDPOINT`, `SDK_GRPC_SECRET`, `SDK_GRPC_SERVER_BIND`, `SDK_GRPC_TLS`,
-`AIVIN_BASE_URL`, `AIVIN_WEB_URL`, `NODE_ENV`, ...) is the SDK's own setup, injected automatically
-or defaulted to production - not something you're expected to set by hand.
+Everything else (`SDK_GRPC_SECRET`, `SDK_GRPC_SERVER_BIND`, `SDK_GRPC_TLS`, `NODE_ENV`, ...) is
+either injected automatically inside a deployed container or has a working zero-config default -
+not something you're expected to set by hand.
 
 ## See also
 

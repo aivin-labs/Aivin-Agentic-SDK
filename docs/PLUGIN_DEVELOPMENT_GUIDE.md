@@ -71,6 +71,14 @@ conventions (`main(mission, input, ctx)`, `ctx.sdk.*`, `PluginResponse`/`PluginS
 shape). Review the output before relying on it — generated code is a strong starting point, not a
 guarantee.
 
+Already have a project instead of a description to work from? `aivin plugin convert` does the same
+thing, pointed at your existing code as context instead:
+
+```bash
+cd your-existing-project
+aivin plugin convert
+```
+
 ## 4. Test locally
 
 ```bash
@@ -120,6 +128,18 @@ Not every plugin needs custom code, either — `aivin mcp create <name>` scaffol
 plugin that just proxies to an external MCP server's tool/resource/prompt. `aivin deploy`/`aivin test`
 detect this automatically and skip the code upload entirely. See
 [MANIFEST.md#mcp-proxy-plugins](./MANIFEST.md#mcp-proxy-plugins).
+
+Once it's deployed, `aivin plugin trigger` invokes it directly and prints the result — the exact
+same `/plugins/execute` the platform's own Playground uses, so it's a real invocation, not a
+simulation:
+
+```bash
+aivin plugin trigger "summarize this" '{"text":"..."}'
+aivin plugin trigger -a "Summarize this ticket: customer can't log in after the last update"
+```
+
+The second form (`-a`/`--auto`) skips writing structured JSON yourself — give it a free-text prompt
+and the backend maps it onto `manifest.json`'s `input` schema for you.
 
 ## 6. Best practices
 

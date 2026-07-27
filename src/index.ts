@@ -16,7 +16,10 @@ export { default } from './sdk/globalSdk';
 
 export { PluginServer } from './PluginServer';
 export { LocalTestServer } from './LocalTestServer';
-export { invokeHost } from './grpc/GrpcInvoker';
+export { invokeHost, invokeHostStream, onCall } from './grpc/GrpcInvoker';
+export type { CallTrace, StreamHandle } from './grpc/GrpcInvoker';
+export { getCurrentTrace, formatTraceForConsole } from './sdk/trace';
+export type { InvocationTrace, TraceEvent } from './sdk/trace';
 
 export * from './types/PluginTypes';
 export * from './types/SDKTypes';

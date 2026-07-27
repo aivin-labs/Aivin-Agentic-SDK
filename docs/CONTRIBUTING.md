@@ -184,11 +184,8 @@ curl -X POST http://localhost:4001/invoke \
 # Deploy lên test instance trước để kiểm chứng
 aivin test
 
-# Triển khai lên org của bạn (private)
+# Triển khai lên org của bạn
 aivin deploy
-
-# Hoặc gửi lên public store (chờ duyệt)
-aivin deploy public
 
 # Đặt giá trong dashboard
 # Bắt đầu kiếm tiền ngay lập tức!

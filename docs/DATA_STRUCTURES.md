@@ -203,14 +203,21 @@ interface PluginManifest {
   version?: string;
   author?: string;
   email?: string;
+  /** Multi-function manifests only - see MANIFEST.md#multi-function-plugins. */
+  func?: string;
   input: object;
   output?: string | object;
   instructions?: string;
   capabilities?: string[];
+  selection_rules?: string[];
   initable?: string[];
   depend_on?: string | PluginDependency | (string | PluginDependency)[];
+  mapping_reasoning?: boolean | string[];
   connection_id?: string;
   timeout_ms?: number;
+  circuit_breaker?: { fail_threshold?: number; window_sec?: number; cooldown_sec?: number };
+  expose?: string[];
+  stacks?: string[];
   trigger_type?: TriggerType[];
   initial?: object;
   scope?: string[];
@@ -221,6 +228,17 @@ interface PluginManifest {
   compute_factor?: number;
   side_effect?: boolean;
   requires_human?: boolean;
+  request_hil?: boolean;
+  hard_confirm?: boolean;
+  /** Proxy into an external system (MCP, REST, n8n, ...) instead of running custom code. */
+  proxy_config?: object;
+}
+
+interface PluginDependency {
+  plugin: string;
+  optional?: boolean;
+  condition?: string;
+  fallback_field?: string;
 }
 ```
 

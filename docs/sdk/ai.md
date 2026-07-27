@@ -17,6 +17,7 @@ import { ai } from '@aivin/sdk';
 | Method | Parameters | Returns | Description |
 | --- | --- | --- | --- |
 | `prompt` | `quest: string \| any[]`, `opts?: LLMPromptOptions` | `Promise<any>` | Run the LLM. `quest` can be a plain question/instruction string or a message-array (e.g. chat-style turns). Maps to `ai.prompt` on the host. |
+| `promptStream` | `quest: string \| any[]`, `opts?: LLMPromptOptions` | `{ textStream: AsyncIterable<string>, text: Promise<string> }` | Streaming counterpart of `prompt` — text deltas arrive as the model generates them instead of waiting for the whole response. Maps to `ai.promptStream` on the host, over a dedicated server-streaming gRPC RPC (`InvokeStream`), not the plain unary `Invoke` every other call here uses. |
 | `getEmbedding` | `text: string \| string[]`, `opts?: LLMPromptOptions` | `Promise<Float32Array \| Float32Array[]>` | Single embedding call. Pass a string for one vector back, or a string array for an array of vectors back (shape of return mirrors shape of input). |
 | `getEmbeddings` | `texts: string[]`, `opts?: LLMPromptOptions` | `Promise<Float32Array[]>` | Batch embeddings — faster than looping `getEmbedding` per string. **`texts` is a bare array, not wrapped in an object** — this differs from `CodeSDK.d.ts`'s declared `getEmbeddings({texts, opts})` shape, which does not match the real backend. |
 | `rerank` | `query: string`, `docs: string[]`, `opts?: any` | `Promise<{ index: number; score: number }[]>` | Re-ranks `docs` by relevance to `query`. Returns one `{index, score}` entry per input doc, `index` referring back into the original `docs` array — **not** the reranked documents themselves. `opts` is nested as a single object (not spread as `{query, docs, ...opts}` — that's `CodeSDK.d.ts`'s wrong, unimplemented shape). |
@@ -70,6 +71,34 @@ export async function main(mission, input, ctx) {
   return { status: 'success', data: result };
 }
 ```
+
+### Streaming with `promptStream`
+
+Same shape as Vercel AI SDK's `streamText()` — a `textStream` you can iterate for incremental
+deltas, and a `text` promise for the full result:
+
+```typescript
+import { ai } from '@aivin/sdk';
+
+export async function main(mission, input, ctx) {
+  const result = ai.promptStream(`Write a short summary of: ${input.text}`);
+
+  for await (const delta of result.textStream) {
+    // e.g. forward progress to the user via realtime.publish as it's generated
+    await ctx.sdk.call('realtime.publish', { event: 'summary.progress', data: delta });
+  }
+
+  const summary = await result.text; // full text, resolves once the stream ends
+  return { status: 'success', data: summary };
+}
+```
+
+`text` resolves correctly even if you never iterate `textStream` — the stream drains from the
+network as soon as `promptStream()` is called, independent of whether/how fast you consume it.
+Falls back to a single "chunk" (the whole response, then done) if the model/provider resolved
+server-side doesn't support token-level streaming; `textStream`/`text` behave the same either way.
+No automatic retry on transport failure mid-stream (unlike every other call in this SDK) — see
+[CHANGELOG](../CHANGELOG.md) for why.
 
 ## `getEmbedding` / `getEmbeddings` example
 

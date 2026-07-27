@@ -6,6 +6,7 @@ import * as grpc from '@grpc/grpc-js';
 import { loadSdkTransportService } from './grpc/loadProto';
 import { SDKClient } from './sdk/SDKClient';
 import { invocationStorage } from './sdk/currentInvocation';
+import { withTrace, formatTraceForConsole, type InvocationTrace } from './sdk/trace';
 import { PluginManifest, MultiFunctionManifestEntry, flattenManifestFile } from './types/PluginTypes';
 import { PluginContext, PluginInput } from './types/SDKTypes';
 import { PluginIdentity } from './sdk/SDKClient';
@@ -262,9 +263,45 @@ export class PluginServer extends EventEmitter {
     const targetFunction = this.resolveTargetFunction(mission, explicitFunc);
 
     // Bind this invocation's SDKClient to the async context so the default/per-namespace imports
-    // from '@aivin/sdk' resolve to it too, not just `ctx.sdk` - see src/sdk/globalSdk.ts.
-    return await invocationStorage.run(ctx.sdk, () => targetFunction(mission, input, ctx));
+    // from '@aivin/sdk' resolve to it too, not just `ctx.sdk` - see src/sdk/globalSdk.ts. Nested
+    // inside `withTrace` so every `sdk.*` call made anywhere during this invocation (including
+    // inside nested async work the handler awaits) gets recorded against this invocation's trace,
+    // not a sibling one running concurrently in the same process.
+    return await invocationStorage.run(ctx.sdk, () =>
+      withTrace(mission, () => targetFunction(mission, input, ctx), this.reportTrace),
+    );
   }
+
+  /**
+   * Fires on every invocation, success or failure - never lets a trace go unreported.
+   *
+   * `AIVIN_TRACE=false` opts out entirely (e.g. a noisy hot-path plugin in production that doesn't
+   * want the console write). Default is "on" everywhere: this is deliberately not gated to dev-only
+   * - a trace that only appears locally never catches the intermittent-in-production failure it
+   * would have explained. `AIVIN_TRACE_PUBLISH=true` additionally best-effort publishes it via
+   * `realtime.publish` so the host CAN surface it in the platform's own execution-flow UI
+   * (mirrors the shape the platform's agent-flow view already uses for stage/mission timelines) -
+   * off by default since not every deployment has that consumer wired up yet, and every publish is
+   * a billable outbound call the plugin didn't ask for.
+   */
+  private reportTrace = (trace: InvocationTrace): void => {
+    this.emit('invocation:trace', trace);
+    if (process.env.AIVIN_TRACE !== 'false') {
+      console.log(formatTraceForConsole(trace));
+    }
+    if (process.env.AIVIN_TRACE_PUBLISH === 'true') {
+      const sdk = invocationStorage.getStore();
+      sdk
+        ?.call('realtime.publish', {
+          event: 'plugin.trace',
+          data: trace,
+          target: 'workspace',
+        })
+        .catch(() => {
+          // Best-effort - a trace-publish failure must never affect the actual invocation result.
+        });
+    }
+  };
 
   /**
    * Resolves which exported function in `src/main.ts` to call for this invocation.

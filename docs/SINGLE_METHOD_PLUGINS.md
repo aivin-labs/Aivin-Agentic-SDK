@@ -2,10 +2,14 @@
 
 ## Overview
 
-Every plugin exposes exactly **one** entry point: `main`. There's no manifest of multiple
-callable functions — the platform triggers your container, the host resolves your handler's
-entry point (`main`, then default export, then first exported function, in that order), and your
-code routes internally on whatever input it receives.
+A **single-function** plugin (the normal case, and what this doc is about) exposes exactly **one**
+entry point: `main`. The platform triggers your container, the host resolves your handler's entry
+point (`main`, then default export, then first exported function, in that order), and your code
+routes internally on whatever input it receives. This is the pattern to reach for unless you
+specifically have several small, related functions that would otherwise duplicate a project's worth
+of boilerplate between them - for that case, see
+[multi-function plugins](./MANIFEST.md#multi-function-plugins), where `manifest.json` names several
+functions in one shared `src/main.ts` instead of one.
 
 ```typescript
 import { PluginStatus } from '@aivin/sdk';

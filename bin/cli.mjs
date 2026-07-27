@@ -558,7 +558,10 @@ program
 const DEPLOY_EXCLUDE_DIRS = ['node_modules', '.git', '.tmp', 'dist', 'build', '.test'];
 // `package-lock.json` is NOT excluded - the backend's generated Dockerfile runs `npm ci`, which
 // requires a lockfile to exist in the build context; see ensureLockfile() below.
-const DEPLOY_EXCLUDE_FILES = ['.gitignore', 'yarn.lock', '.env'];
+const DEPLOY_EXCLUDE_FILES = ['.gitignore', 'yarn.lock'];
+// Matches '.env' and every variant (.env.local, .env.production, ...) - these can carry real
+// secrets and must never end up in the uploaded `files` payload.
+const isEnvFile = (name) => name === '.env' || name.startsWith('.env.');
 
 function readDirectoryRecursive(dir, basePath = '') {
   const files = {};
@@ -566,14 +569,18 @@ function readDirectoryRecursive(dir, basePath = '') {
 
   for (const item of items) {
     const fullPath = path.join(dir, item);
-    const relativePath = path.join(basePath, item);
+    // Backend keys are always forward-slash, matching how it's later written back with
+    // `path.resolve(communityPluginDir, filename)` - on Windows, `path.join` here would produce
+    // backslash-separated keys (e.g. "src\\main.ts") that the backend's POSIX filesystem treats as
+    // one literal filename containing a backslash, not a nested path - breaking every deploy.
+    const relativePath = basePath ? `${basePath}/${item}` : item;
     const stat = fs.statSync(fullPath);
 
     if (stat.isDirectory()) {
       if (!DEPLOY_EXCLUDE_DIRS.includes(item)) {
         Object.assign(files, readDirectoryRecursive(fullPath, relativePath));
       }
-    } else if (!DEPLOY_EXCLUDE_FILES.includes(item)) {
+    } else if (!DEPLOY_EXCLUDE_FILES.includes(item) && !isEnvFile(item)) {
       files[relativePath] = fs.readFileSync(fullPath, 'utf8');
     }
   }
@@ -719,6 +726,14 @@ async function runSmokeTest({ currentDir, serverUrl, apiKey, entries, isProxyPlu
 
   const results = [];
   for (const entry of entries) {
+    // A mixed multi-function batch can have some proxy entries and some real-code entries (see
+    // buildDeploymentPayload's doc comment) - the batch-level `isProxyPlugin` check above only
+    // catches the all-proxy case, so skip proxy entries individually here too: they call an
+    // external system, not your code, same reasoning as the early-return above.
+    if (entry.proxy_config) {
+      console.log(chalk.gray(`   ${entry.name} - proxy plugin, no generic smoke test to run`));
+      continue;
+    }
     const result = await smokeTestEntry(serverUrl, authHeaders, entry, workspaceId);
     results.push(result);
     const icon = result.passed ? chalk.green('✅') : chalk.red('❌');
@@ -726,14 +741,20 @@ async function runSmokeTest({ currentDir, serverUrl, apiKey, entries, isProxyPlu
     console.log(`   ${icon} ${label} - ${result.passed ? `passed (${result.duration_ms}ms)` : `failed: ${result.error || 'unexpected status'}`}`);
   }
 
-  const testDir = path.join(currentDir, '.test');
-  fs.mkdirSync(testDir, { recursive: true });
-  const reportPath = path.join(testDir, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
-  fs.writeFileSync(
-    reportPath,
-    JSON.stringify({ timestamp: new Date().toISOString(), workspace_id: workspaceId, passed: results.every((r) => r.passed), results }, null, 2),
-  );
-  console.log(chalk.gray(`   Report saved: ${path.relative(currentDir, reportPath)}`));
+  // A failure writing the report (permissions, disk full, ...) shouldn't be reported as a failed
+  // deploy - the deploy itself already succeeded by the time we get here.
+  try {
+    const testDir = path.join(currentDir, '.test');
+    fs.mkdirSync(testDir, { recursive: true });
+    const reportPath = path.join(testDir, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+    fs.writeFileSync(
+      reportPath,
+      JSON.stringify({ timestamp: new Date().toISOString(), workspace_id: workspaceId, passed: results.every((r) => r.passed), results }, null, 2),
+    );
+    console.log(chalk.gray(`   Report saved: ${path.relative(currentDir, reportPath)}`));
+  } catch (error) {
+    console.log(chalk.yellow(`⚠️  Smoke test ran, but saving the report failed: ${error.message}`));
+  }
 }
 
 async function deployPlugin({ endpointPath, label, smokeTest, workspaceOverride }) {
@@ -822,9 +843,14 @@ async function deployPlugin({ endpointPath, label, smokeTest, workspaceOverride 
         });
         console.log(chalk.gray(`   Plugin IDs assigned: ${result.plugin_ids.join(', ')}`));
       }
-    } else if (result.id && result.id !== manifest.id) {
-      manifest.id = result.id;
-      console.log(chalk.gray(`   Plugin ID assigned: ${result.id}`));
+    } else if (result.plugin_id && result.plugin_id !== manifest.id) {
+      // The backend's single-plugin deploy path always reassigns the real, persisted id server-side
+      // (never equal to what we sent) - `result.plugin_id` is the ONLY place that real id is ever
+      // reported back. Without writing it back here, every later `aivin test`/`plugin trigger` call
+      // would keep using the id we originally sent, which was never actually saved as this plugin's
+      // queryable id, and every /plugins/execute call by id would fail with "plugin not found".
+      manifest.id = result.plugin_id;
+      console.log(chalk.gray(`   Plugin ID assigned: ${result.plugin_id}`));
     }
     if (result.group_id) {
       console.log(chalk.gray(`   Group ID: ${result.group_id}`));
@@ -1030,7 +1056,7 @@ function applyGeneratedManifestFields(manifestPath, manifest, result) {
 // Same dirs/files `aivin deploy` already ignores, plus lockfiles and anything with no value as AI
 // context (binary-ish assets) - this is prompt context, not a file we upload anywhere.
 const CONVERT_EXCLUDE_DIRS = [...DEPLOY_EXCLUDE_DIRS, 'coverage', '.next', '.cache', '.vscode', '.idea'];
-const CONVERT_EXCLUDE_FILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '.gitignore', '.env'];
+const CONVERT_EXCLUDE_FILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '.gitignore'];
 const CONVERT_BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|svg|woff2?|ttf|eot|zip|tar|gz|pdf|mp4|mp3|wasm|node)$/i;
 const CONVERT_MAX_FILE_BYTES = 30_000; // skip individual files bigger than this - noise, not signal
 const CONVERT_MAX_TOTAL_BYTES = 250_000; // stay well under the server's 5MB/200-file hard cap
@@ -1060,6 +1086,7 @@ function gatherConversionContext(dir, manifestPath, handlerPath, basePath = '', 
       }
     } else if (
       !CONVERT_EXCLUDE_FILES.includes(item) &&
+      !isEnvFile(item) &&
       !CONVERT_BINARY_EXT.test(item) &&
       stat.size > 0 &&
       stat.size <= CONVERT_MAX_FILE_BYTES &&
@@ -1436,6 +1463,10 @@ async function createMcpProxyPlugin(name, options) {
     else if (opts.promptName) opts.kind = 'prompt';
     else if (opts.toolName) opts.kind = 'tool';
   }
+  // Same default the interactive prompt below offers - applied unconditionally so a fully-flagged
+  // non-interactive call (transport inferred, no --description given) doesn't skip straight past
+  // needing one and fail validation later with no explanation of what default it could have had.
+  if (!description) description = `Proxy for the "${name}" MCP tool`;
 
   // Non-interactive (scripted/AI) mode once transport is known (explicit or inferred); otherwise prompt.
   if (!opts.transport) {

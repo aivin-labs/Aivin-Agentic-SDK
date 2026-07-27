@@ -163,7 +163,22 @@ export function flattenManifestFile(
     Array.isArray((raw as { plugins?: unknown }).plugins)
   ) {
     const { plugins, ...common } = raw as MultiFunctionManifestGroup;
-    return plugins.map((entry) => ({ ...common, ...entry })) as MultiFunctionManifestEntry[];
+    if (plugins.length === 0) {
+      throw new Error(
+        'manifest.json\'s "plugins" array is empty - a multi-function plugin needs at least one entry.',
+      );
+    }
+    const flattened = plugins.map((entry) => ({ ...common, ...entry })) as MultiFunctionManifestEntry[];
+    flattened.forEach((entry, i) => {
+      const record = entry as unknown as Record<string, unknown>;
+      const missing = ['id', 'name', 'func'].filter((field) => !record[field]);
+      if (missing.length > 0) {
+        throw new Error(
+          `manifest.json's "plugins[${i}]" is missing required field(s): ${missing.join(', ')}.`,
+        );
+      }
+    });
+    return flattened;
   }
   return raw as PluginManifest;
 }
@@ -264,7 +279,8 @@ export type PluginProxyConfig = McpProxyConfig | GenericProxyConfig;
 export interface PluginDependency {
   /** ID of the dependency plugin. */
   plugin: string;
-  /** true = only call when needed (default: false = required, always called first). */
+  /** true = only call when needed (default: false = required - scheduled into an earlier
+   *  execution stage, so it always runs, and its result is available, before this plugin does). */
   optional?: boolean;
   condition?: string;
   fallback_field?: string;

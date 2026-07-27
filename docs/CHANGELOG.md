@@ -1,5 +1,86 @@
 # Changelog
 
+## [Unreleased] - 2026-07-27 (2)
+
+### 🆕 Added — `sdk.ai.promptStream()`, true token-level AI streaming
+
+- New `ctx.sdk.ai.promptStream(quest, opts)` - same ergonomic shape as Vercel AI SDK's
+  `streamText()`: returns `{ textStream, text }` where `textStream` is an `AsyncIterable<string>`
+  of deltas as the model generates them, and `text` is a `Promise<string>` resolving to the full
+  response once the stream ends. `text` resolves correctly even if `textStream` is never iterated.
+- Required a new server-streaming RPC end to end: `InvokeStream` added to
+  `sdk_transport.proto` (kept in sync with the backend's copy at
+  `src/base/sdk/proto/sdk_transport.proto`); backend registers `ai.promptStream` as a
+  streaming-capable route (`PluginBridge.sdkStreamFunction`) that forwards `AIEngine.prompt`'s
+  existing driver-level `onUpdate` chunks straight through to the plugin, instead of buffering the
+  whole response server-side first like `ai.prompt` does. `GrpcSDKServer.InvokeStream` shares the
+  exact same auth/capability-resolution path as `Invoke` (extracted to
+  `authenticateAndResolveContext`, not duplicated) so the two RPCs can't drift apart on tenant
+  isolation.
+- Verified live end-to-end against a real backend: 9 real token chunks streamed in for a live LLM
+  call, concatenated chunks matched the final aggregated text exactly.
+- Fixed a real crash found while verifying this: a rejected `final` promise that nobody
+  `await`ed/`.catch()`'d (e.g. a caller that only consumes `textStream`) was an unhandled promise
+  rejection that took down the whole plugin process on modern Node. `invokeHostStream` now attaches
+  a swallow-only handler internally so this can't happen, without affecting real callers who do
+  await/catch `final` normally.
+- No automatic retry for streaming calls (unlike `invokeHost`) - a stream can be partway through
+  delivering chunks when a transport error happens, and there's no safe way to resume or re-run a
+  partially-observed stream without risking duplicated/interleaved output.
+
+### 🆕 Added — per-invocation execution trace (`aivin start`/`aivin test` dev tooling)
+
+- Every plugin invocation now collects a structured trace of every `ctx.sdk.*`/global-import call
+  made during it (namespace, duration, retry attempts, success/error), isolated per-invocation via
+  `AsyncLocalStorage` the same way the active `SDKClient` already is - concurrent invocations in the
+  same process never cross-contaminate each other's trace.
+- `PluginServer` prints a readable timeline to the console after every invocation (success or
+  failure) by default - set `AIVIN_TRACE=false` to opt out. `AIVIN_TRACE_PUBLISH=true` additionally
+  best-effort publishes the trace via `realtime.publish('plugin.trace', ...)` so the host can
+  eventually surface it in the platform's own execution-flow UI (same shape family as the agent
+  flow view's stage/mission timelines), off by default since not every deployment has that consumer
+  wired up and every publish is a billable call the plugin didn't ask for.
+- New exports: `getCurrentTrace()` (usable from inside `main()` itself), `formatTraceForConsole()`,
+  types `InvocationTrace`/`TraceEvent`.
+- Verified live via `aivin start` + curl - trace prints correctly for both zero-call and
+  multi-call invocations.
+
+### 🔄 Changed — structured-output self-healing (LangChain `OutputFixingParser`-style)
+
+- When a caller passes `schema` to `AIEngine.prompt()` and the model's response can't be parsed
+  into valid JSON (the driver-level `repairAndParseJSON` already tries `jsonrepair` + regex
+  extraction, then falls back to returning the raw string), the engine now makes **one** corrective
+  follow-up call before giving up: sends the malformed output + the schema back to the same model
+  and asks for a corrected JSON-only response. Bounded to one attempt (`_isSelfHealAttempt` flag)
+  to avoid infinite recursion if the model keeps failing to format correctly; falls back to the
+  original raw-string behavior (unchanged) if the correction attempt also fails.
+- Motivated directly by a real bug fixed earlier this session: the `openllm` provider (a
+  multi-model gateway) doesn't reliably honor `response_format: json_schema` guided decoding for
+  every model behind it, so a text-instruction safety net was added - this self-heal is the second,
+  complementary layer: even if the instruction-level nudge isn't enough, one corrective round trip
+  usually recovers a well-formed response instead of surfacing a hard failure to the caller.
+
+## [Unreleased] - 2026-07-27
+
+### 🔄 Changed — retry/backoff, observability, and test coverage for the gRPC transport
+
+- `invokeHost` now retries transport-level `UNAVAILABLE` failures (connection refused/DNS
+  failure/transient blip - request never reached the server) with exponential backoff + full
+  jitter, up to `SDK_GRPC_MAX_RETRIES` (default 2) attempts. Deliberately does **not** retry
+  `DEADLINE_EXCEEDED`/`INTERNAL`/application-level failures - the request may have already been
+  processed server-side and there's no idempotency-key mechanism to make re-sending those safe.
+  Override per-call via `InvokeRequest.maxRetries` (`0` disables retries for that call).
+- New `onCall(listener)` export - a lightweight, dependency-free observability hook that fires
+  `{ namespace, durationMs, attempts, success, error? }` after every call finishes. Wire it to
+  OpenTelemetry/Datadog/whatever the host project already uses. Set `SDK_DEBUG=true` to also log
+  every call's timing to the console without wiring anything up.
+- `SDKClient` now accepts an `invoke` override in its constructor options (transport dependency
+  injection) - used by the new unit tests, not meant for production plugin code.
+- Added `test/grpcInvoker.test.ts` (retry/backoff behavior) and `test/sdkClient.test.ts`
+  (`call`/`a2a`/`ask`/`hil`/`stream` behavior, including the agent-id-vs-search-query heuristic,
+  now exported as the pure function `looksLikeAgentId`) - the core runtime paths previously had
+  zero test coverage.
+
 ## [Unreleased] - 2026-07-26
 
 ### 🆕 Added — `aivin plugin trigger`
@@ -96,20 +177,46 @@ just `{ data: '...' }`, matching `aivin mcp create`'s manifest and every doc exa
   could never actually be invoked. `PluginDeploymentService.deployMultiFunctionBatch()` now runs the
   security check/Docker build once for the shared code and registers all N entries with
   `proxy_config: { type: 'docker', code_id: <shared group id> }`. `PluginRunner.handleDockerRuntime`
-  now addresses the container by `code_id` (not `manifest.id` - a no-op for every existing
-  single-function plugin, since `code_id` has always equaled `manifest.id` there) and passes each
+  now addresses the container by `code_id` instead of `manifest.id` - these were never actually the
+  same value even for a single-function plugin (`prepareDeployManifest` sets `code_id: plugin.id`
+  but then reassigns `manifest.id` to a freshly-generated one on every deploy), so this wasn't just a
+  multi-function fix: the previous `manifest.id`-keyed addressing never matched the real community
+  directory or docker-compose service name for any Docker-runtime plugin. Also now passes each
   entry's `func` to the container explicitly via `context.metadata.func`, so `PluginServer` no longer
   has to guess the target function from `mission` (which is just a human-readable reason string, not
   a routable id) for a real host-triggered invocation - see `src/PluginServer.ts`'s
   `resolveTargetFunction()`. Mission-based matching against the local array manifest remains as a
   fallback, used only by `aivin start`'s local dev/curl testing.
 - **Backend: fixed several `DeveloperPluginManifest` fields that were silently dropped on save.**
-  `sdk_scopes`, `timeout_ms`, `circuit_breaker`, `stacks`, `side_effect`, `requires_human`, and the
-  new `func` were read all over the plugin execution code but never declared on `PluginModel`'s
-  (strict-mode) Mongoose schema, so Mongoose stripped them before every save/update - they never
-  actually persisted regardless of what a developer set in `manifest.json`. `sdk_scopes` in
-  particular has always silently no-op'd (`PluginBridge.enforceSdkScope` always saw `undefined` and
-  fell back to full access) despite being documented as enforced.
+  `sdk_scopes`, `timeout_ms`, `circuit_breaker`, `stacks`, `side_effect`, `requires_human`, `rate_limit`,
+  `network_config`, and the new `func` were read all over the plugin execution code but never
+  declared on `PluginModel`'s (strict-mode) Mongoose schema, so Mongoose stripped them before every
+  save/update - they never actually persisted regardless of what was set in `manifest.json`.
+  `sdk_scopes` in particular has always silently no-op'd (`PluginBridge.enforceSdkScope` always saw
+  `undefined` and fell back to full access) despite being documented as enforced. Fixed on the
+  backend regardless of the SDK's own decision below to no longer surface `sdk_scopes` as a
+  developer-facing manifest field - the persistence bug applies to any manifest that sets it, from
+  any source, not just this SDK.
+- **Backend: `rate_limit` and `network_config` had the exact same undeclared-schema bug** -
+  automatic plugin rate limiting has never actually applied to anything, and an admin's network
+  access approval/revocation (`AdminPluginService.updatePluginNetworkConfig`) never actually
+  persisted either. Also closed a related gap: `network_config.is_network_approved` was never
+  stripped from a developer's own submitted manifest, and `DockerHelper` reads it from the
+  in-memory manifest *before* any DB round-trip - so a manifest simply declaring
+  `"network_config":{"is_network_approved":true}` granted itself real internet egress with no admin
+  review at all. Deploy now always ignores what's submitted and carries forward whatever's already
+  admin-approved for that plugin instead (by `code_id`, so approval survives redeploys).
+- **Backend: fixed the deployed plugin id never being reported back correctly.** `prepareDeployManifest`
+  reassigns `manifest.id` via `generateId()` on every single-plugin deploy (never equal to what was
+  submitted), but the deploy response only ever echoed back the submitted id - so the CLI (and any
+  other caller) had no way to learn the real, queryable id a freshly-deployed plugin was actually
+  saved under, breaking every subsequent `/plugins/execute` call by id. Fixed for both the JSON and
+  ZIP single-plugin deploy paths; the CLI now writes back the correct id.
+- **Backend: closed a privilege-escalation path in `@AllowApiKey()`'s fallback auth.** It never
+  checked the API key's `scopes`, so a workspace-scoped key (`scopes: ['mcp']`, meant to restrict a
+  low-trust third party to exactly one workspace) could use these routes to list every workspace on
+  the account or execute a plugin in an arbitrary workspace the key owner administers. Now requires
+  `full_access` scope, matching the account-wide nature of these routes.
 
 ### 🆕 Added — `aivin login` (browser flow) and machine-wide credentials
 

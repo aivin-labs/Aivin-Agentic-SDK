@@ -4,6 +4,13 @@ package sdktransport;
 
 service SdkTransportService {
   rpc Invoke (SdkInvokeRequest) returns (SdkInvokeResponse);
+  // Server-streaming variant of Invoke - only namespaces registered as streaming-capable on the
+  // host (currently just `ai.promptStream`) support this; everything else still goes through the
+  // plain unary Invoke above. Same request shape, response comes as a sequence of chunks instead
+  // of one message: zero or more `done=false` chunks carrying incremental `delta` text, then
+  // exactly one final `done=true` chunk carrying `data_json` (mirrors SdkInvokeResponse.data_json -
+  // the full/aggregated result) and `success`/`error`.
+  rpc InvokeStream (SdkInvokeRequest) returns (stream SdkStreamChunk);
 }
 
 message SdkInvokeRequest {
@@ -16,4 +23,12 @@ message SdkInvokeResponse {
   bool success = 1;
   string data_json = 2;
   string error = 3;
+}
+
+message SdkStreamChunk {
+  string delta = 1;
+  bool done = 2;
+  string data_json = 3;
+  bool success = 4;
+  string error = 5;
 }

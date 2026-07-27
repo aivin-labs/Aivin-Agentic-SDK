@@ -87,11 +87,12 @@ aivin create my-plugin              # scaffold manifest.json + src/main.ts
 cd my-plugin
 
 aivin plugin make "<description>"   # or: let AI generate src/main.ts from a description
+aivin plugin convert                # or: convert a project you already have into a plugin
 
 aivin start                         # run locally: gRPC server + curl-able HTTP shim on :4001
 aivin test                          # deploy to a non-production test instance
-aivin deploy                        # ship to your org (private)
-aivin deploy public                 # submit to the public store (pending review)
+aivin deploy                        # ship to your org
+aivin plugin trigger "<mission>" '<input>'  # invoke it for real, like the platform's Playground
 ```
 
 ## Checklist before deploying
