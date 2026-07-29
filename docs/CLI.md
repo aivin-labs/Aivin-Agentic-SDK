@@ -32,10 +32,23 @@ Commands:
                            smoke-test it with generated input and save a report
                            to .test/
   plugin                   AI-assisted plugin authoring
+  connector                Register and discover reusable connectors (OAuth
+                           apps / credential-form namespaces)
   mcp                      MCP proxy plugins - wrap an external MCP server
                            tool/resource/prompt, no code required
   login [options]          Log in and save an API key for plugin deployment
                            (opens your browser by default)
+  key                      Manage named API keys for your account
+  do [options] [agentNickname] [mission]  Have <agentNickname> work toward a
+                           goal in the background - not a specific deployed
+                           plugin
+  task [options] [description]  Create a new task from a plain-language
+                           description
+  workspace [options]      Browse your workspaces and projects, and pick one to
+                           use with --workspace/--project
+  agent                    Search, install, create, and publish AI Staff agents
+  project                  Create, update, and delete projects within a
+                           workspace
   help [command]           display help for command
 ```
 
@@ -231,10 +244,9 @@ aivin test --no-smoke-test         # deploy only, same as before this flag exist
 
 ## `aivin plugin make <description>`
 
-AI-generates `src/main.ts` from a natural-language description, via the real `POST /code/generate`
-endpoint (the same one the browser CodeEditor uses) - prompted to reinforce this SDK's conventions
-(`main(mission, input, ctx)`, `import { ai } from '@aivin-labs/sdk'`, `PluginResponse`).
-Requires `manifest.json` to already exist (`aivin create` first).
+AI-generates a plugin from a natural-language description, via `POST /code/generate-project` -
+**complexity-adaptive**: the backend classifies the requirement first, and only escalates beyond a
+single `src/main.ts` when it's genuinely complex.
 
 ```
 Options:
@@ -246,37 +258,135 @@ Options:
 aivin plugin make "Summarize a support ticket and tag its urgency"
 ```
 
-Review generated code before relying on it - it's a strong starting point, not a guarantee.
+- **Simple/moderate** requirement (the common case): exactly one `src/main.ts`, one generation call
+  - unchanged from before. Same conventions as always (`main(mission, input, ctx)`,
+  `import { ai } from '@aivin-labs/sdk'`, `PluginResponse`).
+- **Complex** requirement (several genuinely independent capabilities, or logic too large for one
+  flat function): the backend plans a small multi-file project first, generates each file, and - if
+  the plan calls for it - returns a [multi-function manifest](./MANIFEST.md#multi-function-plugins)
+  fragment that replaces `manifest.json`'s `plugins[]` with one entry per capability.
+
+Requires `manifest.json` to already exist (`aivin create` first).
+
+### Self-correction loop
+
+Generation isn't one-shot, and for a multi-file plan it isn't one-file-at-a-time either: files with
+no dependency on each other generate in parallel (only a file that genuinely needs to see another
+one's content, per the plan's own `depends_on`, waits for it first). After writing every returned
+file, if the project's own `typescript` devDependency is installed (`npm install` already run), the
+whole project is type-checked with `tsc --noEmit`. Real compiler errors (exact
+`file(line,col): error TSxxxx: ...` lines) are attributed back to whichever file they were reported
+against and sent to the AI for a surgical fix - up to 2 rounds, across as many files as had errors:
+
+```
+🤖 Generating plugin
+✅ 2 file(s) generated (src/main.ts, src/lib/search.ts)
+⚠️  2 compiler error(s) across 1 file(s) - asking the AI to fix...
+✅ Fixed - clean type-check after 1 attempt(s)
+```
+
+If `node_modules` isn't installed yet, type-checking (and the self-correction it enables) is skipped
+silently - run `npm install` first if you want it. If errors remain after both rounds, every file is
+still written, with every remaining error printed for you to fix by hand.
+
+Review generated code before relying on it either way - self-correction only catches what `tsc`
+catches (type errors), not wrong business logic.
 
 ## `aivin plugin convert [hint]`
 
-Same generator as `plugin make`, pointed at code you already have instead of a description. Reads
-the current directory as context and asks the AI to adapt its existing logic into `src/main.ts`,
-preserving behavior rather than stubbing it out.
+Hands the existing project in the current directory to the backend's agentic project-conversion
+pipeline instead of generating locally. Unlike `plugin make`/`plugin init` (a single AI call per
+file, run entirely from what you pass it), this command:
+
+1. Uploads only the **directory tree** - paths and byte sizes, never file content - so the request
+   stays cheap no matter how large the project is.
+2. The backend scans it: it decides which files are actually worth reading (entry points,
+   `package.json`, anything name-suggestive of routes/tools/skills) and asks the CLI to read them
+   back one at a time, over the same socket connection `aivin plugin logs` uses.
+3. It plans a conversion - single `main()` vs. a [multi-function manifest](./MANIFEST.md#multi-function-plugins)
+   (one `plugins[]` entry per independent capability), and which files to create vs. adapt in
+   place - detecting the project's shape (a plain script, an MCP server, an API backend with
+   routes, a Claude-style skill) from what it actually read, not a fixed regex. If the project isn't
+   TypeScript/JavaScript (Python, Go, ...), every file becomes a **port** (translated, not edited) -
+   the plan always uses `create` in that case, never `update`, since there's no existing `.ts` file
+   to adapt in place.
+4. It generates/updates each planned file, then **verifies with a real `tsc --noEmit` run** on your
+   machine (via the same tool-call channel) and self-corrects on real compiler errors, up to twice.
+
+Every step prints live as it happens - this loop can take a while on a real project, so it's never
+silent:
+
+```bash
+cd your-existing-project
+aivin plugin convert
+# 📂 Scanning project tree...
+#    142 file(s) in tree (content read on demand by the server, never uploaded up front)
+# 🤖 Converting - this loops (scan → plan → generate → verify), watch for progress below...
+#
+# [10:32:01] Scanning project tree (142 entries)...
+# [10:32:03] Reading 3 file(s): package.json, src/index.ts, src/tools/search.ts
+# [10:32:07] Plan ready: mcp_server, 2 file(s) - Two independent MCP tools found (search, fetch);
+#            splitting into a multi-function manifest so each is separately callable.
+# [10:32:15] Generating 2 file(s) in parallel: src/main.ts, src/lib/search.ts
+# [10:32:22] Type-checking (attempt 1)...
+# [10:32:23] Type-check clean
+# [10:32:23] All required exports present
+# [10:32:24] Running a smoke test with generated sample input (may make real SDK/AI calls using your credentials)...
+# [10:32:31] Smoke test passed
+# ✅ Conversion done (mcp_server, 2 file(s))
+```
+
+The smoke test only runs if the type-check passed first (no point executing code that doesn't even
+compile) and `@aivin-labs/sdk` is already installed locally (`npm install`) - skipped, not failed,
+otherwise. It spawns the real plugin runtime on your machine on off-default ports (won't collide with
+a real `aivin start`) with AI-generated sample input, so a plugin whose logic calls `ai.prompt()` or
+other SDK methods will make a real call using your credentials during this step.
 
 ```
 Options:
   --model <model>        LLM model to use for generation
   --provider <provider>  LLM provider to use for generation
+  --force                 Re-run conversion even if src/main.ts already exists (e.g. redo a
+                          previous bad/stale result)
 ```
 
 - No `manifest.json` needed first - if one doesn't exist, it's created from `package.json` (name,
   description) or the directory name.
-- Fails if `src/main.ts` already exists - this is for a project that isn't a plugin yet, not for
-  editing one.
-- Gathers the project's own files as AI context (same exclusions as `aivin deploy` - `node_modules/`,
-  `.git/`, lockfiles, etc. - plus a size cap per file and in total; large binary-ish files are
-  skipped). `src/main.ts`/`manifest.json` themselves are never included, since a `workspace_files`
-  entry for the file being generated is what would trip the backend's surgical-edit/diff mode.
-- `[hint]` is optional extra guidance, e.g. which function to focus on.
+- Fails if `src/main.ts` already exists, unless `--force` is given - the plain (no-flag) case is
+  for a project that isn't a plugin yet; `--force` re-runs the whole scan/plan/generate/verify loop
+  against a project this command already converted before (the earlier plan turned out wrong, the
+  project changed since, whatever the reason) - `src/main.ts` isn't excluded from what gets scanned,
+  so the new plan is free to mark it `update`, and the usual per-file overwrite confirmation still
+  applies to it like any other existing file.
+- `[hint]` is optional extra guidance, e.g. which function to focus on - passed straight to the
+  backend's planning step.
+- If the plan is multi-function, `manifest.json`'s `plugins[]` is replaced with one entry per
+  planned capability (fresh local ids - `aivin deploy` still assigns the real ones).
+- Requires a live connection to the Aivin server for the whole duration (it's not a local batch
+  job) - the socket is what lets the backend read files on demand and stream progress back.
+- Only one conversion can run at a time per project - starting a second one against the same
+  project while the first is still running fails fast instead of racing both against the same
+  files. If the previous run's process died without cleanly finishing, this frees up on its own
+  within moments, not stuck for the full run duration.
+- The whole run gives up after ~15 minutes regardless of how far it got, so a stuck step can't hold
+  the connection open forever.
 
-```bash
-cd your-existing-project
-aivin plugin convert
-aivin plugin convert "focus on the exportInvoice function"
-```
+### Overwrite safety
 
-Review generated code before relying on it - it's a strong starting point, not a guarantee.
+Unlike `plugin make`, this command can touch files that **already exist** in your project - the
+backend's plan may mark some as `update` (adapt in place) rather than `create` (new file):
+
+- Before scanning starts, if the directory is a git repo with uncommitted changes, you're warned
+  and (in an interactive terminal) asked to confirm before continuing at all.
+- Before any individual existing file is actually overwritten, you're prompted per-file (with a
+  quick `git status` hint - untracked vs. has uncommitted changes - when available) - declining
+  skips just that file, the rest of the conversion continues.
+- Non-interactive runs (CI/scripts) can't prompt, so they proceed automatically - the decision is
+  still printed to the log either way, it's just not blocking.
+
+Review the generated code before relying on it - self-correction only catches what `tsc` catches
+(type errors), not wrong business logic, and the file/project-kind detection is a best effort, not
+a guarantee.
 
 ## `aivin plugin search <query>`
 
@@ -294,10 +404,16 @@ Options:
 Options:
   --workspace <id>  Restrict to plugins visible in this workspace (default: your whole org)
   --limit <n>       Max results to show
+  --plain           Print a flat list instead of the interactive browser (for scripts/CI)
 ```
 
-Prints each match's id, name, description, and version. Call one from your own plugin with
-`import { call } from '@aivin-labs/sdk'` then `await call('<id>.<purpose>', params)`.
+In a real terminal, results open in an interactive browser: `↑`/`↓` to move between matches,
+`space`/`enter` to open a plugin's detail view (full description, version, input/output schema),
+`esc`/`backspace` to go back to the list, `q` to quit. Non-TTY contexts (scripts, CI, piped
+output) or `--plain` fall back to a flat printed list.
+
+Call one from your own plugin with `import { call } from '@aivin-labs/sdk'` then
+`await call('<plugin_id>', params)`.
 
 ## `aivin plugin trigger [mission] [input]`
 
@@ -460,6 +576,201 @@ aivin login --api-key <key>
 ```
 
 Skips login entirely - just saves the given key to `~/.aivin/credentials`.
+
+## `aivin key`
+
+Manages *named* API keys on your account - separate from the one machine-wide key `aivin login`
+saves. Useful for giving a CI pipeline, a teammate's script, or any other caller its own key you can
+revoke independently later.
+
+```
+Commands:
+  gen [options] <name>     Create (or replace) a named API key for your account - shown only once
+  revoke [options] <name>  Revoke a named API key for your account
+  list [options]           List API keys on your account
+```
+
+```bash
+aivin key gen "ci-pipeline"         # prompts for your account password, prints the new key once
+aivin key gen "ci-pipeline" --save  # also saves it to ~/.aivin/credentials as this machine's default
+aivin key list                      # see what's on your account
+aivin key revoke "ci-pipeline"      # revoke it by name
+```
+
+All three authenticate with the `API_KEY` `aivin login` already saved - no email/password prompt for
+`list`/`revoke`. `gen` is the exception: it still asks for your **account password** (not email) as
+a step-up check, since minting a new key from an existing one is the one action here that could
+otherwise let an already-leaked key re-provision itself indefinitely even after you revoke it.
+`list`/`revoke` only read or remove access, never grant it, so they need no such check.
+
+`aivin key gen` replaces (not accumulates) any existing key with the same name, the same way
+re-running `aivin login` replaces this machine's own key.
+
+## `aivin do <agent_nickname> <mission>`
+
+Has a specific agent start a background mission toward a free-text goal (`POST /agent/start-work`),
+not a specific deployed plugin. The agent runs the mission on its own, checking in via the
+progress stream (see below); this is the CLI-native equivalent of typing into the platform's chat
+and choosing which AI Staff agent should handle it.
+
+```
+Options:
+  --workspace <id>  Workspace id to run in (default: your personal workspace)
+  --project <id>    Project id within the workspace
+  --no-watch        Fire the mission and return immediately - skip streaming live progress
+```
+
+```bash
+aivin do supportbot "Summarize today's support tickets and post the summary to #digest"
+```
+
+- `<agent_nickname>` is matched against the resolved workspace's already-installed agents (by
+  nickname, name, or id). Omit either argument and you'll be prompted interactively - the mission
+  prompt if only the agent is given, or a picker over the workspace's agents if only the mission is
+  given (in a non-interactive shell, both are required up front).
+- If the nickname doesn't match anything in the workspace, or the workspace has no agents at all
+  yet, you're offered a choice: search & install one from the marketplace, or create a brand new
+  one - so `aivin do` never dead-ends on an empty workspace (see `aivin agent install`/`aivin agent
+  make` below, which this reuses).
+
+By default it then streams the mission's live progress in the terminal (same realtime channel
+`aivin plugin logs` uses under the hood) until the run finishes or you press Ctrl+C - pass
+`--no-watch` to just fire it and return immediately instead.
+
+If `--workspace` is omitted, it runs in your **personal workspace** (the platform always resolves
+that first when no workspace is given).
+
+### `aivin do job <description>`
+
+Creates a new **automation job** - recurring background work on a cron-style schedule, independent
+of any single chat/mission invocation (`POST /automation/jobs/create`).
+
+```
+Options:
+  --workspace <id>      Workspace id to create the job in (default: your personal workspace)
+  --project <id>        Project id within the workspace
+  --agent <id>          Agent id the job runs as (default: the workspace's default agent)
+  --schedule <condition>  Natural-language schedule, e.g. "every Monday at 9am" (default: let the
+                         platform infer one)
+```
+
+```bash
+aivin do job "Compile last week's support tickets into a summary and post it to #digest"
+aivin do job "Send a daily standup reminder" --schedule "every weekday at 9am"
+```
+
+If `--schedule` is omitted, the platform infers a cadence (or falls back to manual) from the
+description itself - pass it explicitly if you already know the cadence, to skip the extra
+inference call.
+
+## `aivin task [description]`
+
+Creates a new task (`POST /task/create`) from a plain-language description - the description
+becomes both the task's title (truncated if long) and its full content.
+
+```
+Options:
+  --workspace <id>  Workspace id to create the task in (default: your personal workspace)
+  --project <id>    Project id within the workspace
+  --assignee <userId>  User id to assign the task to (default: unassigned)
+```
+
+```bash
+aivin task "Follow up with the customer about their refund request"
+```
+
+`aivin task` also has subcommands for the rest of the task lifecycle:
+
+```
+Commands:
+  list [options]          List tasks in a project
+  mine [options]          List tasks assigned to you in a project
+  get [id]                Get a task by id
+  update [options] [id]   Update a task
+  delete [id]             Delete a task
+```
+
+```bash
+aivin task list --status todo                          # list open tasks in your first project
+aivin task list --project <id> --assignee <userId>      # filter by project/assignee
+aivin task mine                                          # tasks assigned to you
+aivin task get <id>                                      # full task details (JSON)
+aivin task update <id> --status done                     # move a task to done
+aivin task update <id> --title "New title" --priority high
+aivin task delete <id>
+```
+
+`list`/`mine` are scoped to a single project (the backend's real `/task/:projectId/list` route) -
+`--project` defaults to the resolved workspace's first project, and throws if it has none (a
+Personal workspace typically has no projects; pass `--project <id>` explicitly, or run
+`aivin workspace` to find one).
+
+## `aivin workspace`
+
+Interactive picker: lists your workspaces (personal workspace first), lets you select one, then
+lists that workspace's projects so you can pick the corresponding one - printing the resolved
+`--workspace`/`--project` ids to pass to `aivin do`/`do job`/`task`.
+
+```
+Options:
+  --plain  Print a flat list instead of the interactive picker (for scripts/CI)
+```
+
+```bash
+aivin workspace
+```
+
+Non-TTY contexts (scripts, CI, piped output) or `--plain` print a flat listing instead of the
+interactive prompts.
+
+## `aivin agent`
+
+Search the AI Staff marketplace, install an agent into a workspace, create a brand new one, or
+publish one you own. `aivin do` calls into the same install/create flows automatically when it
+can't resolve `<agent_nickname>`.
+
+```
+Commands:
+  search [options] [query]     Search the AI Staff marketplace for an agent
+  install [options] [query]    Search the marketplace and install an agent into a workspace
+  make [options]                Create a brand new AI Staff agent
+  publish [options] [agentId]  Publish an agent you own to the marketplace
+```
+
+```bash
+aivin agent search "customer support"                    # browse the marketplace
+aivin agent install "customer support"                    # search + pick + install into your personal workspace
+aivin agent install --workspace <id>                      # no query - opens the same interactive picker `aivin do` uses
+aivin agent make --name "Ada" --nickname ada --email ada@example.com --bio "Support triage bot"
+aivin agent publish <agentId>                             # make an agent you own visible in the marketplace
+```
+
+- `install`/`make` default to your personal workspace when `--workspace` is omitted.
+- `make` calls `POST /ai-staff/create`; passing the target workspace at creation time auto-installs
+  the new agent there too (no separate `install` call needed).
+- `publish` is a two-step platform operation under the hood (`POST /ai-staff/update` with
+  `is_published: true`, then `POST /ai-staff/push` to promote the workspace's local copy to the
+  shared master) - both scoped to the workspace the agent actually lives/was authored in.
+
+## `aivin project`
+
+Create, rename, or delete a project within a workspace (the backend has no separate "list projects"
+endpoint - use `aivin workspace` to browse a workspace's existing projects).
+
+```
+Commands:
+  create [options] [name]  Create a new project in a workspace
+  update [options] [id]    Update a project (currently: rename)
+  delete [options] [id]    Delete a project
+```
+
+```bash
+aivin project create "Q3 Launch"
+aivin project update <id> --name "Q3 Launch (renamed)"
+aivin project delete <id>
+```
+
+All three default to your personal workspace when `--workspace` is omitted.
 
 ## Environment variables
 

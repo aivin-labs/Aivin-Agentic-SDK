@@ -1,5 +1,62 @@
 # Changelog
 
+## [1.2.0] - 2026-07-29
+
+### 🆕 Reworked — `aivin plugin convert` into an agentic, tool-relay-based conversion pipeline
+
+Previously a single `/code/generate` call with the whole project dumped in as `workspace_files` -
+didn't scale to a large project (uploads everything up front) and could only ever write one
+`src/main.ts`. Now a real multi-step loop, orchestrated server-side and driven by a new
+`POST /code/convert-project` endpoint:
+
+- **Scan on demand, not upload up front**: the CLI sends only the directory tree (paths + byte
+  sizes, never content); the server decides which files are actually worth reading and asks the CLI
+  to read them back one at a time over the same socket connection `aivin plugin logs` already uses
+  (`code:tool_call`/`code:tool_result`, relayed through a new `CodeToolRelay` service). Bounded to 5
+  scan rounds, 4 files/round.
+- **Plans before generating**: detects the project's shape (plain script, MCP server, API backend,
+  Claude-style skill) and decides single-file vs. a multi-file/multi-function plan, `create` vs.
+  `update` per file - including a dedicated **cross-language port mode**: a non-TypeScript source
+  project (Python, Go, ...) gets every file forced to `action=create` (there's no existing `.ts` to
+  edit in place) with an explicit instruction to faithfully translate the real logic, not guess at
+  it, and flag anything with no clear TypeScript/npm equivalent.
+- **Generates in dependency "waves"**, not one file at a time - files with no `depends_on` on each
+  other run concurrently (through the same adaptive, resource-aware concurrency engine other heavy
+  work in the platform already uses, not an unbounded `Promise.all`).
+- **Never overwrites an existing file silently**: warns up front if the directory has uncommitted
+  git changes, then prompts per-file before actually overwriting anything already on disk (skips
+  just that one file if declined, or if the prompt times out - never aborts the whole run over a
+  slow answer).
+- **Verifies before calling it done**: a real `tsc --noEmit` run (now `--incremental`, so a
+  multi-round fix loop on a large project isn't a full cold recompile every time), a static check
+  that the plan's promised exports actually exist in the generated entry file, and a sandboxed smoke
+  test (spawns the real plugin runtime locally with AI-generated sample input) - each with one bounded
+  self-correction attempt before giving up and reporting what's still wrong.
+- `--force` re-runs the whole loop against a project this command already converted before, instead
+  of refusing outright because `src/main.ts` exists.
+
+See [CLI.md#aivin-plugin-convert-hint](./CLI.md#aivin-plugin-convert-hint) for the full walkthrough.
+
+### 🆕 Added — complexity-adaptive `aivin plugin make`/`aivin init`
+
+`aivin plugin make` now calls a new `POST /code/generate-project` endpoint that classifies the
+requirement first: simple/moderate requests still cost exactly one generation call and write exactly
+`src/main.ts`, unchanged from before; a genuinely complex requirement (several independent
+capabilities, or logic too large for one flat function) gets planned into a small multi-file project
+and, when warranted, a [multi-function manifest](./MANIFEST.md#multi-function-plugins) - the same
+planning/wave-generation/self-correction machinery `plugin convert` uses, just starting from a
+description instead of an existing project. Previously every request, however complex, was crammed
+into one `main()` with no escape hatch.
+
+### 📝 Improved — self-correction loop now windows large files instead of resending them whole
+
+Fixing a compiler error in a file that runs into the hundreds/thousands of lines used to resend the
+entire file on every fix attempt, with no line numbers for the AI to reliably match against tsc's
+own `file(line,col)` output. Now builds a small numbered window around just the reported error
+line(s), asks for a fix scoped to that window, and splices the result back in place - cheaper and
+more precise on large files, whole-file fix remains the fallback when no line number can be
+extracted at all.
+
 ## [1.1.0] - 2026-07-28
 
 ### 📝 Documented — `manifest.json`'s `avatar` field

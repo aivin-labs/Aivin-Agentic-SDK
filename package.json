@@ -1,6 +1,6 @@
 {
   "name": "@aivin-labs/sdk",
-  "version": "1.1.0",
+  "version": "1.0.1",
   "description": "Aivin Plugin SDK - gRPC client/server for building plugins that run inside the Aivin platform (agentic engine, vector search, workspace, tasks, and more)",
   "type": "commonjs",
   "main": "dist/index.js",

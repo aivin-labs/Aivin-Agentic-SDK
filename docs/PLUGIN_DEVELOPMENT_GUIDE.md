@@ -74,13 +74,20 @@ conventions (`main(mission, input, ctx)`, `import { ai } from '@aivin-labs/sdk'`
 shape). Review the output before relying on it — generated code is a strong starting point, not a
 guarantee.
 
-Already have a project instead of a description to work from? `aivin plugin convert` does the same
-thing, pointed at your existing code as context instead:
+Already have a project instead of a description to work from? `aivin plugin convert` turns it into a
+plugin instead - not just "the same generator pointed at your code": it scans your project's tree
+on demand (never uploads full file contents up front), plans single-file vs. multi-file/multi-entry
+based on what it actually finds (including porting a non-TypeScript project's real logic, e.g.
+Python, rather than editing it in place), then verifies the result with a real `tsc` run plus a
+sandboxed smoke test before calling it done:
 
 ```bash
 cd your-existing-project
 aivin plugin convert
 ```
+
+See [CLI.md#aivin-plugin-convert-hint](./CLI.md#aivin-plugin-convert-hint) for the full loop,
+overwrite-safety behavior, and `--force` (re-run conversion on a project already converted before).
 
 ## 4. Test locally
 

@@ -5,15 +5,16 @@ import chalk from 'chalk';
 import fs from 'fs';
 import path from 'path';
 import inquirer from 'inquirer';
-import { spawn, exec, execSync } from 'child_process';
+import { spawn, exec, execSync, execFileSync } from 'child_process';
 import axios from 'axios';
 import http from 'http';
 import os from 'os';
 import dotenv from 'dotenv';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname } from 'path';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { io } from 'socket.io-client';
+import readline from 'readline';
 // Same flatten logic PluginServer.ts uses for local/production runtime resolution - imported from
 // the built output (not src/) so deploy and runtime agree on exactly the same rules for what
 // manifest.json's { ...commonFields, plugins: [...] } authoring shape expands into.
@@ -41,7 +42,7 @@ const __dirname = dirname(__filename);
 
 const program = new Command();
 
-program.name('aivin').description('Aivin Plugin SDK - Build and run AI plugins').version('1.1.0');
+program.name('aivin').description('Aivin Plugin SDK - Build and run AI plugins').version('1.2.0');
 
 // Command: create plugin
 program
@@ -728,7 +729,7 @@ async function createPackageJson(pluginDir, name, description, currentPackageJso
       // "latest"/range dependency pins as a supply-chain risk (a later, unreviewed version could
       // get pulled in silently) and blocks deployment over it. Bump this alongside this CLI's own
       // version() call above when publishing a new @aivin-labs/sdk release.
-      '@aivin-labs/sdk': '1.1.0',
+      '@aivin-labs/sdk': '1.2.0',
     },
     devDependencies: {
       '@types/node': '^24.0.0',
@@ -1031,6 +1032,43 @@ async function runSmokeTest({ currentDir, serverUrl, apiKey, entries, isProxyPlu
   } catch (error) {
     console.log(chalk.yellow(`⚠️  Smoke test ran, but saving the report failed: ${error.message}`));
   }
+}
+
+// Same spinner deployPlugin has always had, factored out so other long-running network calls
+// (AI codegen, connector register) get the same "still working, not hung" feedback instead of a
+// static line that just sits there for however many seconds the request takes.
+async function withSpinner(label, fn) {
+  if (!process.stdout.isTTY) {
+    console.log(chalk.blue(`${label}...`));
+    return fn();
+  }
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let i = 0;
+  const timer = setInterval(() => {
+    process.stdout.write(`\r${chalk.cyan(frames[i])} ${label}...`);
+    i = (i + 1) % frames.length;
+  }, 100);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+    readline.cursorTo(process.stdout, 0);
+    readline.clearLine(process.stdout, 0);
+  }
+}
+
+// Positional CLI args are declared optional ([arg]) everywhere, not required (<arg>), so Commander
+// never hard-fails before the action() runs - every command instead calls this to fill a missing
+// value interactively. Falls back to throwing `usage` when there's no TTY to prompt on (scripts/
+// CI) or the user leaves the prompt blank, so non-interactive callers still fail fast and loud
+// instead of hanging on a prompt nothing will ever answer.
+async function requireArg(value, { prompt, usage }) {
+  if (value) return value;
+  if (process.stdin.isTTY && process.stdout.isTTY) {
+    const { answer } = await inquirer.prompt([{ type: 'input', name: 'answer', message: prompt }]);
+    if (answer) return answer;
+  }
+  throw new Error(usage);
 }
 
 async function deployPlugin({ endpointPath, label, smokeTest, workspaceOverride }) {
@@ -1376,9 +1414,8 @@ async function initInteractive(options) {
     skipHandler: true,
   });
 
-  console.log(chalk.blue('🤖 Generating business logic (src/service.ts)...'));
   try {
-    await generateServiceAndWrapper(pluginDir, description, options);
+    await withSpinner('🤖 Generating business logic (src/service.ts)', () => generateServiceAndWrapper(pluginDir, description, options));
     console.log(chalk.green('✅ src/service.ts + src/main.ts generated'));
   } catch (error) {
     // Don't leave a half-scaffolded project on generation failure - fall back to the plain
@@ -1406,16 +1443,240 @@ async function initInteractive(options) {
   console.log(`   npm start       # Start plugin locally (gRPC server + HTTP test shim on :4001)`);
 }
 
+/** Single call to POST /code/generate - used directly for surgical per-file fixes in
+ *  generateProjectWithSelfCorrection. Throws on network/API failure or if the server ever returns
+ *  its internal diff-patch blob instead of plain source. */
+async function requestCodeGeneration(serverUrl, apiKey, payload) {
+  let response;
+  try {
+    response = await axios.post(`${serverUrl}/code/generate`, payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey || 'dev-token'}`,
+      },
+    });
+  } catch (error) {
+    const message = error.response?.data?.message || error.message;
+    throw new Error(`Code generation failed: ${message}`, { cause: error });
+  }
+  const result = response.data ?? {};
+  if (!result.code) {
+    throw new Error('Aivin server did not return generated code.');
+  }
+  const looksLikeDiffBlob = /^\s*\{\s*"mode"\s*:\s*"(diff|full)"/.test(result.code);
+  if (looksLikeDiffBlob) {
+    throw new Error(
+      'Aivin server returned an internal patch format instead of plain code - this is a server-side bug, not something to write to src/main.ts. Please report it.',
+    );
+  }
+  return result;
+}
+
+// How many times to send tsc's own compiler errors back to the AI and ask it to fix them, on top
+// of the first-pass generation. Bounded so a stubborn error (e.g. a package that genuinely isn't
+// available in the plugin sandbox) doesn't loop forever burning generation calls.
+const CODEGEN_MAX_FIX_ATTEMPTS = 2;
+
+/** Type-checks the freshly generated handler with the scaffolded project's own `typescript`
+ *  devDependency - skipped (not failed) when `node_modules` isn't installed yet, e.g. running
+ *  `plugin make`/`convert` straight after `aivin create` and before `npm install`. This is what
+ *  gives the self-correction loop something concrete to react to: exact `file(line,col)` compiler
+ *  errors, not a guess at what might be wrong. */
+/**
+ * Runs asynchronously (spawn, not execSync) on purpose: this is also called as the `run_typecheck`
+ * tool during `plugin convert`, where the process must keep servicing its socket connection (ping/
+ * pong, other tool calls) while tsc runs - a synchronous execSync call blocks the whole event loop
+ * for as long as tsc takes, which on a real project can be many seconds and risks the server-side
+ * ping timeout disconnecting the socket mid-typecheck.
+ */
+function typeCheckHandler(currentDir) {
+  return new Promise((resolve) => {
+    const tscBin = path.join(currentDir, 'node_modules', 'typescript', 'bin', 'tsc');
+    if (!fs.existsSync(tscBin)) return resolve({ skipped: true, errors: [] });
+    const tsconfigPath = path.join(currentDir, 'tsconfig.json');
+    // --incremental caches type-check state in a .tsbuildinfo file (outside the project, keyed by
+    // a hash of its path - never written into the user's own directory, nothing to .gitignore).
+    // On a large `plugin convert` project, the fix loop can call this 2-3 times in one run; without
+    // this, every single call is a full cold recompile of every file, not just the 1-2 that changed
+    // since the last attempt.
+    const buildInfoDir = path.join(os.tmpdir(), 'aivin-tsc-cache');
+    const buildInfoPath = path.join(buildInfoDir, `${createHash('md5').update(currentDir).digest('hex')}.tsbuildinfo`);
+    fs.mkdirSync(buildInfoDir, { recursive: true });
+    const args = fs.existsSync(tsconfigPath)
+      ? ['--noEmit', '--incremental', '--tsBuildInfoFile', buildInfoPath, '-p', tsconfigPath]
+      : ['--noEmit', '--incremental', '--tsBuildInfoFile', buildInfoPath, '--skipLibCheck', 'src/main.ts'];
+    let output = '';
+    const child = spawn(process.execPath, [tscBin, ...args], { cwd: currentDir, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stderr.on('data', (chunk) => { output += chunk; });
+    child.on('error', (error) => resolve({ skipped: false, errors: [error.message] }));
+    child.on('close', (code) => {
+      if (code === 0) return resolve({ skipped: false, errors: [] });
+      // tsc's real per-error lines all match this ("file(line,col): error TSxxxx: message") - filter
+      // out the trailing "Found N errors" summary line so only actionable lines go back to the AI.
+      const errorLines = output.split('\n').filter((line) => /error TS\d+/.test(line));
+      resolve({ skipped: false, errors: errorLines.length > 0 ? errorLines : [output.trim()].filter(Boolean) });
+    });
+  });
+}
+
+// Off-default ports so this doesn't collide with a real `aivin start` (4001/50051) the developer
+// might already have running for the same or another plugin while `plugin convert` is going.
+const SMOKE_TEST_HTTP_PORT = 47401;
+const SMOKE_TEST_GRPC_BIND = '0.0.0.0:47451';
+const SMOKE_TEST_READY_TIMEOUT_MS = 15_000;
+
+/**
+ * Runs `aivin plugin convert`'s `run_smoke_test` tool call: spawns the exact same runtime
+ * `aivin start` uses (bin/server.mjs, this CLI package's own file - not anything inside the plugin
+ * project) against the just-generated project, waits for its local HTTP test shim to come up, POSTs
+ * the AI-generated sample input to it, and reports back whether the plugin actually ran
+ * successfully - not just whether it type-checks. Always kills the spawned process afterward,
+ * success or failure.
+ */
+async function runSmokeTestHandler(currentDir, args) {
+  const sdkPkgPath = path.join(currentDir, 'node_modules', '@aivin-labs', 'sdk');
+  if (!fs.existsSync(sdkPkgPath)) return { skipped: true };
+
+  const serverPath = path.join(__dirname, 'server.mjs');
+  let stderrOutput = '';
+  const child = spawn(process.execPath, [serverPath], {
+    cwd: currentDir,
+    env: {
+      ...process.env,
+      LOCAL_TEST_PORT: String(SMOKE_TEST_HTTP_PORT),
+      SDK_GRPC_SERVER_BIND: SMOKE_TEST_GRPC_BIND,
+      NODE_ENV: 'development',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stderr.on('data', (chunk) => { stderrOutput += chunk.toString().slice(0, 500); });
+  child.on('error', () => {}); // reported via the readiness poll failing below, not here
+
+  try {
+    const deadline = Date.now() + SMOKE_TEST_READY_TIMEOUT_MS;
+    let ready = false;
+    while (Date.now() < deadline) {
+      try {
+        await axios.get(`http://localhost:${SMOKE_TEST_HTTP_PORT}/health`, { timeout: 1000 });
+        ready = true;
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
+    if (!ready) {
+      return { skipped: false, success: false, error: `Local runtime didn't become ready within ${SMOKE_TEST_READY_TIMEOUT_MS / 1000}s${stderrOutput ? `: ${stderrOutput}` : ''}` };
+    }
+
+    let response;
+    try {
+      response = await axios.post(
+        `http://localhost:${SMOKE_TEST_HTTP_PORT}/invoke`,
+        { mission: args.mission || 'smoke-test', input: args.input || {} },
+        { timeout: 30_000, validateStatus: () => true },
+      );
+    } catch (error) {
+      return { skipped: false, success: false, error: error.message };
+    }
+
+    if (!response.data?.success) {
+      return { skipped: false, success: false, error: response.data?.error || `HTTP ${response.status}` };
+    }
+    const result = response.data.result;
+    if (result && typeof result === 'object' && 'status' in result && result.status !== 'success') {
+      return { skipped: false, success: false, error: result.message || `Plugin returned status: ${result.status}` };
+    }
+    return { skipped: false, success: true };
+  } finally {
+    child.kill('SIGTERM');
+  }
+}
+
 /**
  * Calls the real AI code generator (POST /code/generate - CodeHandler.generateCode on the
  * frontend, same endpoint the browser CodeEditor uses). That endpoint's default output already
  * targets `main(mission, input, ctx)` + `ctx.sdk.*` + `PluginResponse` - the same conventions this
  * Docker-runtime SDK uses - so the prompt below is reinforcement, not an override.
  */
+/** Groups tsc error lines ("file(line,col): error TSxxxx: ...") by the file path they were
+ *  reported against - used by generateProjectWithSelfCorrection to know which of a multi-file
+ *  project's files to send back for a surgical fix. */
+function groupCompilerErrorsByFile(errors, knownPaths) {
+  const byFile = new Map();
+  for (const line of errors) {
+    const match = line.match(/^([^(]+)\(\d+,\d+\)/);
+    const filePath = match && knownPaths.has(match[1]) ? match[1] : undefined;
+    if (!filePath) continue;
+    if (!byFile.has(filePath)) byFile.set(filePath, []);
+    byFile.get(filePath).push(line);
+  }
+  return byFile;
+}
+
+/**
+ * Writes every file from `/code/generate-project`'s response, then runs a bounded self-correction
+ * loop generalized to N files: `typeCheckHandler` already type-checks the whole project (via
+ * tsconfig.json) regardless of file count, so this just needs to attribute errors back to the
+ * right file (groupCompilerErrorsByFile) and fix each one via a surgical `/code/generate` call
+ * (existingContent + target_file triggers the backend's surgical-edit path - the same mechanism
+ * `plugin convert`'s action="update" files use).
+ */
+async function generateProjectWithSelfCorrection(serverUrl, apiKey, currentDir, files, options) {
+  for (const [relPath, content] of Object.entries(files)) {
+    const fullPath = path.join(currentDir, ...relPath.split('/'));
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, content);
+  }
+
+  const knownPaths = new Set(Object.keys(files));
+  for (let attempt = 0; attempt <= CODEGEN_MAX_FIX_ATTEMPTS; attempt++) {
+    const check = await withSpinner(attempt === 0 ? '🔎 Type-checking' : `🔧 Re-checking (attempt ${attempt}/${CODEGEN_MAX_FIX_ATTEMPTS})`, () => typeCheckHandler(currentDir));
+    if (check.skipped) {
+      console.log(chalk.gray('   (skipped type-check - run `npm install` first for the self-correction loop to catch compiler errors)'));
+      return files;
+    }
+    if (check.errors.length === 0) {
+      if (attempt > 0) console.log(chalk.green(`✅ Fixed - clean type-check after ${attempt} attempt(s)`));
+      return files;
+    }
+
+    const byFile = groupCompilerErrorsByFile(check.errors, knownPaths);
+    if (attempt === CODEGEN_MAX_FIX_ATTEMPTS || byFile.size === 0) {
+      console.log(chalk.yellow(`⚠️  ${check.errors.length} compiler error(s) remain${attempt > 0 ? ` after ${attempt} fix attempt(s)` : ''} - review manually:`));
+      check.errors.forEach((line) => console.log(chalk.gray(`   ${line}`)));
+      return files;
+    }
+
+    console.log(chalk.yellow(`⚠️  ${check.errors.length} compiler error(s) across ${byFile.size} file(s) - asking the AI to fix...`));
+    for (const [relPath, errors] of byFile) {
+      const fullPath = path.join(currentDir, ...relPath.split('/'));
+      const result = await withSpinner(`   fixing ${relPath}`, () =>
+        requestCodeGeneration(serverUrl, apiKey, {
+          logic: `Fix these compiler errors:\n${errors.join('\n')}`,
+          target_file: relPath,
+          workspace_files: { [relPath]: files[relPath] },
+          model: options.model,
+          provider: options.provider,
+        }),
+      );
+      files[relPath] = result.code;
+      fs.writeFileSync(fullPath, result.code);
+    }
+  }
+  return files;
+}
+
+/**
+ * `aivin plugin make` - complexity-adaptive since the backend now classifies the task first
+ * (see CodeEditorService.genFreshProject/CodeGenerationHelper.planFreshProject): a simple/moderate
+ * requirement still costs exactly one generation call and writes exactly src/main.ts, same as
+ * always; a genuinely complex one gets planned into a small multi-file project and a matching
+ * multi-entry manifest, instead of everything being crammed into one flat main().
+ */
 async function makePluginFromDescription(description, options = {}) {
   const currentDir = process.cwd();
   const manifestPath = path.join(currentDir, 'manifest.json');
-  const handlerPath = path.join(currentDir, 'src', 'main.ts');
 
   if (!fs.existsSync(manifestPath)) {
     throw new Error('manifest.json not found. Run `aivin create` first.');
@@ -1426,7 +1687,7 @@ async function makePluginFromDescription(description, options = {}) {
   // with a single self-contained main.ts, silently undoing it.
   if (fs.existsSync(path.join(currentDir, 'src', 'service.ts'))) {
     console.log(chalk.gray('src/service.ts found - regenerating business logic there (main.ts wrapper unchanged).'));
-    await generateServiceAndWrapper(currentDir, description, options);
+    await withSpinner('🤖 Generating business logic (src/service.ts)', () => generateServiceAndWrapper(currentDir, description, options));
     console.log(chalk.green('✅ src/service.ts regenerated'));
     console.log(chalk.cyan('\n🔧 Next steps:'));
     console.log('   aivin start   # test locally');
@@ -1441,77 +1702,43 @@ async function makePluginFromDescription(description, options = {}) {
   }
 
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-
-  const sdkConventionPreamble = `Write an Aivin plugin handler.
-Rules:
-- Export exactly one async function: export async function main(mission: string, input: PluginInput, ctx: PluginContext): Promise<PluginResponse> { ... }
-- "input" fields come from the manifest's "input" description. "mission" is why this run was triggered (for logging, not routing).
-- Preferred: import only the namespace(s) you need directly, e.g. import { ai, vector, task, store, redis, mongo } from '@aivin-labs/sdk'; then call ai.prompt(...), vector.search(...), task.create(...), store.set(...), redis.get(...), mongo.model(name).find(...). Only fall back to import { call } from '@aivin-labs/sdk'; call(namespace, params) if no sugar method fits.
-- Return { status: PluginStatus.SUCCESS, data, message } on success, or { status: PluginStatus.ERROR, message, error_code: PluginErrorCode.XXX } on failure.
-- Import types from '@aivin-labs/sdk': import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk'; import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
-
-Business requirement:
-${description}`;
-
-  console.log(chalk.blue('🤖 Generating src/main.ts...'));
+  const entry = primaryManifestEntry(manifest);
 
   let response;
   try {
-    response = await axios.post(
-      `${serverUrl}/code/generate`,
-      {
-        // Deliberately no `workspace_files` - sending one (even `aivin create`'s generic
-        // placeholder src/main.ts) switches the backend into "surgical edit" mode, which returns a
-        // unified-diff patch instead of plain source when its own hunk-reconstruction can't fully
-        // apply (confirmed: the placeholder is worthless context anyway, and every `aivin create`
-        // scaffold ships one, so this hit on every normal `aivin plugin make` call, writing a raw
-        // { mode: "diff", hunks: [...] } JSON blob into src/main.ts instead of code). A fresh
-        // generation produces the same quality logic without any of that fragility.
-        //
-        // target_file: 'src/main.ts' matches the backend's own "MAIN ENTRY POINT" prompt branch
-        // (CodeGenerationHelper.ts) - the real convention for this filename, confirmed by both the
-        // backend's workspace template and the browser CodeEditor.
-        logic: sdkConventionPreamble,
-        // code_id = the entry id, the stable identity of this code workspace on the server -
-        // it keys the Redis draft, the RAG index over previously generated files, and the live
-        // socket room. func = which export of src/main.ts this generation targets.
-        code_id: primaryManifestEntry(manifest).id,
-        func: primaryManifestEntry(manifest).func || 'main',
-        target_file: 'src/main.ts',
-        model: options.model,
-        provider: options.provider,
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey || 'dev-token'}`,
-        },
-      },
+    response = await withSpinner('🤖 Generating plugin', () =>
+      axios.post(
+        `${serverUrl}/code/generate-project`,
+        { logic: description, code_id: entry.id, model: options.model, provider: options.provider },
+        { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey || 'dev-token'}` } },
+      ),
     );
   } catch (error) {
     const message = error.response?.data?.message || error.message;
     throw new Error(`Code generation failed: ${message}`, { cause: error });
   }
 
-  const result = response.data ?? {};
-  if (!result.code) {
-    throw new Error('Aivin server did not return generated code.');
+  const { files, manifest: manifestFragment, plan } = response.data ?? {};
+  if (!files || Object.keys(files).length === 0) {
+    throw new Error('Aivin server did not return any generated files.');
   }
-  // Defensive check: a { "mode": "diff"|"full", "hunks"/"content": ... } blob is the backend's
-  // internal patch format, never meant to reach here as-is - fail loudly instead of writing an
-  // unusable file if this ever slips through again.
-  const looksLikeDiffBlob = /^\s*\{\s*"mode"\s*:\s*"(diff|full)"/.test(result.code);
-  if (looksLikeDiffBlob) {
-    throw new Error(
-      'Aivin server returned an internal patch format instead of plain code - this is a server-side bug, not something to write to src/main.ts. Please report it.',
-    );
+  if (plan?.multi_entry) {
+    console.log(chalk.blue(`🔎 ${plan.reasoning || 'Multiple independent capabilities detected'}`));
   }
 
-  fs.mkdirSync(path.dirname(handlerPath), { recursive: true });
-  fs.writeFileSync(handlerPath, result.code);
-  console.log(chalk.green('✅ src/main.ts generated'));
+  const finalFiles = await generateProjectWithSelfCorrection(serverUrl, apiKey, currentDir, files, options);
+  const fileList = Object.keys(finalFiles);
+  console.log(chalk.green(`✅ ${fileList.length} file(s) generated`), fileList.length > 1 ? chalk.gray(`(${fileList.join(', ')})`) : '');
 
-  applyGeneratedManifestFields(manifestPath, manifest, result);
+  if (manifestFragment?.plugins?.length) {
+    // multi_entry: backend planned 2+ independent capabilities - replace plugins[] with them.
+    // Fresh ids assigned locally - the server never allocates plugin ids, only `aivin deploy` does.
+    manifest.plugins = manifestFragment.plugins.map((p) => ({ id: randomBytes(16).toString('hex'), input: {}, initial: {}, ...p }));
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    console.log(chalk.green(`✅ manifest.json split into ${manifest.plugins.length} plugin entries`));
+  } else if (manifestFragment) {
+    applyGeneratedManifestFields(manifestPath, manifest, manifestFragment);
+  }
 
   console.log(chalk.cyan('\n🔧 Next steps:'));
   console.log('   aivin start   # test locally');
@@ -1545,72 +1772,218 @@ function applyGeneratedManifestFields(manifestPath, manifest, result) {
   }
 }
 
-// Same dirs/files `aivin deploy` already ignores, plus lockfiles and anything with no value as AI
-// context (binary-ish assets) - this is prompt context, not a file we upload anywhere.
+// Same dirs/files `aivin deploy` already ignores, plus lockfiles and binary-ish assets that are
+// never worth reading as source. Only used to keep the TREE clean - actual file CONTENT is never
+// read here; the backend requests specific paths back on demand (see runProjectToolServer).
 const CONVERT_EXCLUDE_DIRS = [...DEPLOY_EXCLUDE_DIRS, 'coverage', '.next', '.cache', '.vscode', '.idea'];
 const CONVERT_EXCLUDE_FILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '.gitignore'];
 const CONVERT_BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|svg|woff2?|ttf|eot|zip|tar|gz|pdf|mp4|mp3|wasm|node)$/i;
-const CONVERT_MAX_FILE_BYTES = 30_000; // skip individual files bigger than this - noise, not signal
-const CONVERT_MAX_TOTAL_BYTES = 250_000; // stay well under the server's 5MB/200-file hard cap
+const CONVERT_MAX_TREE_ENTRIES = 5000; // matches the backend's own cap (assertSafeProjectTree)
 
 /**
- * Gathers the existing project's own source as AI context for `plugin convert` - explicitly
- * excludes `manifestPath`/`handlerPath` themselves (the files this command is about to write) so
- * neither can ever end up as a `workspace_files` key, which is what would trip the backend's
- * surgical-edit/diff mode (see the comment in `makePluginFromDescription` above). Stops adding
- * files once `CONVERT_MAX_TOTAL_BYTES` is reached rather than failing - partial context is still
- * useful context.
+ * Builds the directory tree `plugin convert` uploads - paths + byte sizes ONLY, never content.
+ * Keeps the initial request cheap regardless of project size (previously this walked the whole
+ * project reading every file's content up front - wasteful and doesn't scale to a large/heavy
+ * project). The backend's ProjectConversionService scans this tree and asks for specific files
+ * back one at a time via `code:tool_call` (see runProjectToolServer below) as its own plan loop
+ * decides it actually needs them.
  */
-function gatherConversionContext(dir, manifestPath, handlerPath, basePath = '', budget = { used: 0 }) {
-  const files = {};
+function buildProjectTree(dir, basePath = '', entries = []) {
   const items = fs.readdirSync(dir);
-
   for (const item of items) {
-    if (budget.used >= CONVERT_MAX_TOTAL_BYTES) break;
+    if (entries.length >= CONVERT_MAX_TREE_ENTRIES) break;
     const fullPath = path.join(dir, item);
-    const relativePath = path.join(basePath, item);
-    if (fullPath === manifestPath || fullPath === handlerPath) continue;
+    const relativePath = path.join(basePath, item).split(path.sep).join('/');
     const stat = fs.statSync(fullPath);
-
     if (stat.isDirectory()) {
-      if (!CONVERT_EXCLUDE_DIRS.includes(item)) {
-        Object.assign(files, gatherConversionContext(fullPath, manifestPath, handlerPath, relativePath, budget));
-      }
-    } else if (
-      !CONVERT_EXCLUDE_FILES.includes(item) &&
-      !isEnvFile(item) &&
-      !CONVERT_BINARY_EXT.test(item) &&
-      stat.size > 0 &&
-      stat.size <= CONVERT_MAX_FILE_BYTES &&
-      budget.used + stat.size <= CONVERT_MAX_TOTAL_BYTES
-    ) {
-      const content = fs.readFileSync(fullPath, 'utf8');
-      files[relativePath.split(path.sep).join('/')] = content;
-      budget.used += stat.size;
+      if (!CONVERT_EXCLUDE_DIRS.includes(item)) buildProjectTree(fullPath, relativePath, entries);
+    } else if (!CONVERT_EXCLUDE_FILES.includes(item) && !isEnvFile(item) && !CONVERT_BINARY_EXT.test(item)) {
+      entries.push({ path: relativePath, size: stat.size });
     }
   }
+  return entries;
+}
 
-  return files;
+/** Resolves a backend-requested relative path against the real project directory, rejecting
+ *  anything that would escape it. This is the actual security boundary for the tool-call relay -
+ *  the backend validates paths too (assertSafeProjectPath), but this process is the one holding
+ *  the real filesystem, so this check is the one that actually matters. */
+function resolveProjectPath(currentDir, requestedPath) {
+  if (typeof requestedPath !== 'string' || !requestedPath) throw new Error('Invalid path');
+  const resolved = path.resolve(currentDir, requestedPath);
+  const rootWithSep = currentDir.endsWith(path.sep) ? currentDir : currentDir + path.sep;
+  if (resolved !== currentDir && !resolved.startsWith(rootWithSep)) {
+    throw new Error(`Path escapes project directory: ${requestedPath}`);
+  }
+  return resolved;
+}
+
+/** Best-effort `git status --porcelain -- <path>` for one file - execFileSync (argv array, no
+ *  shell) rather than execSync, since `path` came from the backend's AI-generated plan and could
+ *  contain characters that would be unsafe to interpolate into a shell string. Returns null (not
+ *  an error) when the directory isn't a git repo, `git` isn't installed, or the file is clean -
+ *  this is a confirmation hint, never a hard requirement. */
+function describeGitStatus(currentDir, relPath) {
+  try {
+    const output = execFileSync('git', ['status', '--porcelain', '--', relPath], { cwd: currentDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const line = output.split('\n').find((l) => l.trim());
+    if (!line) return null;
+    const code = line.slice(0, 2).trim();
+    return code === '??' ? 'untracked' : 'has uncommitted changes';
+  } catch {
+    return null;
+  }
+}
+
+/** Warns (and, in an interactive terminal, asks to confirm) before a conversion that may overwrite
+ *  existing files starts, if the project has uncommitted changes - conversion can pick actual
+ *  existing files as action="update" targets, and there's no undo once create_file writes over
+ *  one. Never blocks a non-git directory or non-interactive (CI/script) use - just informs. */
+async function warnIfGitDirty(currentDir) {
+  let statusOutput;
+  try {
+    statusOutput = execFileSync('git', ['status', '--porcelain'], { cwd: currentDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch {
+    return; // not a git repo (or git missing) - nothing to warn about
+  }
+  const dirtyCount = statusOutput.split('\n').filter((l) => l.trim()).length;
+  if (dirtyCount === 0) return;
+  console.log(chalk.yellow(`⚠️  ${dirtyCount} uncommitted change(s) in this repo - conversion may update existing files based on what it reads.`));
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return; // can't prompt - warning above is all we can do
+  const { proceed } = await inquirer.prompt([{ type: 'confirm', name: 'proceed', message: 'Continue anyway?', default: false }]);
+  if (!proceed) throw new Error('Cancelled - commit or stash your changes first, then re-run.');
+}
+
+/** Executes one `code:tool_call` the backend sent during project conversion, against the real
+ *  project directory on disk. See CodeDTO.ts's ProjectTool on the backend for the full contract. */
+async function executeProjectTool(currentDir, tool, args) {
+  switch (tool) {
+    case 'read_file': {
+      const filePath = resolveProjectPath(currentDir, args.path);
+      if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+        throw new Error(`File not found: ${args.path}`);
+      }
+      return fs.readFileSync(filePath, 'utf8');
+    }
+    case 'grep': {
+      const regex = new RegExp(args.pattern, 'i');
+      const matches = [];
+      const walk = (dir, base = '') => {
+        for (const item of fs.readdirSync(dir)) {
+          if (matches.length >= 20) return;
+          const fullPath = path.join(dir, item);
+          const rel = path.join(base, item).split(path.sep).join('/');
+          const stat = fs.statSync(fullPath);
+          if (stat.isDirectory()) {
+            if (!CONVERT_EXCLUDE_DIRS.includes(item)) walk(fullPath, rel);
+          } else if (!CONVERT_BINARY_EXT.test(item) && stat.size > 0 && stat.size <= 200_000) {
+            if (regex.test(fs.readFileSync(fullPath, 'utf8'))) matches.push(rel);
+          }
+        }
+      };
+      walk(currentDir);
+      return matches;
+    }
+    case 'confirm_update': {
+      const filePath = resolveProjectPath(currentDir, args.path);
+      if (!fs.existsSync(filePath)) return { approved: true }; // nothing there to overwrite
+      const gitHint = describeGitStatus(currentDir, args.path);
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        // Non-interactive (CI/script) - can't prompt, so proceed but make the decision visible.
+        console.log(chalk.yellow(`⚠️  Non-interactive - overwriting existing file ${args.path}${gitHint ? ` (${gitHint})` : ''} without confirmation`));
+        return { approved: true };
+      }
+      const { approved } = await inquirer.prompt([
+        {
+          type: 'confirm',
+          name: 'approved',
+          message: `Overwrite existing file ${args.path}${gitHint ? ` (${gitHint})` : ''}?`,
+          default: false,
+        },
+      ]);
+      return { approved };
+    }
+    case 'create_file': {
+      const filePath = resolveProjectPath(currentDir, args.path);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, args.content ?? '');
+      return { written: true };
+    }
+    case 'run_typecheck':
+      return await typeCheckHandler(currentDir);
+    case 'run_smoke_test':
+      return await runSmokeTestHandler(currentDir, args);
+    default:
+      throw new Error(`Unknown tool: ${tool}`);
+  }
+}
+
+/** Wires the socket side of the tool-call relay: joins the conversion's room, executes every
+ *  `code:tool_call` the backend sends against the real project directory, replies with
+ *  `code:tool_result`, and prints every `code:progress` event live so a loop that can take a
+ *  while (scan → plan → generate → verify, possibly several files) doesn't look hung. */
+async function connectProjectToolServer(serverUrl, apiKey, codeId, currentDir) {
+  const socket = io(serverUrl, { auth: { token: apiKey || 'dev-token' }, transports: ['websocket'], reconnection: true });
+
+  await new Promise((resolve, reject) => {
+    socket.on('connect_error', (error) => reject(new Error(`Connection failed: ${error.message}`)));
+    socket.on('connect', () => {
+      socket.emit('code:join', { code_id: codeId }, (ack) => {
+        if (!ack?.success) reject(new Error(`Couldn't join conversion session: ${ack?.error || 'unknown error'}`));
+        else resolve();
+      });
+    });
+  });
+
+  socket.on('code:tool_call', async (payload) => {
+    const { call_id, tool, args } = payload || {};
+    try {
+      const result = await executeProjectTool(currentDir, tool, args || {});
+      socket.emit('code:tool_result', { call_id, code_id: codeId, ok: true, result });
+    } catch (error) {
+      socket.emit('code:tool_result', { call_id, code_id: codeId, ok: false, error: error.message });
+    }
+  });
+
+  socket.on('code:progress', (payload) => {
+    console.log(chalk.gray(`[${new Date().toLocaleTimeString()}]`), payload?.message || '');
+    if (Array.isArray(payload?.errors)) payload.errors.forEach((e) => console.log(chalk.red('   '), e));
+  });
+
+  return socket;
 }
 
 /**
- * `aivin plugin convert` - same real AI code generator as `plugin make`, but instead of writing
- * src/main.ts from a plain-language description, it reads the existing project in the current
- * directory as context and asks the AI to adapt/wrap its own logic into one instead. Point it at a
- * project you already have and it becomes an Aivin plugin without you writing the wrapper by hand.
+ * `aivin plugin convert` - hands the existing project in the current directory to the backend's
+ * ProjectConversionService instead of generating locally: uploads only the directory tree (paths
+ * + sizes, never content), then answers `read_file`/`grep`/`create_file`/`run_typecheck` tool
+ * calls against the real project on disk as the backend's own scan → plan → generate → verify
+ * loop asks for them. The backend decides single-vs-multi-function and create-vs-update per file
+ * (see PLAN_PROJECT_INSTRUCTION on the backend) - this command no longer guesses that locally.
  */
 async function convertExistingProject(hint, options = {}) {
   const currentDir = process.cwd();
   const manifestPath = path.join(currentDir, 'manifest.json');
   const handlerPath = path.join(currentDir, 'src', 'main.ts');
 
-  if (fs.existsSync(handlerPath)) {
-    throw new Error('src/main.ts already exists - `plugin convert` is for a project that isn\'t an Aivin plugin yet.');
+  await warnIfGitDirty(currentDir);
+
+  // --force re-runs the full scan/plan/generate/verify loop even if a previous `plugin convert`
+  // already wrote src/main.ts - for when that result turned out wrong, stale, or the project
+  // changed since. src/main.ts isn't special-cased out of the tree, so the backend's plan is free
+  // to mark it action="update"; the usual confirm_update prompt still gates actually overwriting it.
+  if (fs.existsSync(handlerPath) && !options.force) {
+    throw new Error(
+      'src/main.ts already exists - `plugin convert` is for a project that isn\'t an Aivin plugin yet. ' +
+        'Pass --force to re-run conversion anyway (e.g. the previous result was wrong or the project changed).',
+    );
   }
 
   let manifest;
+  let codeId;
   if (fs.existsSync(manifestPath)) {
     manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    codeId = primaryManifestEntry(manifest)?.id || randomBytes(16).toString('hex');
   } else {
     // No `aivin create` needed first - infer a starting manifest from package.json (or the
     // directory name) so there's less setup between "I have a project" and "it's a plugin".
@@ -1620,21 +1993,13 @@ async function convertExistingProject(hint, options = {}) {
       try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')); } catch { /* not JSON we can use */ }
     }
     const name = (pkg?.name || path.basename(currentDir)).replace('@aivin/plugin-', '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    codeId = randomBytes(16).toString('hex');
     // Same default plugins[] shape `aivin create`/`aivin init` scaffold - see createManifest.
     manifest = {
       version: '1.0.0',
       author: '',
       email: '',
-      plugins: [
-        {
-          id: randomBytes(16).toString('hex'),
-          name,
-          description: pkg?.description || '',
-          func: 'main',
-          input: {},
-          initial: {},
-        },
-      ],
+      plugins: [{ id: codeId, name, description: pkg?.description || '', func: 'main', input: {}, initial: {} }],
     };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     console.log(chalk.green('✅ manifest.json created'), chalk.gray(`(name: ${name})`));
@@ -1646,77 +2011,60 @@ async function convertExistingProject(hint, options = {}) {
     console.log(chalk.yellow('⚠️  API_KEY not set - run `aivin login` first'));
   }
 
-  console.log(chalk.blue('📂 Reading the existing project for context...'));
-  const workspaceFiles = gatherConversionContext(currentDir, manifestPath, handlerPath);
-  const fileCount = Object.keys(workspaceFiles).length;
-  if (fileCount === 0) {
-    throw new Error('No source files found to convert in the current directory.');
+  console.log(chalk.blue('📂 Scanning project tree...'));
+  const tree = buildProjectTree(currentDir);
+  if (tree.length === 0) {
+    throw new Error('No source files found in the current directory.');
   }
-  console.log(chalk.gray(`   ${fileCount} file(s) included as context`));
+  console.log(chalk.gray(`   ${tree.length} file(s) in tree (content read on demand by the server, never uploaded up front)`));
 
-  const conventionPreamble = `Convert this existing project into an Aivin plugin.
-Rules:
-- Export exactly one async function: export async function main(mission: string, input: PluginInput, ctx: PluginContext): Promise<PluginResponse> { ... }
-- Analyze the provided project files (below, as workspace context) and adapt its real, existing logic into that one function - don't just stub it out. Preserve its actual behavior.
-- Map "input" to whatever parameters the project's core logic already takes.
-- Preferred: import only the namespace(s) you need directly from '@aivin-labs/sdk', e.g. import { ai, vector, task, store, redis, mongo } from '@aivin-labs/sdk'. Only use import { call } from '@aivin-labs/sdk'; call(namespace, params) if no sugar method fits.
-- Return { status: PluginStatus.SUCCESS, data, message } on success, or { status: PluginStatus.ERROR, message, error_code: PluginErrorCode.XXX } on failure.
-- Import types from '@aivin-labs/sdk': import type { PluginInput, PluginContext, PluginResponse } from '@aivin-labs/sdk'; import { PluginStatus, PluginErrorCode } from '@aivin-labs/sdk';
-- If the project talks to a real external service (a database, a paid API, ...), replace that connection code with the closest '@aivin-labs/sdk' equivalent (store/redis/mongo for data, ai for LLM calls) rather than trying to keep raw credentials - plugins never receive them.
-${hint ? `\nAdditional guidance from the developer:\n${hint}` : ''}`;
+  const socket = await connectProjectToolServer(serverUrl, apiKey, codeId, currentDir);
 
-  console.log(chalk.blue('🤖 Generating src/main.ts from your existing code...'));
-
+  console.log(chalk.blue('🤖 Converting - this loops (scan → plan → generate → verify), watch for progress below...\n'));
   let response;
   try {
     response = await axios.post(
-      `${serverUrl}/code/generate`,
+      `${serverUrl}/code/convert-project`,
       {
-        logic: conventionPreamble,
-        // code_id = the entry id, the stable identity of this code workspace on the server -
-        // it keys the Redis draft, the RAG index over previously generated files, and the live
-        // socket room. func = which export of src/main.ts this generation targets.
-        code_id: primaryManifestEntry(manifest).id,
-        func: primaryManifestEntry(manifest).func || 'main',
-        target_file: 'src/main.ts',
-        // The existing project's own files, as context - deliberately never includes 'src/main.ts'
-        // itself (gatherConversionContext excludes handlerPath), since a workspace_files entry for
-        // the file being generated is what switches the backend into surgical-edit/diff mode - see
-        // the comment in makePluginFromDescription above.
-        workspace_files: workspaceFiles,
+        logic: hint || 'Convert the project in the current directory into an Aivin plugin.',
+        code_id: codeId,
+        hint,
+        tree,
         model: options.model,
         provider: options.provider,
       },
       {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey || 'dev-token'}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey || 'dev-token'}` },
+        timeout: 600_000, // a real multi-file scan/plan/generate/verify loop can take several minutes
       },
     );
   } catch (error) {
     const message = error.response?.data?.message || error.message;
-    throw new Error(`Code generation failed: ${message}`, { cause: error });
+    throw new Error(`Project conversion failed: ${message}`, { cause: error });
+  } finally {
+    socket.disconnect();
   }
 
-  const result = response.data ?? {};
-  if (!result.code) {
-    throw new Error('Aivin server did not return generated code.');
+  const { plan, manifest: manifestFragment, verification } = response.data ?? {};
+
+  if (manifestFragment?.plugins?.length) {
+    // Backend planned 2+ independent capabilities (multi_entry) - replace plugins[] with them.
+    // Fresh ids assigned locally - the server never allocates plugin ids, only `aivin deploy` does.
+    manifest.plugins = manifestFragment.plugins.map((p) => ({ id: randomBytes(16).toString('hex'), input: {}, initial: {}, ...p }));
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    console.log(chalk.green(`✅ manifest.json split into ${manifest.plugins.length} plugin entries`));
   }
-  const looksLikeDiffBlob = /^\s*\{\s*"mode"\s*:\s*"(diff|full)"/.test(result.code);
-  if (looksLikeDiffBlob) {
-    throw new Error(
-      'Aivin server returned an internal patch format instead of plain code - this is a server-side bug, not something to write to src/main.ts. Please report it.',
-    );
+
+  const isJsTsSource = !plan?.source_language || /^(type|java)script$/i.test(plan.source_language);
+  const languageNote = isJsTsSource ? '' : `, ported from ${plan.source_language}`;
+  console.log(chalk.green(`\n✅ Conversion done`), chalk.gray(`(${plan?.project_kind || 'generic'}${languageNote}, ${plan?.files?.length ?? 0} file(s))`));
+  if (!isJsTsSource) {
+    console.log(chalk.yellow(`⚠️  Source was ${plan.source_language}, not TypeScript - this is a translated port, not a mechanical conversion. Review generated logic especially carefully, and check for "limitation" comments left where no direct npm equivalent existed.`));
   }
-
-  fs.mkdirSync(path.dirname(handlerPath), { recursive: true });
-  fs.writeFileSync(handlerPath, result.code);
-  console.log(chalk.green('✅ src/main.ts generated from your existing project'));
-
-  applyGeneratedManifestFields(manifestPath, manifest, result);
-
-  console.log(chalk.yellow('\n⚠️  Review the generated code before deploying - it\'s a starting point, not a guarantee.'));
+  if (verification && !verification.success) {
+    console.log(chalk.yellow(`⚠️  ${verification.ran ? 'Type-check still finds issues after auto-fix attempts' : 'Verification was skipped'} - review before deploying.`));
+  }
+  console.log(chalk.yellow('\n⚠️  Review the generated code before relying on it - it\'s a strong starting point, not a guarantee.'));
   console.log(chalk.cyan('\n🔧 Next steps:'));
   console.log('   aivin start   # test locally');
   console.log('   aivin test    # deploy to a test instance');
@@ -1781,9 +2129,9 @@ async function triggerPlugin(mission, inputJson, options) {
     }
   } else {
     if (!mission || !inputJson) {
-      throw new Error(
-        'Usage: aivin plugin trigger "<mission>" \'<input JSON>\'  (or: aivin plugin trigger -a "<prompt>")',
-      );
+      const usage = 'Usage: aivin plugin trigger "<mission>" \'<input JSON>\'  (or: aivin plugin trigger -a "<prompt>")';
+      mission = await requireArg(mission, { prompt: 'Mission (why this run was triggered):', usage });
+      inputJson = await requireArg(inputJson, { prompt: 'Input (as a JSON string, e.g. {"text":"hello"}):', usage });
     }
     body.purpose = mission;
     try {
@@ -1932,7 +2280,7 @@ async function searchPlugins(query, options) {
   try {
     response = await axios.get(`${serverUrl}/plugins/search`, { ...authHeaders, params });
   } catch (error) {
-    const message = error.response?.data?.message || error.message;
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
     throw new Error(`Search failed: ${message}`, { cause: error });
   }
 
@@ -1946,6 +2294,13 @@ async function searchPlugins(query, options) {
     return;
   }
 
+  // Interactive browser needs a real terminal to read raw keypresses - fall back to a flat
+  // print for scripts/CI or when the user explicitly asks for it with --plain.
+  if (process.stdout.isTTY && process.stdin.isTTY && !options.plain) {
+    await browseResults(results, `Found ${results.length} plugin(s) matching "${query}":\n`, formatPluginListLine, formatPluginDetail);
+    return;
+  }
+
   console.log(chalk.blue(`Found ${results.length} plugin(s) matching "${query}":\n`));
   for (const plugin of results) {
     console.log(chalk.bold(plugin.name || plugin.id) + chalk.gray(`  (${plugin.id})`));
@@ -1955,20 +2310,144 @@ async function searchPlugins(query, options) {
   }
   console.log(
     chalk.gray(
-      `Call one from your own plugin with: import { call } from '@aivin-labs/sdk'; await call('<id>.<purpose>', params).`,
+      `Call one from your own plugin with: import { call } from '@aivin-labs/sdk'; await call('<plugin_id>', params).`,
     ),
   );
+}
+
+function formatPluginListLine(plugin, isSelected) {
+  const marker = isSelected ? chalk.cyan('❯ ') : '  ';
+  const label = plugin.name || plugin.id;
+  const name = isSelected ? chalk.bold.cyan(label) : label;
+  const badge = plugin.is_official ? chalk.green(' ✓') : '';
+  return `${marker}${name}${badge}${chalk.gray(`  (${plugin.id})`)}`;
+}
+
+function trustBadge(plugin) {
+  if (plugin.is_official) return chalk.green('✓ official');
+  if (plugin.verification_status === 'VERIFIED' || plugin.is_verified) return chalk.cyan('✓ verified');
+  return chalk.yellow('community (unverified)');
+}
+
+function formatPluginDetail(plugin) {
+  const lines = [];
+  lines.push(chalk.bold.cyan(plugin.name || plugin.id) + '  ' + trustBadge(plugin));
+  lines.push(chalk.gray(plugin.id));
+  if (plugin.version) lines.push(`${chalk.gray('version')}      v${plugin.version}`);
+  if (plugin.author) lines.push(`${chalk.gray('author')}       ${plugin.author}`);
+  if (plugin.type) lines.push(`${chalk.gray('type')}         ${plugin.type}`);
+  if (typeof plugin.rating === 'number') lines.push(`${chalk.gray('rating')}       ${plugin.rating.toFixed(1)}/5`);
+  if (typeof plugin._similarity === 'number') {
+    lines.push(`${chalk.gray('match')}        ${(plugin._similarity * 100).toFixed(0)}%`);
+  }
+  if (Array.isArray(plugin.capabilities) && plugin.capabilities.length > 0) {
+    lines.push(`${chalk.gray('capabilities')} ${plugin.capabilities.join(', ')}`);
+  }
+  // `initable`: input fields the AI can't fill on its own (API key, token, secret, base_url...)
+  // - the user has to configure them once before this plugin can run.
+  if (Array.isArray(plugin.initable) && plugin.initable.length > 0) {
+    lines.push(chalk.yellow(`⚠ needs setup first: ${plugin.initable.join(', ')}`));
+  }
+  // `connection_id`: this plugin is bound to a workspace connector (OAuth-based) - the user has
+  // to log in to that connector before the plugin can run, separate from `initable`'s plain
+  // credential fields.
+  if (plugin.connection_id) {
+    lines.push(chalk.yellow(`⚠ requires logging in to a connector (${plugin.connection_id}) first`));
+  }
+  if (plugin.description) lines.push(`\n${plugin.description}`);
+  if (plugin.input) lines.push(`\n${chalk.gray('input schema')}\n${JSON.stringify(plugin.input, null, 2)}`);
+  if (plugin.output) lines.push(`\n${chalk.gray('output schema')}\n${JSON.stringify(plugin.output, null, 2)}`);
+  lines.push(
+    chalk.gray(
+      `\nCall it with: import { call } from '@aivin-labs/sdk'; await call('${plugin.id}', params).`,
+    ),
+  );
+  return lines.join('\n');
+}
+
+// Simple raw-keypress list/detail browser: ↑/↓ to move, space/enter to open an item's detail
+// view, esc/backspace to go back to the listing, q/ctrl+c to exit. No extra deps - built on
+// node's own readline keypress events since inquirer's prompts don't support this drill-down.
+// Generic over what's being browsed (plugins, connectors, ...) via the format callbacks.
+function browseResults(results, headerText, formatLine, formatDetail) {
+  return new Promise((resolve) => {
+    let index = 0;
+    let mode = 'list'; // 'list' | 'detail'
+
+    const render = () => {
+      // console.clear() no-ops on some Windows TTY hosts (older PowerShell console, plain
+      // cmd.exe) - writing the cursor-reset + clear-down sequence directly is what TUI libs
+      // like blessed/ink do and works consistently across terminals.
+      readline.cursorTo(process.stdout, 0, 0);
+      readline.clearScreenDown(process.stdout);
+      if (mode === 'list') {
+        console.log(chalk.blue(headerText));
+        for (let i = 0; i < results.length; i++) {
+          console.log(formatLine(results[i], i === index));
+        }
+        console.log(chalk.gray('\n↑/↓ move   space/enter view details   q quit'));
+      } else {
+        console.log(formatDetail(results[index]));
+        console.log(chalk.gray('\nesc/backspace back   q quit'));
+      }
+    };
+
+    const onKeypress = (str, key) => {
+      if (!key) return;
+      if (key.ctrl && key.name === 'c') {
+        cleanup();
+        process.exit(0);
+      }
+      if (mode === 'list') {
+        if (key.name === 'up') {
+          index = (index - 1 + results.length) % results.length;
+          render();
+        } else if (key.name === 'down') {
+          index = (index + 1) % results.length;
+          render();
+        } else if (key.name === 'return' || key.name === 'space' || str === ' ') {
+          mode = 'detail';
+          render();
+        } else if (key.name === 'q' || key.name === 'escape') {
+          cleanup();
+          resolve();
+        }
+      } else {
+        if (key.name === 'escape' || key.name === 'backspace') {
+          mode = 'list';
+          render();
+        } else if (key.name === 'q') {
+          cleanup();
+          resolve();
+        }
+      }
+    };
+
+    const cleanup = () => {
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      process.stdin.removeListener('keypress', onKeypress);
+    };
+
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true);
+    process.stdin.on('keypress', onKeypress);
+    process.stdin.resume();
+    render();
+  });
 }
 
 const pluginCommand = program.command('plugin').description('AI-assisted plugin authoring');
 
 pluginCommand
-  .command('search <query>')
+  .command('search [query]')
   .description("Search the platform's plugin ecosystem for something to reuse instead of writing it yourself")
   .option('--workspace <id>', 'Restrict to plugins visible in this workspace (default: your whole org)')
   .option('--limit <n>', 'Max results to show')
+  .option('--plain', 'Print a flat list instead of the interactive browser (for scripts/CI)')
   .action(async (query, options) => {
     try {
+      query = await requireArg(query, { prompt: 'What are you looking for?', usage: 'Usage: aivin plugin search "<query>"' });
       await searchPlugins(query, options);
     } catch (error) {
       console.error(chalk.red('❌'), error.message);
@@ -1977,12 +2456,13 @@ pluginCommand
   });
 
 pluginCommand
-  .command('make <description>')
+  .command('make [description]')
   .description('Generate src/main.ts from a natural-language business description')
   .option('--model <model>', 'LLM model to use for generation')
   .option('--provider <provider>', 'LLM provider to use for generation')
   .action(async (description, options) => {
     try {
+      description = await requireArg(description, { prompt: 'What should this plugin do?', usage: 'Usage: aivin plugin make "<description>"' });
       await makePluginFromDescription(description, options);
     } catch (error) {
       console.error(chalk.red('❌'), error.message);
@@ -1995,6 +2475,7 @@ pluginCommand
   .description('Turn an existing project in the current directory into an Aivin plugin')
   .option('--model <model>', 'LLM model to use for generation')
   .option('--provider <provider>', 'LLM provider to use for generation')
+  .option('--force', 'Re-run conversion even if src/main.ts already exists (e.g. redo a previous bad/stale result)')
   .action(async (hint, options) => {
     try {
       await convertExistingProject(hint, options);
@@ -2029,6 +2510,293 @@ pluginCommand
       await streamPluginLogs(pluginId, options);
     } catch (error) {
       console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+// ── Connectors - reusable OAuth apps / credential-form namespaces plugins can reference ────────
+
+function connectorAuthHeaders() {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    console.log(chalk.yellow('⚠️  API_KEY not set - run `aivin login` first'));
+  }
+  return { headers: { Authorization: `Bearer ${apiKey || 'dev-token'}` } };
+}
+
+function connectorBaseUrl() {
+  return process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
+}
+
+function formatConnectorListLine(connector, isSelected) {
+  const marker = isSelected ? chalk.cyan('❯ ') : '  ';
+  const label = connector.name || connector.id;
+  const name = isSelected ? chalk.bold.cyan(label) : label;
+  const badge = connector.is_official ? chalk.green(' ✓') : '';
+  const deprecated = connector.deprecated ? chalk.red(' [deprecated]') : '';
+  return `${marker}${name}${badge}${deprecated}${chalk.gray(`  (${connector.id}, ${connector.type})`)}`;
+}
+
+function formatConnectorDetail(connector) {
+  const lines = [];
+  lines.push(chalk.bold.cyan(connector.name || connector.id) + '  ' + trustBadge(connector));
+  lines.push(chalk.gray(connector.id));
+  lines.push(`${chalk.gray('type')}       ${connector.type}`);
+  lines.push(`${chalk.gray('visibility')} ${connector.visibility}${connector.store_status ? ` (${connector.store_status})` : ''}`);
+  if (connector.description) lines.push(`\n${connector.description}`);
+  if (connector.type === 'oauth' && connector.oauth) {
+    lines.push(`\n${chalk.gray('authorize_url')} ${connector.oauth.authorize_url}`);
+    lines.push(`${chalk.gray('access_url')}    ${connector.oauth.access_url}`);
+    if (connector.oauth.scopes?.length) lines.push(`${chalk.gray('scopes')}        ${connector.oauth.scopes.join(', ')}`);
+  } else if (connector.type === 'credential_form' && connector.fields?.length) {
+    lines.push(`\n${chalk.gray('fields')}\n${connector.fields.map(f => `  - ${f.name}${f.required ? ' (required)' : ''}${f.label ? `: ${f.label}` : ''}`).join('\n')}`);
+  }
+  lines.push(chalk.gray(`\nReference it from a plugin manifest's connection_id: "${connector.id}"`));
+  return lines.join('\n');
+}
+
+async function searchConnectors(query, options) {
+  const params = { query };
+  if (options.limit) params.limit = options.limit;
+
+  let response;
+  try {
+    response = await axios.get(`${connectorBaseUrl()}/connectors/search`, { ...connectorAuthHeaders(), params });
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Search failed: ${message}`, { cause: error });
+  }
+
+  const results = response.data || [];
+  if (results.length === 0) {
+    console.log(chalk.yellow(`No connectors found matching "${query}".`));
+    return;
+  }
+
+  if (process.stdout.isTTY && process.stdin.isTTY && !options.plain) {
+    await browseResults(results, `Found ${results.length} connector(s) matching "${query}":\n`, formatConnectorListLine, formatConnectorDetail);
+    return;
+  }
+
+  console.log(chalk.blue(`Found ${results.length} connector(s) matching "${query}":\n`));
+  for (const c of results) {
+    console.log(chalk.bold(c.name || c.id) + chalk.gray(`  (${c.id}, ${c.type})`));
+    if (c.description) console.log(`  ${c.description}`);
+    console.log();
+  }
+}
+
+async function listConnectors(options) {
+  const params = {};
+  if (options.page) params.page = options.page;
+  if (options.limit) params.limit = options.limit;
+  if (options.includeDeprecated) params.include_deprecated = 'true';
+
+  let response;
+  try {
+    response = await axios.get(`${connectorBaseUrl()}/connectors/list`, { ...connectorAuthHeaders(), params });
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`List failed: ${message}`, { cause: error });
+  }
+
+  const { items = [], total = 0 } = response.data || {};
+  if (items.length === 0) {
+    console.log(chalk.yellow('No connectors found.'));
+    return;
+  }
+
+  if (process.stdout.isTTY && process.stdin.isTTY && !options.plain) {
+    await browseResults(items, `${total} connector(s):\n`, formatConnectorListLine, formatConnectorDetail);
+    return;
+  }
+
+  console.log(chalk.blue(`${total} connector(s):\n`));
+  for (const c of items) {
+    console.log(chalk.bold(c.name || c.id) + chalk.gray(`  (${c.id}, ${c.type})`));
+    if (c.description) console.log(`  ${c.description}`);
+    console.log();
+  }
+}
+
+async function registerConnector() {
+  console.log(chalk.blue('🔌 Register a new connector\n'));
+
+  const base = await inquirer.prompt([
+    { type: 'input', name: 'id', message: 'Connector id (e.g. mailgun):' },
+    { type: 'input', name: 'name', message: 'Display name:' },
+    { type: 'input', name: 'description', message: 'Description (optional):' },
+    { type: 'input', name: 'image', message: 'Logo/icon URL (optional):' },
+    {
+      type: 'select',
+      name: 'type',
+      message: 'Connector type:',
+      choices: [
+        { name: 'oauth - login flow (client_id/secret, authorize/token URLs)', value: 'oauth' },
+        { name: 'credential_form - plain fields the user fills in (host, api_key, ...)', value: 'credential_form' },
+      ],
+    },
+    {
+      type: 'select',
+      name: 'visibility',
+      message: 'Visibility:',
+      choices: [
+        { name: 'private - only your org can reuse it', value: 'private' },
+        { name: 'public - any org can find/reuse it (needs admin review first)', value: 'public' },
+      ],
+    },
+  ]);
+
+  const dto = { id: base.id, name: base.name, description: base.description || undefined, image: base.image || undefined, type: base.type, visibility: base.visibility };
+
+  if (base.type === 'oauth') {
+    const oauth = await inquirer.prompt([
+      { type: 'input', name: 'authorize_url', message: 'Authorize URL:' },
+      { type: 'input', name: 'access_url', message: 'Token/access URL:' },
+      { type: 'input', name: 'profile_url', message: 'Profile URL (optional):' },
+      { type: 'input', name: 'client_id', message: 'Client id:' },
+      { type: 'password', name: 'client_secret', message: 'Client secret:' },
+      { type: 'input', name: 'scopes', message: 'Scopes (comma-separated, optional):' },
+    ]);
+    dto.oauth = {
+      authorize_url: oauth.authorize_url,
+      access_url: oauth.access_url,
+      profile_url: oauth.profile_url || undefined,
+      client_id: oauth.client_id,
+      client_secret: oauth.client_secret,
+      scopes: oauth.scopes ? oauth.scopes.split(',').map((s) => s.trim()).filter(Boolean) : [],
+    };
+  } else {
+    const fields = [];
+    console.log(chalk.gray('Add the fields a user must fill in (leave name blank to stop):'));
+    for (;;) {
+      const f = await inquirer.prompt([
+        { type: 'input', name: 'name', message: `Field ${fields.length + 1} name:` },
+      ]);
+      if (!f.name) break;
+      const rest = await inquirer.prompt([
+        { type: 'input', name: 'label', message: 'Label (optional):' },
+        { type: 'select', name: 'type', message: 'Type:', choices: ['string', 'number', 'boolean', 'secret'], default: 'string' },
+        { type: 'confirm', name: 'required', message: 'Required?', default: true },
+      ]);
+      fields.push({ name: f.name, label: rest.label || undefined, type: rest.type, required: rest.required });
+    }
+    if (fields.length === 0) throw new Error('credential_form connectors need at least one field');
+    dto.fields = fields;
+  }
+
+  // Warn about likely-duplicate connectors before submitting - registering "Gmail" when
+  // official.google already covers the same thing just fragments the catalog.
+  try {
+    const dupRes = await withSpinner('🔎 Checking for similar connectors', () =>
+      axios.get(`${connectorBaseUrl()}/connectors/check-duplicate`, {
+        ...connectorAuthHeaders(),
+        params: { name: dto.name },
+      }),
+    );
+    const duplicates = dupRes.data?.duplicates || [];
+    if (duplicates.length > 0) {
+      console.log(chalk.yellow(`\n⚠ Similar connector(s) already exist - here's what they already provide, in case you can just reuse one instead:\n`));
+      for (const d of duplicates) {
+        console.log(formatConnectorDetail(d));
+        console.log(chalk.gray('─'.repeat(40)));
+      }
+      const { proceed } = await inquirer.prompt([
+        { type: 'confirm', name: 'proceed', message: 'Register this one anyway?', default: false },
+      ]);
+      if (!proceed) {
+        console.log(chalk.gray('Cancelled.'));
+        return;
+      }
+      dto.confirm_duplicate = true;
+    }
+  } catch (error) {
+    console.log(chalk.gray(`(couldn't check for duplicates: ${error.message || 'unknown error'} - continuing)`));
+  }
+
+  try {
+    const res = await withSpinner('🔌 Registering connector', () =>
+      axios.post(`${connectorBaseUrl()}/connectors/register`, dto, connectorAuthHeaders()),
+    );
+    console.log(chalk.green(`\n✅ Registered connector "${res.data.connector.id}"`));
+    console.log(chalk.gray(`   Reference it from a plugin manifest's connection_id: "${res.data.connector.id}"`));
+  } catch (error) {
+    const message = error.response?.data?.message?.message || error.response?.data?.message || error.message;
+    throw new Error(`Register failed: ${message}`, { cause: error });
+  }
+}
+
+const connectorCommand = program.command('connector').description('Register and discover reusable connectors (OAuth apps / credential-form namespaces)');
+
+connectorCommand
+  .command('register')
+  .description('Register a new connector namespace, interactively')
+  .action(async () => {
+    try {
+      await registerConnector();
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+connectorCommand
+  .command('search [query]')
+  .description("Search connectors for something to reuse instead of registering a new one")
+  .option('--limit <n>', 'Max results to show')
+  .option('--plain', 'Print a flat list instead of the interactive browser (for scripts/CI)')
+  .action(async (query, options) => {
+    try {
+      query = await requireArg(query, { prompt: 'What are you looking for?', usage: 'Usage: aivin connector search "<query>"' });
+      await searchConnectors(query, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+connectorCommand
+  .command('list')
+  .description('List connectors visible to your org')
+  .option('--page <n>', 'Page number')
+  .option('--limit <n>', 'Items per page')
+  .option('--include-deprecated', "Also show your org's deprecated connectors (hidden by default)")
+  .option('--plain', 'Print a flat list instead of the interactive browser (for scripts/CI)')
+  .action(async (options) => {
+    try {
+      await listConnectors(options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+connectorCommand
+  .command('deprecate [id]')
+  .description("Hide a connector you own from search/list without breaking plugins already using it")
+  .action(async (id) => {
+    try {
+      id = await requireArg(id, { prompt: 'Connector id to deprecate:', usage: 'Usage: aivin connector deprecate <id>' });
+      await axios.post(`${connectorBaseUrl()}/connectors/${encodeURIComponent(id)}/deprecate`, {}, connectorAuthHeaders());
+      console.log(chalk.green(`✅ "${id}" is now deprecated - still usable, hidden from new search/list.`));
+    } catch (error) {
+      const message = error.response?.data?.message || error.message;
+      console.error(chalk.red('❌'), message);
+      process.exit(1);
+    }
+  });
+
+connectorCommand
+  .command('undeprecate [id]')
+  .description('Make a previously-deprecated connector you own discoverable again')
+  .action(async (id) => {
+    try {
+      id = await requireArg(id, { prompt: 'Connector id to un-deprecate:', usage: 'Usage: aivin connector undeprecate <id>' });
+      await axios.post(`${connectorBaseUrl()}/connectors/${encodeURIComponent(id)}/undeprecate`, {}, connectorAuthHeaders());
+      console.log(chalk.green(`✅ "${id}" is discoverable again.`));
+    } catch (error) {
+      const message = error.response?.data?.message || error.message;
+      console.error(chalk.red('❌'), message);
       process.exit(1);
     }
   });
@@ -2116,7 +2884,7 @@ async function createMcpProxyPlugin(name, options) {
         default: description || `Proxy for the "${name}" MCP tool`,
       },
       {
-        type: 'list',
+        type: 'select',
         name: 'transport',
         message: 'MCP transport:',
         choices: [
@@ -2144,7 +2912,7 @@ async function createMcpProxyPlugin(name, options) {
 
     const kindAnswers = await inquirer.prompt([
       {
-        type: 'list',
+        type: 'select',
         name: 'kind',
         message: 'What does this plugin expose?',
         choices: [
@@ -2214,7 +2982,7 @@ const mcpCommand = program
   .description('MCP proxy plugins - wrap an external MCP server tool/resource/prompt, no code required');
 
 mcpCommand
-  .command('create <name>')
+  .command('create [name]')
   .description('Scaffold a manifest-only plugin that proxies to an external MCP server')
   .option('--transport <transport>', 'stdio | sse')
   .option('--command <command>', 'Command to launch the MCP server (stdio transport)')
@@ -2232,6 +3000,7 @@ mcpCommand
   )
   .action(async (name, options) => {
     try {
+      name = await requireArg(name, { prompt: 'Plugin name (lowercase letters, numbers, hyphens):', usage: 'Usage: aivin mcp create <name>' });
       await createMcpProxyPlugin(name, options);
     } catch (error) {
       console.error(chalk.red('❌'), error.message);
@@ -2347,13 +3116,20 @@ async function browserLogin() {
 }
 
 /**
- * `aivin login --basic`: prompts for email/password directly in the terminal, no browser. Only
- * supports the platform's default/shared client (`--client`, falls back to the same 'aivin.cloud'
- * default the web app itself falls back to when no custom-domain org is resolved) - accounts under
- * a custom-domain organization need that domain resolved first, which is exactly what the web
- * login page normally does. Use the default `aivin login` (browser) flow for those.
+ * Prompts for email/password directly in the terminal (no browser) and exchanges them for a real
+ * session JWT via `POST /user/login`. Only supports the platform's default/shared client
+ * (`--client`, falls back to the same 'aivin.cloud' default the web app itself falls back to when
+ * no custom-domain org is resolved) - accounts under a custom-domain organization need that domain
+ * resolved first, which is exactly what the web login page normally does.
+ *
+ * This JWT is deliberately never persisted anywhere (unlike the final API key `aivin login` saves
+ * to `~/.aivin/credentials`) - every command that needs one (`aivin login --basic`, `aivin key
+ * gen`/`revoke`) re-prompts and re-exchanges it fresh. That mirrors the backend on purpose: the
+ * `/apikey` routes (list/create/delete) require this session JWT and deliberately do NOT accept an
+ * existing API key in its place (see AuthGuard.tryApiKeyAuth's doc comment) - a leaked/scoped key
+ * must never be able to mint or revoke other keys on its own.
  */
-async function basicLogin(options) {
+async function obtainAccessToken(options) {
   const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
   const client = options.client || 'aivin.cloud';
 
@@ -2381,7 +3157,6 @@ async function basicLogin(options) {
     ),
   );
 
-  let accessToken;
   try {
     const loginRes = await axios.post(`${serverUrl}/user/login`, {
       client,
@@ -2391,13 +3166,22 @@ async function basicLogin(options) {
       auth_type: 'basic',
       auth_provider: 'tenant',
     });
-    accessToken = loginRes.data?.access_token;
+    const accessToken = loginRes.data?.access_token;
     if (!accessToken) throw new Error('Login response did not include an access token');
+    return { serverUrl, accessToken };
   } catch (error) {
     const message = error.response?.data?.message || error.message;
     throw new Error(`Login failed: ${message}`, { cause: error });
   }
+}
 
+/**
+ * `aivin login --basic`: the login-specific half of the flow above - exchange credentials for a
+ * JWT, then mint (replacing any previous same-named key) the one API key that gets saved to
+ * `~/.aivin/credentials`.
+ */
+async function basicLogin(options) {
+  const { serverUrl, accessToken } = await obtainAccessToken(options);
   const authHeaders = { headers: { Authorization: `Bearer ${accessToken}` } };
   const deviceName = os.hostname();
 
@@ -2450,6 +3234,1193 @@ program
       console.log(chalk.green(`💾 Saved to ${GLOBAL_CREDENTIALS_PATH} - every project on this machine can use it now.`));
     } catch (error) {
       console.log(chalk.red('❌ Login failed:'), error.message);
+      process.exit(1);
+    }
+  });
+
+// ── API key management - named keys for your account, separate from `aivin login`'s one ───────
+//
+// `aivin login` mints exactly one machine-wide key named after this hostname. These commands
+// manage arbitrary named keys on the same account (e.g. one per CI pipeline, one per teammate's
+// script) via the same `/apikey` endpoints the web app's Settings > API Keys tab and `aivin
+// login`'s device-key replacement already use - authenticated with the API_KEY already saved by
+// `aivin login`, not a fresh email/password prompt (see ApiKeyController's `@AllowApiKey()` +
+// AuthGuard's `request.apiKeyAuth` fallback on the backend).
+//
+// `key gen` still prompts for your account password even though it doesn't ask for email - minting
+// a new key from an existing one is the one action here that could otherwise let an
+// already-compromised key re-provision itself indefinitely after being revoked, so the backend
+// requires this step-up proof before creating one. `key list`/`key revoke` never grant anything
+// (read metadata / remove access only), so they need no such prompt.
+
+function requireSavedApiKey() {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error('API_KEY not set - run `aivin login` first.');
+  }
+  return apiKey;
+}
+
+/**
+ * The client id a key was minted under is baked right into it (`${client}-ak-<...>`, see
+ * ApiKeyService.createApiKey/parseApiKeyBearer on the backend) - parse it out locally so `client`
+ * is always shown even if the `/apikey/whoami` network call below fails.
+ */
+function parseApiKeyClient(apiKey) {
+  const anchorIndex = apiKey.lastIndexOf('-ak-');
+  return anchorIndex === -1 ? undefined : apiKey.substring(0, anchorIndex);
+}
+
+/**
+ * Prints which account/client the saved API_KEY resolves to, so a gen/revoke/list failure (wrong
+ * account, wrong client) is obvious up front instead of a confusing 401/403 further down. Never
+ * fatal - a lookup failure here shouldn't block the actual command, just fall back to what's
+ * derivable locally from the key string itself.
+ */
+async function logAccountIdentity(serverUrl, apiKey) {
+  const localClient = parseApiKeyClient(apiKey);
+  try {
+    const res = await axios.get(`${serverUrl}/apikey/whoami`, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const { email, client } = res.data || {};
+    console.log(chalk.gray(`   Account: ${email || 'unknown'}  (client: ${client || localClient || 'unknown'})`));
+  } catch (error) {
+    const message = error.response?.data?.message || error.message;
+    console.log(chalk.gray(`   Client: ${localClient || 'unknown'}  (couldn't resolve account email: ${message})`));
+  }
+}
+
+async function listRemoteApiKeys(serverUrl, apiKey) {
+  const authHeaders = { headers: { Authorization: `Bearer ${apiKey}` } };
+  // 100 is the backend's own max page size (ApiKeyController.listApiKeys clamps `limit` there) -
+  // plenty for the "find my one named key" lookups these commands do, and for `key list` itself.
+  const res = await axios.get(`${serverUrl}/apikey`, { ...authHeaders, params: { limit: 100 } });
+  return res.data?.items || [];
+}
+
+async function findApiKeyByName(serverUrl, apiKey, name) {
+  const items = await listRemoteApiKeys(serverUrl, apiKey);
+  return items.find((k) => k.name === name);
+}
+
+async function generateApiKey(name) {
+  const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
+  const apiKey = requireSavedApiKey();
+  const authHeaders = { headers: { Authorization: `Bearer ${apiKey}` } };
+  await logAccountIdentity(serverUrl, apiKey);
+
+  const { password } = await inquirer.prompt([
+    {
+      type: 'password',
+      name: 'password',
+      message: 'Account password:',
+      mask: '*',
+      validate: (input) => input.length > 0 || 'Password is required',
+    },
+  ]);
+
+  try {
+    // Replace, not accumulate - same behavior `aivin login` already relies on for its own device
+    // key, so re-running `aivin key gen "ci"` doesn't pile up duplicate "ci" entries.
+    const existing = await findApiKeyByName(serverUrl, apiKey, name);
+    if (existing) {
+      await axios.delete(`${serverUrl}/apikey/${existing.id || existing._id}`, authHeaders);
+    }
+
+    const keyRes = await axios.post(`${serverUrl}/apikey`, { name, password }, authHeaders);
+    if (!keyRes.data?.plainKey) throw new Error('Response did not include an API key');
+    return keyRes.data.plainKey;
+  } catch (error) {
+    const message = error.response?.data?.message || error.message;
+    throw new Error(`Failed to create API key: ${message}`, { cause: error });
+  }
+}
+
+async function revokeApiKeyByName(name) {
+  const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
+  const apiKey = requireSavedApiKey();
+  await logAccountIdentity(serverUrl, apiKey);
+
+  let existing;
+  try {
+    existing = await findApiKeyByName(serverUrl, apiKey, name);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message;
+    throw new Error(`Failed to look up API keys: ${message}`, { cause: error });
+  }
+  if (!existing) {
+    throw new Error(`No API key named "${name}" found on your account.`);
+  }
+
+  try {
+    const authHeaders = { headers: { Authorization: `Bearer ${apiKey}` } };
+    await axios.delete(`${serverUrl}/apikey/${existing.id || existing._id}`, authHeaders);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message;
+    throw new Error(`Failed to revoke API key: ${message}`, { cause: error });
+  }
+}
+
+const keyCommand = program.command('key').description('Manage named API keys for your account');
+
+keyCommand
+  .command('gen [name]')
+  .description('Create (or replace) a named API key for your account - shown only once')
+  .option('--save', 'Also save this key as this machine\'s default (~/.aivin/credentials), like `aivin login -k`')
+  .action(async (name, options) => {
+    try {
+      name = await requireArg(name, { prompt: 'Name for this API key:', usage: 'Usage: aivin key gen <name>' });
+      console.log(chalk.blue(`🔑 Creating API key "${name}"...`));
+      const plainKey = await generateApiKey(name);
+      console.log(chalk.green('✅ API key created!'));
+      console.log(chalk.yellow('🔑 Key:'), chalk.cyan(plainKey));
+      console.log(chalk.gray('   This is shown only once - store it somewhere safe.'));
+      if (options.save) {
+        saveGlobalApiKey(plainKey);
+        console.log(chalk.green(`💾 Saved to ${GLOBAL_CREDENTIALS_PATH} - every project on this machine can use it now.`));
+      }
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+keyCommand
+  .command('revoke [name]')
+  .description('Revoke a named API key for your account')
+  .action(async (name) => {
+    try {
+      name = await requireArg(name, { prompt: 'Name of the API key to revoke:', usage: 'Usage: aivin key revoke <name>' });
+      console.log(chalk.blue(`🔑 Revoking API key "${name}"...`));
+      await revokeApiKeyByName(name);
+      console.log(chalk.green(`✅ API key "${name}" revoked.`));
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+keyCommand
+  .command('list')
+  .description('List API keys on your account')
+  .action(async () => {
+    try {
+      const serverUrl = process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
+      const apiKey = requireSavedApiKey();
+      await logAccountIdentity(serverUrl, apiKey);
+      const items = await listRemoteApiKeys(serverUrl, apiKey);
+      if (items.length === 0) {
+        console.log(chalk.gray('No API keys found.'));
+        return;
+      }
+      items.forEach((k) => {
+        const created = k.created_at ? new Date(k.created_at).toISOString() : 'unknown';
+        console.log(`  ${chalk.cyan(k.name)}  ${chalk.gray(`(created ${created})`)}`);
+      });
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+// ── Missions, automation jobs, tasks, and workspace/project selection ─────────────────────────
+//
+// `aivin do` / `aivin do job` / `aivin task` are thin CLI wrappers over the same platform
+// endpoints the web app's chat/automation/task UIs already use (`/agent/start-work`,
+// `/automation/jobs/create`, `/task/create`) - not a new mechanism, just a terminal-native way to
+// reach them with the already-saved API_KEY. All three default to your personal workspace when
+// --workspace is omitted, since GET /workspace/list always returns the caller's Personal
+// workspace first (see WorkspaceService.listWorkspace on the backend).
+
+function missionAuthHeaders() {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    console.log(chalk.yellow('⚠️  API_KEY not set - run `aivin login` first'));
+  }
+  return { headers: { Authorization: `Bearer ${apiKey || 'dev-token'}` } };
+}
+
+function missionServerUrl() {
+  return process.env.AIVIN_BASE_URL || 'https://api.aivin.cloud';
+}
+
+async function listWorkspaces(serverUrl, authHeaders) {
+  let res;
+  try {
+    res = await axios.get(`${serverUrl}/workspace/list`, authHeaders);
+  } catch (error) {
+    // axios leaves `error.message` empty for some connection-level failures (e.g. ECONNREFUSED) -
+    // fall back to `error.code` so this never surfaces as a bare, content-free "❌ ".
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Couldn't reach ${serverUrl} to look up workspaces: ${message}`, { cause: error });
+  }
+  return Array.isArray(res.data) ? res.data : res.data?.items || [];
+}
+
+/**
+ * workspaces[0] IS "your personal workspace" whenever --workspace is omitted - the backend always
+ * unshifts the caller's Personal workspace to the front of GET /workspace/list's response.
+ */
+async function resolveWorkspace(serverUrl, authHeaders, explicitId) {
+  const workspaces = await listWorkspaces(serverUrl, authHeaders);
+  if (explicitId) {
+    const match = workspaces.find((w) => (w.id || w._id) === explicitId);
+    if (!match) throw new Error(`Workspace "${explicitId}" not found or not accessible.`);
+    return match;
+  }
+  const personal = workspaces[0];
+  if (!personal) throw new Error('No workspace found for this account. Pass --workspace <id>.');
+  return personal;
+}
+
+/**
+ * A workspace's `agents` array always has its client's default AI Staff agent unshifted to the
+ * front (see WorkspaceService.assembleEnrichedWorkspace) - so agents[0] is a sensible default
+ * whenever --agent is omitted, same reasoning as resolveWorkspace's workspaces[0].
+ */
+function resolveAgentId(workspace, explicitAgentId) {
+  if (explicitAgentId) return explicitAgentId;
+  const agentId = workspace.agents?.[0]?.id || workspace.agents?.[0]?.agent_id;
+  if (!agentId) {
+    throw new Error(`Workspace "${workspace.name || workspace.id}" has no agent to run as - pass --agent <id>.`);
+  }
+  return agentId;
+}
+
+// ── AI Staff agents - marketplace search, install into a workspace, create, publish ────────────
+
+async function searchAgents(serverUrl, authHeaders, { query, workspaceId, limit } = {}) {
+  const params = {};
+  if (query) params.query = query;
+  if (workspaceId) params.workspace_id = workspaceId;
+  if (limit) params.limit = limit;
+  let response;
+  try {
+    response = await axios.get(`${serverUrl}/ai-staff/search`, { ...authHeaders, params });
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Agent search failed: ${message}`, { cause: error });
+  }
+  const data = response.data;
+  return Array.isArray(data) ? data : data?.items || [];
+}
+
+async function pullAgentIntoWorkspace(serverUrl, authHeaders, { agentId, workspaceId }) {
+  try {
+    await axios.post(`${serverUrl}/ai-staff/pull`, { agent_id: agentId, workspace_id: workspaceId }, authHeaders);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to install agent into workspace: ${message}`, { cause: error });
+  }
+}
+
+async function createAgent(serverUrl, authHeaders, { name, nickname, email, bio, workspaceId }) {
+  let response;
+  try {
+    response = await axios.post(
+      `${serverUrl}/ai-staff/create`,
+      { name, nickname, email, bio, original_workspace_id: workspaceId },
+      authHeaders,
+    );
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to create agent: ${message}`, { cause: error });
+  }
+  return response.data ?? {};
+}
+
+async function publishAgent(serverUrl, authHeaders, { agentId, workspaceId }) {
+  try {
+    await axios.post(`${serverUrl}/ai-staff/update`, { id: agentId, workspace_id: workspaceId, is_published: true }, authHeaders);
+    await axios.post(`${serverUrl}/ai-staff/push`, { agent_id: agentId, workspace_id: workspaceId }, authHeaders);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to publish agent: ${message}`, { cause: error });
+  }
+}
+
+/**
+ * Interactively resolves which agent `aivin do` should run as: matches `agentNickname` against
+ * the workspace's already-installed agents (by nickname/name/id) if given, otherwise prompts to
+ * pick one. If the nickname doesn't match anything, or the workspace has no agents at all yet,
+ * offers to search-and-install one from the marketplace or create a brand new one, so `aivin do`
+ * never dead-ends just because a workspace hasn't been set up with an agent yet.
+ */
+async function resolveAgentInteractive(serverUrl, authHeaders, workspace, agentNickname) {
+  const agents = workspace.agents || [];
+  const workspaceId = workspace.id || workspace._id;
+
+  if (agentNickname) {
+    const match = agents.find((a) => a.nickname === agentNickname || a.id === agentNickname || a.name === agentNickname);
+    if (match) return match;
+    console.log(chalk.yellow(`No agent named "${agentNickname}" found in workspace "${workspace.name}".`));
+  }
+
+  if (!process.stdout.isTTY || !process.stdin.isTTY) {
+    throw new Error(
+      agents.length > 0
+        ? `Pass --agent <id> (one of: ${agents.map((a) => a.nickname || a.name || a.id).join(', ')}), or run this in an interactive terminal.`
+        : `Workspace "${workspace.name}" has no agents - run \`aivin agent install\`/\`aivin agent make\` first, or run this in an interactive terminal.`,
+    );
+  }
+
+  const NEW_AGENT_ACTIONS = {
+    INSTALL: '__install__',
+    CREATE: '__create__',
+  };
+
+  if (agents.length === 0) {
+    console.log(chalk.gray(`Workspace "${workspace.name}" has no agents yet.`));
+    const { action } = await inquirer.prompt([
+      {
+        type: 'select',
+        name: 'action',
+        message: 'What would you like to do?',
+        choices: [
+          { name: 'Search & install an agent from the marketplace', value: NEW_AGENT_ACTIONS.INSTALL },
+          { name: 'Create a brand new agent', value: NEW_AGENT_ACTIONS.CREATE },
+        ],
+      },
+    ]);
+    return action === NEW_AGENT_ACTIONS.INSTALL
+      ? installAgentInteractive(serverUrl, authHeaders, workspaceId)
+      : createAgentInteractive(serverUrl, authHeaders, workspaceId);
+  }
+
+  const choices = [
+    ...agents.map((a) => ({ name: a.nickname || a.name || a.id, value: a.id || a.agent_id })),
+    { name: chalk.gray('+ Search & install a different agent from the marketplace'), value: NEW_AGENT_ACTIONS.INSTALL },
+    { name: chalk.gray('+ Create a brand new agent'), value: NEW_AGENT_ACTIONS.CREATE },
+  ];
+  const { pickedAgentId } = await inquirer.prompt([
+    { type: 'select', name: 'pickedAgentId', message: 'Which agent should run this?', choices },
+  ]);
+  if (pickedAgentId === NEW_AGENT_ACTIONS.INSTALL) return installAgentInteractive(serverUrl, authHeaders, workspaceId);
+  if (pickedAgentId === NEW_AGENT_ACTIONS.CREATE) return createAgentInteractive(serverUrl, authHeaders, workspaceId);
+  return agents.find((a) => (a.id || a.agent_id) === pickedAgentId);
+}
+
+async function installAgentInteractive(serverUrl, authHeaders, workspaceId) {
+  const { query } = await inquirer.prompt([
+    { type: 'input', name: 'query', message: 'Search the marketplace for an agent:', validate: (v) => v.trim().length > 0 || 'Required' },
+  ]);
+  const results = await searchAgents(serverUrl, authHeaders, { query, workspaceId, limit: 10 });
+  if (results.length === 0) {
+    throw new Error(`No marketplace agents found matching "${query}".`);
+  }
+  const { pickedAgent } = await inquirer.prompt([
+    {
+      type: 'select',
+      name: 'pickedAgent',
+      message: 'Install which agent?',
+      choices: results.map((a) => ({ name: `${a.nickname || a.name}${a.bio ? chalk.gray(`  - ${a.bio}`) : ''}`, value: a })),
+    },
+  ]);
+  await pullAgentIntoWorkspace(serverUrl, authHeaders, { agentId: pickedAgent.id, workspaceId });
+  console.log(chalk.green(`✅ Installed "${pickedAgent.nickname || pickedAgent.name}" into this workspace.`));
+  return pickedAgent;
+}
+
+async function createAgentInteractive(serverUrl, authHeaders, workspaceId) {
+  const answers = await inquirer.prompt([
+    { type: 'input', name: 'name', message: 'Agent name:', validate: (v) => v.trim().length > 0 || 'Required' },
+    { type: 'input', name: 'nickname', message: 'Agent nickname (used to @-mention/target it):', validate: (v) => v.trim().length > 0 || 'Required' },
+    { type: 'input', name: 'email', message: 'Agent email:', validate: (v) => v.trim().length > 0 || 'Required' },
+    { type: 'input', name: 'bio', message: 'Short bio (optional):' },
+  ]);
+  const agent = await createAgent(serverUrl, authHeaders, { ...answers, workspaceId });
+  console.log(chalk.green(`✅ Created agent "${agent.nickname || agent.name}".`));
+  return agent;
+}
+
+// Every mission/job/task run logs its progress over the same clientLog() Socket.IO channel the
+// web app's chat/automation/task panels already listen on - the event name depends on which
+// `execution_channel` the run is on, so we just listen on all of them and filter by thread_id.
+const MISSION_LOG_EVENTS = ['chat-log', 'agent-log', 'automation-log', 'task-agent-log'];
+// The only two event_keys FlowService emits for a *whole* run finishing (not just one stage) -
+// see docs/sdk/automation.md's caveats section for why there's no generic "job succeeded" signal
+// beyond this on the wire.
+const MISSION_DONE_EVENT_KEYS = new Set(['flow.completed', 'flow.error', 'runner.start_failed']);
+
+/**
+ * Streams realtime progress for a running mission/job/task, for a nicer `aivin do` experience than
+ * a bare HTTP response - connects to the same Socket.IO channel `aivin plugin logs` already uses
+ * (see streamPluginLogs above), no explicit subscribe call needed since clientLog() emits to the
+ * caller's own user room automatically. Resolves on a recognized terminal event_key, on idle
+ * timeout, or on Ctrl+C - whichever comes first. Never throws: a log-streaming hiccup shouldn't
+ * fail a command whose HTTP call already succeeded.
+ */
+function streamMissionLog(serverUrl, apiKey, threadId, { idleTimeoutMs = 120_000 } = {}) {
+  return new Promise((resolve) => {
+    const socket = io(serverUrl, {
+      auth: { token: apiKey || 'dev-token' },
+      transports: ['websocket'],
+      reconnection: true,
+    });
+
+    let idleTimer;
+    let settled = false;
+    const statusIcon = (status) =>
+      status === 'error'
+        ? chalk.red('✗')
+        : status === 'success'
+          ? chalk.green('✓')
+          : status === 'warning'
+            ? chalk.yellow('!')
+            : chalk.gray('·');
+
+    const stop = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(idleTimer);
+      socket.disconnect();
+      process.off('SIGINT', stop);
+      resolve();
+    };
+
+    const bumpIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        console.log(
+          chalk.gray(
+            `\n(no activity for ${Math.round(idleTimeoutMs / 1000)}s - stopped watching; the run may still be going in the background)`,
+          ),
+        );
+        stop();
+      }, idleTimeoutMs);
+    };
+
+    process.on('SIGINT', stop);
+
+    socket.on('connect_error', (error) => {
+      console.log(chalk.yellow(`⚠️  Couldn't watch live progress (${error.message}) - the run continues regardless.`));
+      stop();
+    });
+
+    for (const eventName of MISSION_LOG_EVENTS) {
+      socket.on(eventName, (payload) => {
+        if (!payload || payload.thread_id !== threadId) return;
+        bumpIdleTimer();
+        const time = new Date(payload.timestamp || Date.now()).toLocaleTimeString();
+        const label = payload.event_key || eventName;
+        console.log(
+          `${chalk.gray(`[${time}]`)} ${statusIcon(payload.status)} ${chalk.gray(label)} ${payload.message || ''}`.trimEnd(),
+        );
+        if (MISSION_DONE_EVENT_KEYS.has(payload.event_key)) stop();
+      });
+    }
+
+    console.log(chalk.gray(`📡 Watching live progress for ${threadId}... (Ctrl+C to stop watching - the run keeps going either way)\n`));
+    bumpIdleTimer();
+  });
+}
+
+async function runMission(agentNickname, mission, options) {
+  const serverUrl = missionServerUrl();
+  const apiKey = process.env.API_KEY;
+  const authHeaders = missionAuthHeaders();
+
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+  const agent = await resolveAgentInteractive(serverUrl, authHeaders, workspace, agentNickname);
+  const agentId = agent.id || agent.agent_id;
+
+  console.log(chalk.blue('🚀 Doing:'), mission);
+  console.log(chalk.gray(`   Workspace: ${workspace.name || workspace.id}   Agent: ${agent.nickname || agent.name || agentId}`));
+
+  let response;
+  try {
+    response = await axios.post(
+      `${serverUrl}/agent/start-work`,
+      {
+        prompt: mission,
+        mission,
+        workspace_id: workspace.id || workspace._id,
+        agent_id: agentId,
+        project_id: options.project,
+      },
+      authHeaders,
+    );
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to start mission: ${message}`, { cause: error });
+  }
+
+  const result = response.data ?? {};
+  if (result.success === false) {
+    throw new Error(result.message || 'Failed to start mission');
+  }
+  const threadId = result.data?.thread_id;
+  console.log(chalk.gray(`   Thread: ${threadId || 'unknown'}`));
+
+  if (options.watch !== false && threadId) {
+    await streamMissionLog(serverUrl, apiKey, threadId);
+  }
+}
+
+async function createAutomationJob(description, options) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+  const agentId = resolveAgentId(workspace, options.agent);
+
+  console.log(chalk.blue('🔄 Creating automation job...'));
+  console.log(chalk.gray(`   Workspace: ${workspace.name || workspace.id}`));
+
+  let response;
+  try {
+    response = await axios.post(
+      `${serverUrl}/automation/jobs/create`,
+      {
+        mission: description.length > 60 ? `${description.slice(0, 57)}...` : description,
+        prompt: description,
+        agent_id: agentId,
+        workspace_id: workspace.id || workspace._id,
+        project_id: options.project,
+        schedule_condition: options.schedule,
+      },
+      authHeaders,
+    );
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to create automation job: ${message}`, { cause: error });
+  }
+
+  const job = response.data ?? {};
+  console.log(chalk.green('✅ Automation job created!'));
+  console.log(chalk.gray(`   ID: ${job.id}`));
+  console.log(chalk.gray(`   Mission: ${job.mission}`));
+  if (job.schedule_condition) console.log(chalk.gray(`   Schedule: ${job.schedule_condition}`));
+  if (job.next_run) console.log(chalk.gray(`   Next run: ${job.next_run}`));
+}
+
+/**
+ * A workspace's `projects` array has no guaranteed "default" entry the way `agents`/Personal do -
+ * just take the first one when --project is omitted, and say so explicitly if there isn't one
+ * (list/mine are scoped by project on the backend, unlike create/get/update/delete which take a
+ * bare task id or no project at all).
+ */
+function resolveProjectId(workspace, explicitProjectId) {
+  if (explicitProjectId) return explicitProjectId;
+  const projectId = workspace.projects?.[0]?.id;
+  if (!projectId) {
+    throw new Error(
+      `Workspace "${workspace.name || workspace.id}" has no projects - pass --project <id> (see \`aivin workspace\`).`,
+    );
+  }
+  return projectId;
+}
+
+async function listTasks(options) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+  const projectId = resolveProjectId(workspace, options.project);
+
+  const params = {};
+  if (options.status) params.status = options.status;
+  if (options.assignee) params.assign_id = options.assignee;
+  if (options.search) params.search = options.search;
+
+  let response;
+  try {
+    response = await axios.get(`${serverUrl}/task/${projectId}/list`, { ...authHeaders, params });
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to list tasks: ${message}`, { cause: error });
+  }
+
+  const tasks = Array.isArray(response.data) ? response.data : response.data?.items || [];
+  if (tasks.length === 0) {
+    console.log(chalk.yellow('No tasks found.'));
+    return;
+  }
+  console.log(chalk.blue(`${tasks.length} task(s) in project ${projectId}:\n`));
+  tasks.forEach((t) => {
+    console.log(`${chalk.bold(t.title || t.id)}  ${chalk.gray(`(${t.id})`)}`);
+    console.log(
+      chalk.gray(
+        `   status: ${t.status}${t.priority ? `  priority: ${t.priority}` : ''}${t.assign_id ? `  assignee: ${t.assign_id}` : ''}`,
+      ),
+    );
+  });
+}
+
+async function listMyTasks(options) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+  const projectId = resolveProjectId(workspace, options.project);
+
+  let response;
+  try {
+    response = await axios.get(`${serverUrl}/task/${projectId}/my-task`, authHeaders);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to list your tasks: ${message}`, { cause: error });
+  }
+
+  const tasks = Array.isArray(response.data) ? response.data : response.data?.items || [];
+  if (tasks.length === 0) {
+    console.log(chalk.yellow('No tasks assigned to you in this project.'));
+    return;
+  }
+  console.log(chalk.blue(`${tasks.length} task(s) assigned to you:\n`));
+  tasks.forEach((t) => {
+    console.log(`${chalk.bold(t.title || t.id)}  ${chalk.gray(`(${t.id})`)}  ${chalk.gray(t.status)}`);
+  });
+}
+
+async function getTaskById(id) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+
+  let response;
+  try {
+    response = await axios.get(`${serverUrl}/task/${id}`, authHeaders);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to get task: ${message}`, { cause: error });
+  }
+
+  console.log(JSON.stringify(response.data ?? {}, null, 2));
+}
+
+async function updateTaskById(id, options) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+
+  const data = {};
+  if (options.status) data.status = options.status;
+  if (options.title) data.title = options.title;
+  if (options.description) data.description = options.description;
+  if (options.assignee) data.assign_id = options.assignee;
+  if (options.priority) data.priority = options.priority;
+  if (Object.keys(data).length === 0) {
+    throw new Error('Nothing to update - pass at least one of --status/--title/--description/--assignee/--priority.');
+  }
+
+  let response;
+  try {
+    response = await axios.post(`${serverUrl}/task/${id}/update`, data, authHeaders);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to update task: ${message}`, { cause: error });
+  }
+
+  const task = response.data ?? {};
+  console.log(chalk.green('✅ Task updated!'));
+  console.log(chalk.gray(`   Status: ${task.status}`));
+}
+
+async function deleteTaskById(id) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+
+  try {
+    await axios.delete(`${serverUrl}/task/${id}/delete`, authHeaders);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to delete task: ${message}`, { cause: error });
+  }
+
+  console.log(chalk.green(`✅ Task ${id} deleted.`));
+}
+
+async function createTask(description, options) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+
+  console.log(chalk.blue('📋 Creating task...'));
+  console.log(chalk.gray(`   Workspace: ${workspace.name || workspace.id}`));
+
+  let response;
+  try {
+    response = await axios.post(
+      `${serverUrl}/task/create`,
+      {
+        title: description.length > 80 ? `${description.slice(0, 77)}...` : description,
+        content: description,
+        workspace_id: workspace.id || workspace._id,
+        project_id: options.project,
+        assign_id: options.assignee,
+      },
+      authHeaders,
+    );
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to create task: ${message}`, { cause: error });
+  }
+
+  const task = response.data ?? {};
+  console.log(chalk.green('✅ Task created!'));
+  console.log(chalk.gray(`   ID: ${task.id}`));
+  console.log(chalk.gray(`   Title: ${task.title}`));
+  console.log(chalk.gray(`   Status: ${task.status}`));
+}
+
+/**
+ * `aivin workspace` - interactive workspace + project picker (arrow-key inquirer prompts, matching
+ * `aivin create`'s existing interactive style) so a user can find a workspace/project id to pass
+ * as --workspace/--project to `aivin do`/`do job`/`task`, without memorizing them upfront.
+ */
+async function pickWorkspaceAndProject(options) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+  const workspaces = await listWorkspaces(serverUrl, authHeaders);
+
+  if (workspaces.length === 0) {
+    console.log(chalk.yellow('No workspace found for this account.'));
+    return;
+  }
+
+  if (!process.stdout.isTTY || !process.stdin.isTTY || options.plain) {
+    for (const ws of workspaces) {
+      console.log(chalk.bold(ws.name || ws.id) + chalk.gray(`  (${ws.id})${ws.name === 'Personal' ? '  [personal]' : ''}`));
+      (ws.projects || []).forEach((p) => console.log(chalk.gray(`    - ${p.name || p.id}  (${p.id})`)));
+    }
+    return;
+  }
+
+  const { workspaceId } = await inquirer.prompt([
+    {
+      type: 'select',
+      name: 'workspaceId',
+      message: 'Select a workspace:',
+      choices: workspaces.map((ws) => ({
+        name: `${ws.name || ws.id}${ws.name === 'Personal' ? chalk.gray('  (personal)') : ''}`,
+        value: ws.id || ws._id,
+      })),
+    },
+  ]);
+  const workspace = workspaces.find((ws) => (ws.id || ws._id) === workspaceId);
+
+  let projectId;
+  if (workspace.projects?.length > 0) {
+    const { pickedProjectId } = await inquirer.prompt([
+      {
+        type: 'select',
+        name: 'pickedProjectId',
+        message: 'Select a project:',
+        choices: [
+          { name: chalk.gray('(none - workspace level)'), value: null },
+          ...workspace.projects.map((p) => ({ name: p.name || p.id, value: p.id })),
+        ],
+      },
+    ]);
+    projectId = pickedProjectId;
+  } else {
+    console.log(chalk.gray(`\n"${workspace.name || workspace.id}" has no projects yet - staying at workspace level (no --project needed).`));
+  }
+
+  console.log(chalk.green('\n✅ Selected:'));
+  console.log(`   ${chalk.gray('Workspace:')} ${chalk.bold(workspace.name || 'unnamed')}`);
+  if (projectId) {
+    const project = workspace.projects.find((p) => p.id === projectId);
+    console.log(`   ${chalk.gray('Project:')}   ${chalk.bold(project?.name || 'unnamed')}`);
+  }
+  console.log(chalk.gray('\nUse with `aivin do`/`aivin do job`/`aivin task`:'));
+  console.log(`   --workspace ${workspace.id || workspace._id}${projectId ? ` --project ${projectId}` : ''}`);
+}
+
+// ── Projects within a workspace - create/update/delete ─────────────────────────────────────────
+//
+// `POST /project/:workspaceId/project/edit` is a real upsert on the backend: omit `id` to create a
+// new project, include it to update the matching one - there's no separate create endpoint.
+
+async function upsertProject(serverUrl, authHeaders, { workspaceId, id, name }) {
+  let response;
+  try {
+    response = await axios.post(`${serverUrl}/project/${workspaceId}/project/edit`, { id, name }, authHeaders);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to save project: ${message}`, { cause: error });
+  }
+  return response.data ?? {};
+}
+
+async function deleteProjectById(serverUrl, authHeaders, { workspaceId, projectId }) {
+  try {
+    await axios.delete(`${serverUrl}/project/${workspaceId}/project/${projectId}/delete`, authHeaders);
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to delete project: ${message}`, { cause: error });
+  }
+}
+
+async function createProjectCmd(name, options) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+  const project = await upsertProject(serverUrl, authHeaders, { workspaceId: workspace.id || workspace._id, name });
+  console.log(chalk.green('✅ Project created!'));
+  console.log(chalk.gray(`   Workspace: ${workspace.name || workspace.id}`));
+  console.log(chalk.gray(`   Name: ${project.name || name}`));
+  if (project.id) console.log(chalk.gray(`   ID: ${project.id}`));
+}
+
+async function updateProjectCmd(projectId, options) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+  if (!options.name) {
+    throw new Error('Nothing to update - pass --name <new name>.');
+  }
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+  await upsertProject(serverUrl, authHeaders, { workspaceId: workspace.id || workspace._id, id: projectId, name: options.name });
+  console.log(chalk.green(`✅ Project ${projectId} updated.`));
+}
+
+async function deleteProjectCmd(projectId, options) {
+  const serverUrl = missionServerUrl();
+  const authHeaders = missionAuthHeaders();
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+  await deleteProjectById(serverUrl, authHeaders, { workspaceId: workspace.id || workspace._id, projectId });
+  console.log(chalk.green(`✅ Project ${projectId} deleted.`));
+}
+
+const doCommand = program
+  .command('do [agentNickname] [mission]')
+  .description("Have <agentNickname> work toward a goal in the background - not a specific deployed plugin")
+  .option('--workspace <id>', 'Workspace id to run in (default: your personal workspace)')
+  .option('--project <id>', 'Project id within the workspace')
+  .option('--no-watch', 'Fire the mission and return immediately - skip streaming live progress')
+  .action(async (agentNickname, mission, options) => {
+    try {
+      mission = await requireArg(mission, {
+        prompt: 'What should the agent do?',
+        usage: 'Usage: aivin do <agent_nickname> "<mission detail>"  (or: aivin do job "<automation job description>")',
+      });
+      await runMission(agentNickname, mission, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+doCommand
+  .command('job [description]')
+  .description('Create a new automation job from a plain-language description')
+  .option('--workspace <id>', 'Workspace id to create the job in (default: your personal workspace)')
+  .option('--project <id>', 'Project id within the workspace')
+  .option('--agent <id>', "Agent id the job runs as (default: the workspace's default agent)")
+  .option('--schedule <condition>', 'Natural-language schedule, e.g. "every Monday at 9am" (default: let the platform infer one)')
+  .action(async (description, options) => {
+    try {
+      description = await requireArg(description, { prompt: 'What should this automation job do?', usage: 'Usage: aivin do job "<automation job description>"' });
+      await createAutomationJob(description, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+const taskCommand = program
+  .command('task [description]')
+  .description('Create a new task from a plain-language description')
+  .option('--workspace <id>', 'Workspace id to create the task in (default: your personal workspace)')
+  .option('--project <id>', 'Project id within the workspace')
+  .option('--assignee <userId>', 'User id to assign the task to (default: unassigned)')
+  .action(async (description, options) => {
+    try {
+      description = await requireArg(description, {
+        prompt: 'What is this task?',
+        usage: 'Usage: aivin task "<description>"  (or: aivin task list/mine/get/update/delete)',
+      });
+      await createTask(description, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+taskCommand
+  .command('list')
+  .description('List tasks in a project')
+  .option('--workspace <id>', 'Workspace id (default: your personal workspace)')
+  .option('--project <id>', "Project id (default: the workspace's first project)")
+  .option('--status <status>', 'Filter by status (todo/doing/done/backlog/cancel)')
+  .option('--assignee <userId>', 'Filter by assignee user id')
+  .option('--search <text>', 'Filter by search text')
+  .action(async (options) => {
+    try {
+      await listTasks(options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+taskCommand
+  .command('mine')
+  .description('List tasks assigned to you in a project')
+  .option('--workspace <id>', 'Workspace id (default: your personal workspace)')
+  .option('--project <id>', "Project id (default: the workspace's first project)")
+  .action(async (options) => {
+    try {
+      await listMyTasks(options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+taskCommand
+  .command('get [id]')
+  .description('Get a task by id')
+  .action(async (id) => {
+    try {
+      id = await requireArg(id, { prompt: 'Task id:', usage: 'Usage: aivin task get <id>' });
+      await getTaskById(id);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+taskCommand
+  .command('update [id]')
+  .description('Update a task')
+  .option('--status <status>', 'todo|doing|done|backlog|cancel')
+  .option('--title <title>', 'New title')
+  .option('--description <text>', 'New content/description')
+  .option('--assignee <userId>', 'Reassign to this user id')
+  .option('--priority <priority>', 'low|medium|high|urgent')
+  .action(async (id, options) => {
+    try {
+      id = await requireArg(id, { prompt: 'Task id:', usage: 'Usage: aivin task update <id>' });
+      await updateTaskById(id, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+taskCommand
+  .command('delete [id]')
+  .description('Delete a task')
+  .action(async (id) => {
+    try {
+      id = await requireArg(id, { prompt: 'Task id to delete:', usage: 'Usage: aivin task delete <id>' });
+      await deleteTaskById(id);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('workspace')
+  .description('Browse your workspaces and projects, and pick one to use with --workspace/--project')
+  .option('--plain', 'Print a flat list instead of the interactive picker (for scripts/CI)')
+  .action(async (options) => {
+    try {
+      await pickWorkspaceAndProject(options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+const agentCommand = program.command('agent').description('Search, install, create, and publish AI Staff agents');
+
+agentCommand
+  .command('search [query]')
+  .description('Search the AI Staff marketplace for an agent')
+  .option('--workspace <id>', 'Workspace id for context (default: your personal workspace)')
+  .option('--limit <n>', 'Max results to show')
+  .action(async (query, options) => {
+    try {
+      query = await requireArg(query, { prompt: 'What are you looking for?', usage: 'Usage: aivin agent search "<query>"' });
+      const serverUrl = missionServerUrl();
+      const authHeaders = missionAuthHeaders();
+      const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+      const results = await searchAgents(serverUrl, authHeaders, {
+        query,
+        workspaceId: workspace.id || workspace._id,
+        limit: options.limit,
+      });
+      if (results.length === 0) {
+        console.log(chalk.yellow(`No agents found matching "${query}".`));
+        return;
+      }
+      console.log(chalk.blue(`Found ${results.length} agent(s) matching "${query}":\n`));
+      results.forEach((a) => {
+        console.log(chalk.bold(a.nickname || a.name) + chalk.gray(`  (${a.id})`));
+        if (a.bio) console.log(`  ${a.bio}`);
+        console.log();
+      });
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+agentCommand
+  .command('install [query]')
+  .description('Search the marketplace and install an agent into a workspace')
+  .option('--workspace <id>', 'Workspace id to install into (default: your personal workspace)')
+  .action(async (query, options) => {
+    try {
+      const serverUrl = missionServerUrl();
+      const authHeaders = missionAuthHeaders();
+      const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+      const workspaceId = workspace.id || workspace._id;
+
+      let picked;
+      if (query) {
+        const results = await searchAgents(serverUrl, authHeaders, { query, workspaceId, limit: 10 });
+        if (results.length === 0) throw new Error(`No marketplace agents found matching "${query}".`);
+        if (!process.stdout.isTTY || !process.stdin.isTTY) {
+          picked = results[0];
+        } else {
+          const { pickedAgent } = await inquirer.prompt([
+            {
+              type: 'select',
+              name: 'pickedAgent',
+              message: 'Install which agent?',
+              choices: results.map((a) => ({ name: `${a.nickname || a.name}${a.bio ? chalk.gray(`  - ${a.bio}`) : ''}`, value: a })),
+            },
+          ]);
+          picked = pickedAgent;
+        }
+      } else {
+        picked = await installAgentInteractive(serverUrl, authHeaders, workspaceId);
+        console.log(chalk.gray(`Installed into ${workspace.name || workspaceId}.`));
+        return;
+      }
+
+      await pullAgentIntoWorkspace(serverUrl, authHeaders, { agentId: picked.id, workspaceId });
+      console.log(chalk.green(`✅ Installed "${picked.nickname || picked.name}" into ${workspace.name || workspaceId}.`));
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+agentCommand
+  .command('make')
+  .description('Create a brand new AI Staff agent')
+  .option('--name <name>', 'Agent name')
+  .option('--nickname <nickname>', 'Agent nickname (used to @-mention/target it)')
+  .option('--email <email>', 'Agent email')
+  .option('--bio <bio>', 'Short bio')
+  .option('--workspace <id>', 'Workspace to install the new agent into (default: your personal workspace)')
+  .action(async (options) => {
+    try {
+      const serverUrl = missionServerUrl();
+      const authHeaders = missionAuthHeaders();
+      const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+
+      const canPrompt = process.stdout.isTTY && process.stdin.isTTY;
+      const answers = { name: options.name, nickname: options.nickname, email: options.email, bio: options.bio };
+      if ((!answers.name || !answers.nickname || !answers.email) && canPrompt) {
+        const prompted = await inquirer.prompt(
+          [
+            !answers.name && { type: 'input', name: 'name', message: 'Agent name:', validate: (v) => v.trim().length > 0 || 'Required' },
+            !answers.nickname && {
+              type: 'input',
+              name: 'nickname',
+              message: 'Agent nickname (used to @-mention/target it):',
+              validate: (v) => v.trim().length > 0 || 'Required',
+            },
+            !answers.email && { type: 'input', name: 'email', message: 'Agent email:', validate: (v) => v.trim().length > 0 || 'Required' },
+            !answers.bio && { type: 'input', name: 'bio', message: 'Short bio (optional):' },
+          ].filter(Boolean),
+        );
+        Object.assign(answers, prompted);
+      }
+      if (!answers.name || !answers.nickname || !answers.email) {
+        throw new Error('Usage: aivin agent make --name <name> --nickname <nickname> --email <email> [--bio <bio>]');
+      }
+
+      const agent = await createAgent(serverUrl, authHeaders, { ...answers, workspaceId: workspace.id || workspace._id });
+      console.log(chalk.green(`✅ Created agent "${agent.nickname || agent.name}"!`));
+      if (agent.id) console.log(chalk.gray(`   ID: ${agent.id}`));
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+agentCommand
+  .command('publish [agentId]')
+  .description('Publish an agent you own to the marketplace')
+  .option('--workspace <id>', 'Workspace the agent lives in (default: your personal workspace)')
+  .action(async (agentId, options) => {
+    try {
+      const serverUrl = missionServerUrl();
+      const authHeaders = missionAuthHeaders();
+      const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+
+      if (!agentId) {
+        const agents = workspace.agents || [];
+        if (agents.length === 0) throw new Error(`Workspace "${workspace.name}" has no agents to publish.`);
+        if (!process.stdout.isTTY || !process.stdin.isTTY) {
+          throw new Error('Usage: aivin agent publish <agentId>');
+        }
+        const { pickedAgentId } = await inquirer.prompt([
+          {
+            type: 'select',
+            name: 'pickedAgentId',
+            message: 'Publish which agent?',
+            choices: agents.map((a) => ({ name: a.nickname || a.name || a.id, value: a.id || a.agent_id })),
+          },
+        ]);
+        agentId = pickedAgentId;
+      }
+
+      await publishAgent(serverUrl, authHeaders, { agentId, workspaceId: workspace.id || workspace._id });
+      console.log(chalk.green(`✅ Published agent ${agentId} to the marketplace.`));
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+const projectCommand = program.command('project').description('Create, update, and delete projects within a workspace');
+
+projectCommand
+  .command('create [name]')
+  .description('Create a new project in a workspace')
+  .option('--workspace <id>', 'Workspace id (default: your personal workspace)')
+  .action(async (name, options) => {
+    try {
+      name = await requireArg(name, { prompt: 'Project name:', usage: 'Usage: aivin project create <name>' });
+      await createProjectCmd(name, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+projectCommand
+  .command('update [id]')
+  .description('Update a project (currently: rename)')
+  .option('--workspace <id>', 'Workspace id (default: your personal workspace)')
+  .option('--name <name>', 'New name')
+  .action(async (id, options) => {
+    try {
+      id = await requireArg(id, { prompt: 'Project id:', usage: 'Usage: aivin project update <id> --name <new name>' });
+      await updateProjectCmd(id, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
+
+projectCommand
+  .command('delete [id]')
+  .description('Delete a project')
+  .option('--workspace <id>', 'Workspace id (default: your personal workspace)')
+  .action(async (id, options) => {
+    try {
+      id = await requireArg(id, { prompt: 'Project id to delete:', usage: 'Usage: aivin project delete <id>' });
+      await deleteProjectCmd(id, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
       process.exit(1);
     }
   });
