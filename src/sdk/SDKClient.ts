@@ -292,8 +292,9 @@ export class SDKClient {
 
   /**
    * `search`/`reinforce` confirmed against `BrainSDK.ts`'s `registerKnowledgeHandlers()`.
-   * `get`/`del` (from CodeSDK.d.ts) have no confirmed real implementation - use
-   * `call('knowledge.batchGetKnowledge'|'knowledge.batchDeleteKnowledge', ...)` directly if needed.
+   * `get`/`del` now confirmed real too (same file, `knowledge.batchGetKnowledge`/
+   * `knowledge.batchDeleteKnowledge` handlers) - previously undocumented here, reachable only via
+   * the untyped `call()` escape hatch.
    */
   readonly knowledge = {
     search: (
@@ -303,6 +304,9 @@ export class SDKClient {
     store: (knowledge: any, scope?: Record<string, any>): Promise<any> =>
       this.call('knowledge.storeKnowledge', { knowledge, scope }),
     reinforce: (ids: string[]): Promise<any> => this.call('knowledge.reinforceKnowledge', { ids }),
+    get: (knowledgeIds: string[]): Promise<any[]> =>
+      this.call('knowledge.batchGetKnowledge', { knowledgeIds }),
+    del: (ids: string[]): Promise<any> => this.call('knowledge.batchDeleteKnowledge', { ids }),
   };
 
   readonly vector = {
@@ -1162,6 +1166,10 @@ export class SDKClient {
     incr: (key: string): Promise<number> => this.call('storage.redisIncr', { key }),
     incrby: (key: string, increment: number): Promise<number> =>
       this.call('storage.redisIncr', { key, amount: increment }),
+    /** Confirmed against `PluginStorageService.redisDecr` - previously reachable only via `call()`. */
+    decr: (key: string): Promise<number> => this.call('storage.redisDecr', { key }),
+    decrby: (key: string, decrement: number): Promise<number> =>
+      this.call('storage.redisDecr', { key, amount: decrement }),
     hget: (key: string, field: string): Promise<string | null> =>
       this.call('storage.redisHget', { key, field }),
     hset: (key: string, field: string, value: string | number): Promise<number> =>

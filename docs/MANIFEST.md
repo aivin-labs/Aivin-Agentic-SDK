@@ -26,7 +26,6 @@ plus a `plugins` array with one entry per function the plugin exposes. This is w
       "func": "main",
       "input": { "text": "string - text to summarize" },
       "output": { "data": "string - the summary" },
-      "trigger_type": ["manual", "api", "chat"]
     }
   ]
 }

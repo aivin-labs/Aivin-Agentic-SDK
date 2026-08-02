@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### 🆕 Added — typed sugar for the last 3 backend routes only reachable via `call()`
+
+`check-contract.mjs` flagged 3 real backend registrations with no `SDKClient.ts` wrapper. Added
+`knowledge.get(knowledgeIds)`/`knowledge.del(ids)` (confirmed against `BrainSDK.ts`'s
+`knowledge.batchGetKnowledge`/`knowledge.batchDeleteKnowledge` handlers - previously documented as
+"no confirmed real implementation", which was stale) and `redis.decr`/`redis.decrby` (mirrors
+`incr`/`incrby`, confirmed against `PluginStorageService.redisDecr`). `check-contract.mjs` now
+reports 0 dead calls and 0 missing-sugar entries against the real backend.
+
 ## [1.2.0] - 2026-07-29
 
 ### 🆕 Reworked — `aivin plugin convert` into an agentic, tool-relay-based conversion pipeline
