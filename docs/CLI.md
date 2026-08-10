@@ -201,8 +201,9 @@ one `sdk.*` call: `namespace`, `duration_ms`, `attempts`, `success`, `error` (if
 Deploys the plugin in the current directory (`manifest.json` + every project file except
 `node_modules/`, `.git/`, `.tmp/`, `dist/`, `build/`, `.test/`, `.gitignore`, `yarn.lock`, and
 `.env`) to `POST /plugins/deploy`. Always private to your org - there's no CLI-reachable "submit to
-the public store" path today (that only exists through the browser CodeEditor's publish flow, a
-different runtime).
+the public store" path for regular code/Docker plugins today (that only exists through the browser
+CodeEditor's publish flow, a different runtime). **MCP proxy plugins are the one exception** -
+`aivin mcp <url> --publish` (below) can submit those to the community store directly from the CLI.
 
 - `manifest.json` is normally the default `{ ...commonFields, plugins: [...] }` shape (see
   [MANIFEST.md#default-shape](./MANIFEST.md#default-shape)) - common fields are copied onto each
@@ -225,10 +226,15 @@ Same payload/logic as `aivin deploy`, but against `POST /plugins/test/deploy` - 
 instance for verifying the plugin runs end-to-end on real infra (real container, real gRPC, real
 the SDK) before anyone else can see it. This endpoint is blocked by the backend in production.
 
-After a successful deploy, it also **smoke-tests** every plugin entry: generates sample input from
-`manifest.json`'s `input` schema (`POST /code/generate-sample-data`), invokes the plugin for real
-(`POST /plugins/execute`) against a workspace, and writes a pass/fail report to
+After a successful deploy, it also **smoke-tests** every non-proxy plugin entry: generates sample
+input from `manifest.json`'s `input` schema (`POST /code/generate-sample-data`), invokes the plugin
+for real (`POST /plugins/execute`) against a workspace, and writes a pass/fail report to
 `.test/<timestamp>.json` in the project directory (also excluded from future deploy uploads).
+
+**MCP proxy entries are skipped** - there's no generic "sample input" that makes sense for a tool
+schema an external MCP server defines itself, so `aivin test` deploys them but runs no automated
+invoke/report. Use `aivin plugin trigger --id <pluginId> -a "<prompt>"` (or the interactive "Test
+now?" step `aivin mcp <url>` offers right after deploy) to test one by hand instead.
 
 ```
 Options:
@@ -421,18 +427,26 @@ Invokes an **already-deployed** plugin for real and prints the result - the same
 `POST /plugins/execute` the platform's own Playground ("Thử nghiệm" tab) uses, so it exercises the
 exact same code path a running agent would hit. Run it from the plugin's project directory -
 `manifest.json` supplies the plugin id (`--func <name>` picks the entry for a multi-function
-plugin).
+plugin) - or pass `--id` directly for a plugin with no local project directory (e.g. one built by
+`aivin mcp <url>`, which deploys straight from a scan and never writes a `manifest.json` anywhere).
 
 ```
 Options:
   -a, --auto <prompt>  Natural-language prompt - the platform auto-maps it onto
                        the input schema for you
+  --id <pluginId>      Plugin id to trigger directly - skips the local
+                       manifest.json lookup entirely
   --func <name>        Which function to trigger, for a multi-function plugin
-                       (matches name/func/id)
+                       (matches name/func/id) - ignored when --id is given
   --workspace <id>     Workspace id to run against (default: auto-picks your
                        first one)
   --agent <id>         Agent id to run as, if the plugin needs one for
                        HIL/confirm behavior to be accurate
+```
+
+```bash
+# no local project directory - e.g. an MCP proxy plugin from `aivin mcp <url>`
+aivin plugin trigger --id my-mcp-plugin-id -a "search for open issues about login"
 ```
 
 **Direct mode** - `<mission>` (becomes `main()`'s `mission` argument) and `<input>` (a JSON string,
@@ -484,6 +498,45 @@ aivin plugin logs my-plugin-id
 Prints each line as it's written (`console.log` → gray, `console.error` → red), with a local
 timestamp. Runs until you press Ctrl+C. If the container restarts (redeploy/crash) mid-stream,
 the connection ends - re-run the command to resume watching.
+
+## `aivin mcp <url> [--publish|--private|--org]`
+
+The one-shot path from "here's an [MCP](https://modelcontextprotocol.io) server" to deployed
+plugin(s) - unlike `aivin mcp create` below (which scaffolds exactly 1 tool/resource/prompt you
+already know the transport/command/name for), this scans a whole server and converts everything it
+finds, interactively:
+
+1. **Scan** (`POST /plugins/scan-mcp`) - `<url>` can be a GitHub/GitLab repo, an npm/Smithery
+   package, or a live MCP server URL. Reads the repo/README or handshakes the live server directly.
+2. **Select** - checkbox prompt lists every tool/resource/prompt found (all checked by default);
+   space to toggle, enter to continue with only what you actually want as plugins.
+3. **Build manifests** (`POST /plugins/build-mcp-manifests`) - one `PluginManifest` per selected
+   item, generated server-side (not typed by hand like `aivin mcp create` requires).
+4. **Edit** (optional) - confirm prompt offers to rename/redescribe any of the generated plugins
+   before anything is deployed.
+5. **Deploy** (`POST /plugins/deploy`) - always org-scoped first, regardless of the visibility flag
+   below (there's no narrower per-workspace scope for plugins today).
+6. **Publish** (only with `--publish`) - submits each deployed plugin for community review
+   (`POST /plugins/store/submit`) - the backend re-verifies each one LIVE against the real MCP
+   server before it reaches the review queue, not just whatever got deployed (see the backend's own
+   `marketplace-catalog.md` docs, §"Tự submit plugin MCP lên store", for the full gate).
+7. Prints ready-to-run `aivin plugin trigger --id <id> -a "..."` / `aivin plugin logs <id>` for
+   every plugin deployed, and offers to run one right now, interactively - see
+   [`aivin test`](#aivin-test) above for why this exists (its automated smoke test skips proxy
+   plugins entirely).
+
+```
+Options:
+  --publish   Deploy to your org, then submit for community store review
+              (needs admin approval)
+  --private   Deploy to your org only - default
+  --org       Alias of --private - there is no narrower per-workspace scope today
+```
+
+```bash
+aivin mcp https://github.com/example-org/example-mcp-server
+aivin mcp https://github.com/example-org/example-mcp-server --publish
+```
 
 ## `aivin mcp create <name>`
 
@@ -779,8 +832,8 @@ machine picks it up automatically - there's no per-project credential to manage.
 
 | Variable            | Used by                                          | Default                     | When you'd touch it                                          |
 | -------------------- | -------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------- |
-| `SDK_ENDPOINT`  | SDK calls, `aivin start`                   | `api.aivin.cloud:50051`      | Point `main()`'s SDK calls at a local/dev backend instead of production. |
-| `AIVIN_BASE_URL`     | `deploy`, `test`, `plugin make/convert/trigger`, `login --basic` | `https://api.aivin.cloud`    | Only for a self-hosted or staging instance.                   |
+| `SDK_ENDPOINT`  | SDK calls, `aivin start`                   | `sdk.aivin.cloud:443`      | Point `main()`'s SDK calls at a local/dev/staging backend instead of production. Staging: `beta-sdk.aivin.vn:50052` (dedicated Cloudflare Tunnel TLS port - production goes through a load balancer on the standard 443 port instead, a different setup). |
+| `AIVIN_BASE_URL`     | `deploy`, `test`, `plugin make/convert/trigger`, `login --basic` | `https://api.aivin.cloud`    | Only for a self-hosted or staging instance. Staging: `https://beta-api.aivin.vn`. |
 | `AIVIN_WEB_URL`      | `login` (browser flow)                             | `https://brain.aivin.cloud`  | Only for a self-hosted or staging instance.                   |
 | `LOCAL_TEST_PORT`    | `aivin start`                                       | `4001`                       | Only if `4001` is already taken on your machine.              |
 

@@ -74,8 +74,13 @@ export async function withRetry<T>(
  * SDK_ENDPOINT yourself to point at a local/dev/staging backend instead). Inside a deployed
  * container this env var is always injected by the host (DockerHelper), so this fallback never
  * applies there.
+ *
+ * `sdk.aivin.cloud:443` is production's gRPC entry behind the load balancer - a separate host from
+ * `api.aivin.cloud` (the REST API `AIVIN_BASE_URL` points at) and NOT the same path staging uses
+ * (`beta-sdk.aivin.vn:50052`, a dedicated Cloudflare Tunnel TLS port - production has no such
+ * tunnel, the LB terminates TLS on the standard 443 port instead).
  */
-const DEFAULT_ENDPOINT = 'api.aivin.cloud:50051';
+const DEFAULT_ENDPOINT = 'sdk.aivin.cloud:443';
 
 let cachedClient: GrpcInvokeClient | undefined;
 let cachedEndpoint: string | undefined;

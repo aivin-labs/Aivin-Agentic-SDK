@@ -138,7 +138,7 @@ The _same_ `Invoke` RPC is used both ways:
 
 - **Plugin → host** (outbound SDK calls): `GrpcInvoker.invokeHost()` connects to
   `SDK_ENDPOINT` (injected by the host container runtime, typically
-  `host.docker.internal:50051`; falls back to the production endpoint `api.aivin.cloud:50051` with
+  `host.docker.internal:50051`; falls back to the production endpoint `sdk.aivin.cloud:443` with
   TLS when unset, so local `aivin start` testing works without any config) and sends
   `namespace = "ai.prompt"` etc. Connections to anything other than a local/loopback/
   container-internal address use TLS by default (override with `SDK_GRPC_TLS=true|false`).
