@@ -20,7 +20,7 @@ export { createMockSDK, withMockSDK, createMockContext } from './sdk/testUtils';
 export type { MockSDK, MockSDKHandlers, CreateMockSDKOptions } from './sdk/testUtils';
 export { invokeHost, invokeHostStream, onCall } from './grpc/GrpcInvoker';
 export type { CallTrace, StreamHandle } from './grpc/GrpcInvoker';
-export { getCurrentTrace, formatTraceForConsole } from './sdk/trace';
+export { withTrace, getCurrentTrace, formatTraceForConsole } from './sdk/trace';
 export type { InvocationTrace, TraceEvent } from './sdk/trace';
 
 export * from './types/PluginTypes';

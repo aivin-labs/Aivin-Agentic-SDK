@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## [1.0.3] - 2026-08-10
+
+### 🆕 Added — typed sugar for `pluginStore.findDocsBySourceRepo`/`pluginStore.patchByIds`
+
+`check-contract.mjs --be-path` flagged the new `pluginStore.*` namespace (BE's plugin-marketplace
+catalog, added same day) as 18 registrations reachable only via the untyped `call()` escape hatch.
+Added sugar for the 2 actually consumed in production right now — `aivin-service`'s `AivinBackend.ts`
+(the *sole* way that repo's `MarketplaceBackend` implementation reads/writes BE's catalog, now that
+its old direct-OpenAI/Anthropic "standalone" path has been removed entirely). The other ~14
+`pluginStore.*` registrations (`getPlugin`, `searchPlugins`, `upsertPlugins`, ...) stay
+escape-hatch-only — no current caller reaches for them, so no sugar added speculatively.
+
+Marked `pluginStore` `@internal` + enabled `stripInternal` in `tsconfig.json` — it's rejected
+server-side for any caller besides aivin-service (`PluginStoreSDK.ts::assertMarketplaceCaller`), so
+it had no business appearing in a plugin author's Monaco autocomplete. Confirmed the published
+`.d.ts` now omits it entirely while the compiled runtime JS still has it (aivin-service compiles
+against this same source, unaffected).
+
+### 🐛 Fixed — `withTrace` was never re-exported from the top-level package entry
+
+`export { getCurrentTrace, formatTraceForConsole } from './sdk/trace'` (`src/index.ts`) always
+skipped `withTrace` itself — the function BE's own `bootstrapper.js` (native/PROMOTED_CODE plugin
+runtime) needs to give that runtime the same per-call `sdk.*` trace visibility Docker-runtime
+plugins already get for free via `PluginServer.ts`'s own `withTrace` usage. `require('@aivin-labs/sdk').withTrace`
+silently resolved to `undefined` (destructuring doesn't throw) — the crash only happened later, at
+the point `withTrace(...)` was actually *called*, past where any `try/catch` around the `require`
+would catch it. Added to `src/index.ts`'s export list; verified against the built `dist/index.js`
+that it now resolves to a real function.
+
 ## [1.0.2] - 2026-08-10
 
 > `package.json` had drifted out of sync with this file for a while (see the note above `[1.2.0]`

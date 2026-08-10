@@ -309,6 +309,28 @@ export class SDKClient {
     del: (ids: string[]): Promise<any> => this.call('knowledge.batchDeleteKnowledge', { ids }),
   };
 
+  /**
+   * `pluginStore.*` — catalog read/write for the plugin marketplace. Gated server-side to
+   * aivin-service's own caller identity (`MARKETPLACE_CALLER_ID`, see BE's
+   * `PluginStoreSDK.ts::assertMarketplaceCaller`) — a regular plugin calling this gets rejected by
+   * the server, so it has no business appearing in a plugin author's Monaco autocomplete. `@internal`
+   * (stripped from the published `.d.ts` via `stripInternal` — still callable at runtime by
+   * `AivinBackend.ts`, which compiles against this same source, just invisible to `.d.ts` consumers).
+   * Only `findDocsBySourceRepo`/`patchByIds` are given typed sugar here (the two actually consumed
+   * in production, by aivin-service's `McpDiscoveryService.ts` via `AivinBackend.ts`) — the
+   * namespace has ~14 more registrations (`getPlugin`, `searchPlugins`, `upsertPlugins`, ...) still
+   * only reachable through the untyped `call()` escape hatch; add sugar here if/when something
+   * besides aivin-service starts reaching for them, rather than speculatively wrapping all of them.
+   *
+   * @internal
+   */
+  readonly pluginStore = {
+    findDocsBySourceRepo: (repo: string): Promise<any[]> =>
+      this.call('pluginStore.findDocsBySourceRepo', { repo }),
+    patchByIds: (ids: any[], fields: Record<string, any>): Promise<void> =>
+      this.call('pluginStore.patchByIds', { ids, fields }),
+  };
+
   readonly vector = {
     search: (params: {
       query: string;

@@ -234,6 +234,59 @@ const ctx = createMockContext(client);
 const result = await withMockSDK(client, () => main('test', { text: 'x' }, ctx));
 ```
 
+## Debugging & Tracing
+
+Two layers, for two different situations. See [CLI.md#aivin-start](./CLI.md#aivin-start) for the
+CLI-flag version (`aivin start --debug`/`--debug-json`, i.e. `SDK_DEBUG=true`/`SDK_DEBUG=json`) —
+this section covers the programmatic API underneath it, for when you're embedding the SDK's own
+runtime (a custom host process, not `aivin start`) and want the same per-call visibility.
+
+| Export | What it does |
+| --- | --- |
+| `withTrace(mission, fn, onFinish?)` | Runs `fn`, collecting every `sdk.*`/global-import call made anywhere during it (including inside nested async work it kicks off and awaits) into an `InvocationTrace`. Calls `onFinish(trace)` when `fn` settles — success or failure, trace's `success`/`error` reflect which. Returns whatever `fn()` returned (or rethrows its error) - the trace itself only reaches you through `onFinish`/`getCurrentTrace()`. `PluginServer.ts` wraps every real plugin invocation in this by default (`AIVIN_TRACE=false` opts out); it's how Docker-runtime plugins get full call-by-call tracing "for free". |
+| `getCurrentTrace()` | Reads the `InvocationTrace` of whichever `withTrace()` call is currently in progress on this async context - `undefined` outside one. Useful from inside `main()` itself, e.g. to stash which calls it made onto its own `PluginResponse`. |
+| `onCall(listener)` | Lower-level: fires on *every* real SDK call completing, everywhere, not scoped to one `withTrace()` invocation - `trace.ts` builds `withTrace` on top of this. Returns an unsubscribe function. Rarely what you want directly; prefer `withTrace`/`getCurrentTrace` unless you're building your own trace collector. |
+| `formatTraceForConsole(trace)` | Renders an `InvocationTrace` as a readable, colorless (safe for log aggregators) multi-line timeline - one line per call with status icon, duration, and a "no calls were made" fallback line. This is what `PluginServer.ts`'s default trace-to-console behavior uses. |
+
+```typescript
+import { withTrace, formatTraceForConsole } from '@aivin-labs/sdk';
+
+const result = await withTrace('summarize-doc', () => main(mission, input, ctx), (trace) => {
+  console.log(formatTraceForConsole(trace));
+});
+```
+
+`InvocationTrace` shape (also exported, for building your own consumer instead of
+`formatTraceForConsole`):
+
+```typescript
+interface InvocationTrace {
+  mission: string;
+  startedAt: number;
+  finishedAt?: number;       // undefined while still running
+  events: TraceEvent[];      // every sdk.* call, in completion order
+  success?: boolean;
+  error?: string;
+}
+interface TraceEvent {       // = CallTrace + ordering/timestamp
+  namespace: string;         // e.g. "ai.prompt"
+  durationMs: number;
+  attempts: number;          // retries counted
+  success: boolean;
+  error?: string;
+  seq: number;                // 1-based order this call finished in
+  ts: number;                 // epoch ms when it finished
+}
+```
+
+**Consumers today**: `PluginServer.ts` (Docker-runtime plugins - tracing on by default, including
+in production, since an intermittent-in-production failure is exactly the kind of thing a
+local-only trace would never catch) and, on the host side, `c:\Project\be\src\code\helper\bootstrapper.js`
+(BE's native/`PROMOTED_CODE` plugin runtime - added the same day `withTrace` was fixed to actually
+be exported from this package's top level, see the `[1.0.3]` changelog entry). Guard against
+`typeof withTrace === 'function'` before relying on it if your code might run against an older
+installed version of this package - the export was missing entirely before `1.0.3`.
+
 ## What's in `ctx`
 
 ```typescript
