@@ -2105,18 +2105,31 @@ function resolveTriggerEntry(manifest, funcOption) {
  * mapping/execution stage messages, all at once, not the plugin's own internal console output) and
  * `mapped_arguments` (only present when `-a` was used). Run `aivin plugin logs <id>` in another
  * terminal first to watch the plugin's own console.log/console.error output live while this runs.
+ *
+ * `--id <pluginId>` skips the local manifest.json lookup - required for plugins with no scaffolded
+ * project directory, e.g. proxy plugins built by `aivin mcp <url>`, which deploy straight from an
+ * in-memory scan and never write a manifest.json anywhere.
  */
 async function triggerPlugin(mission, inputJson, options) {
-  const currentDir = process.cwd();
-  const manifestPath = path.join(currentDir, 'manifest.json');
-  if (!fs.existsSync(manifestPath)) {
-    throw new Error('manifest.json not found. Run this from your plugin\'s directory.');
+  // `--id` bypasses the manifest.json lookup entirely - needed for plugins that were never
+  // scaffolded into a local directory (e.g. `aivin mcp <url>` deploys straight from a scan, no
+  // src/manifest.json on disk to resolve `entry` from). Without this, testing a freshly-converted
+  // MCP plugin from the Playground-equivalent flow was impossible outside the web app.
+  let entryId = options.id;
+  let entryLabel = options.id;
+  if (!entryId) {
+    const currentDir = process.cwd();
+    const manifestPath = path.join(currentDir, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+      throw new Error('manifest.json not found. Run this from your plugin\'s directory, or pass --id <pluginId>.');
+    }
+    const manifest = flattenManifestFile(JSON.parse(fs.readFileSync(manifestPath, 'utf8')));
+    const entry = resolveTriggerEntry(manifest, options.func);
+    entryId = entry.id;
+    entryLabel = `${entry.name}${entry.func ? ` [${entry.func}]` : ''}`;
   }
 
-  const manifest = flattenManifestFile(JSON.parse(fs.readFileSync(manifestPath, 'utf8')));
-  const entry = resolveTriggerEntry(manifest, options.func);
-
-  const body = { plugin_id: entry.id };
+  const body = { plugin_id: entryId };
   if (options.auto) {
     body.raw_text = options.auto;
     body.purpose = mission || options.auto;
@@ -2164,7 +2177,7 @@ async function triggerPlugin(mission, inputJson, options) {
   }
   body.workspace_id = workspaceId;
 
-  console.log(chalk.blue(`🚀 Triggering ${entry.name}${entry.func ? ` [${entry.func}]` : ''}...`));
+  console.log(chalk.blue(`🚀 Triggering ${entryLabel || entryId}...`));
 
   let response;
   try {
@@ -2489,7 +2502,8 @@ pluginCommand
   .command('trigger [mission] [input]')
   .description('Invoke this deployed plugin for real and print the result - like the platform\'s Playground')
   .option('-a, --auto <prompt>', 'Natural-language prompt - the platform auto-maps it onto the input schema for you')
-  .option('--func <name>', 'Which function to trigger, for a multi-function plugin (matches name/func/id)')
+  .option('--id <pluginId>', 'Plugin id to trigger directly - skips the local manifest.json lookup (e.g. for `aivin mcp` plugins, which have no local project directory)')
+  .option('--func <name>', 'Which function to trigger, for a multi-function plugin (matches name/func/id) - ignored when --id is given')
   .option('--workspace <id>', 'Workspace id to run against (default: auto-picks your first one)')
   .option('--agent <id>', 'Agent id to run as, if the plugin needs one for HIL/confirm behavior to be accurate')
   .action(async (mission, input, options) => {
@@ -2977,9 +2991,189 @@ async function createMcpProxyPlugin(name, options) {
   console.log('   aivin deploy  # ship it');
 }
 
+/**
+ * `aivin mcp <url>` - the one-shot path from "here's an MCP server" to deployed plugin(s):
+ * scan (GET the repo/README or handshake a live server) -> let the developer pick which
+ * tools/resources/prompts to bring in -> build manifest(s) -> optional interactive edit ->
+ * deploy to the caller's own org. Reuses the exact same backend endpoints the FE's MCP-import
+ * screen calls (POST /plugins/scan-mcp, /plugins/build-mcp-manifests, /plugins/deploy) - unlike
+ * `mcp create`, nothing here is typed by hand (transport/command/tool name all come from the
+ * scan), so this is the fast path for "wrap this whole MCP server", not "wrap 1 tool I already
+ * know the details of".
+ *
+ * --publish additionally calls POST /plugins/store/submit per deployed plugin, which re-verifies
+ * each one LIVE against the real MCP server (see PluginStoreService.submitPluginForReview on the
+ * backend) before it lands in the admin review queue - deploy always happens org-scoped first
+ * regardless of --publish, so a rejected/pending submission never blocks your own org from using
+ * the plugin.
+ */
+async function scanAndPublishMcp(url, options) {
+  console.log(chalk.blue('🔌 Converting MCP server into plugin(s)\n'));
+  console.log(chalk.gray(`   ${url}\n`));
+
+  let scanned;
+  try {
+    const res = await withSpinner('🔎 Scanning MCP server', () =>
+      axios.post(`${connectorBaseUrl()}/plugins/scan-mcp`, { url }, connectorAuthHeaders()),
+    );
+    scanned = res.data;
+  } catch (error) {
+    const message = error.response?.data?.message?.message || error.response?.data?.message || error.message;
+    throw new Error(`Scan failed: ${message}`, { cause: error });
+  }
+
+  const tools = scanned.tools || [];
+  const resources = scanned.resources || [];
+  const prompts = scanned.prompts || [];
+  if (tools.length + resources.length + prompts.length === 0) {
+    throw new Error('No tools/resources/prompts discovered at that URL - nothing to convert.');
+  }
+  console.log(chalk.green(`✅ Found ${tools.length} tool(s), ${resources.length} resource(s), ${prompts.length} prompt(s)`));
+
+  const choices = [
+    ...tools.map((t) => ({ name: `${t.name} ${chalk.gray('(tool)')} - ${t.description || 'no description'}`, value: { kind: 'tools', item: t }, checked: true })),
+    ...resources.map((r) => ({ name: `${r.name || r.uri} ${chalk.gray('(resource)')} - ${r.description || 'no description'}`, value: { kind: 'resources', item: r }, checked: true })),
+    ...prompts.map((p) => ({ name: `${p.name} ${chalk.gray('(prompt)')} - ${p.description || 'no description'}`, value: { kind: 'prompts', item: p }, checked: true })),
+  ];
+  const { selected } = await inquirer.prompt([
+    { type: 'checkbox', name: 'selected', message: 'Which ones become plugins? (space to toggle, enter to continue)', choices, pageSize: 15 },
+  ]);
+  if (selected.length === 0) {
+    console.log(chalk.yellow('Nothing selected - cancelled.'));
+    return;
+  }
+
+  const filteredScanned = {
+    ...scanned,
+    tools: selected.filter((s) => s.kind === 'tools').map((s) => s.item),
+    resources: selected.filter((s) => s.kind === 'resources').map((s) => s.item),
+    prompts: selected.filter((s) => s.kind === 'prompts').map((s) => s.item),
+  };
+
+  let manifests;
+  try {
+    const res = await withSpinner('🛠  Generating plugin manifest(s)', () =>
+      axios.post(`${connectorBaseUrl()}/plugins/build-mcp-manifests`, { scanned: filteredScanned }, connectorAuthHeaders()),
+    );
+    manifests = res.data;
+  } catch (error) {
+    const message = error.response?.data?.message?.message || error.response?.data?.message || error.message;
+    throw new Error(`Building manifest(s) failed: ${message}`, { cause: error });
+  }
+
+  console.log(chalk.cyan(`\n📦 ${manifests.length} plugin manifest(s) generated:`));
+  manifests.forEach((m, i) => console.log(`   ${i + 1}. ${chalk.bold(m.name)} ${chalk.gray(`(${m.id})`)} - ${m.description || 'no description'}`));
+
+  const { shouldEdit } = await inquirer.prompt([
+    { type: 'confirm', name: 'shouldEdit', message: '\nEdit any name/description before deploying?', default: false },
+  ]);
+  if (shouldEdit) {
+    for (const manifest of manifests) {
+      const { editThis } = await inquirer.prompt([
+        { type: 'confirm', name: 'editThis', message: `Edit "${manifest.name}"?`, default: false },
+      ]);
+      if (!editThis) continue;
+      const edited = await inquirer.prompt([
+        { type: 'input', name: 'name', message: 'Name:', default: manifest.name },
+        { type: 'input', name: 'description', message: 'Description:', default: manifest.description || '' },
+      ]);
+      manifest.name = edited.name;
+      manifest.description = edited.description;
+    }
+  }
+
+  // Always deploys org-scoped first, regardless of --publish/--private/--org - there is currently
+  // no backend concept of a workspace-level sub-scope narrower than "your org" (--org is an alias
+  // of --private, not a distinct tier - see PluginModel: plugins are scoped by `client`/org only).
+  console.log(chalk.blue(`\n🚀 Deploying ${manifests.length} plugin(s) to your org...`));
+  let deployResult;
+  try {
+    deployResult = await withSpinner('   Registering proxy manifest(s)', () =>
+      axios.post(`${connectorBaseUrl()}/plugins/deploy`, { manifest: manifests }, connectorAuthHeaders()),
+    );
+  } catch (error) {
+    const message = error.response?.data?.message?.message || error.response?.data?.message || error.message;
+    throw new Error(`Deploy failed: ${message}`, { cause: error });
+  }
+  console.log(chalk.green(`✅ Deployed: ${manifests.map((m) => m.name).join(', ')}`));
+  if (deployResult.data?.group_id) {
+    console.log(chalk.gray(`   group_id: ${deployResult.data.group_id}`));
+  }
+
+  if (options.publish) {
+    console.log(chalk.blue(`\n📮 Submitting ${manifests.length} plugin(s) for community review...`));
+    for (const manifest of manifests) {
+      try {
+        await withSpinner(`   Submitting "${manifest.name}"`, () =>
+          axios.post(`${connectorBaseUrl()}/plugins/store/submit`, { pluginId: manifest.id }, connectorAuthHeaders()),
+        );
+        console.log(chalk.green(`   ✅ "${manifest.name}" submitted - pending admin review.`));
+      } catch (error) {
+        const message = error.response?.data?.message?.message || error.response?.data?.message || error.message;
+        console.log(chalk.red(`   ❌ "${manifest.name}" submit failed: ${message}`));
+      }
+    }
+  } else {
+    console.log(chalk.gray('\n   Visibility: private (your org only). Re-run with --publish to also submit to the community store.'));
+  }
+
+  // `aivin plugin trigger`/`logs` normally read the project's own manifest.json - these plugins
+  // deploy straight from the scan, never scaffolded into a directory, so print the `--id` form
+  // (see triggerPlugin's --id option) instead of leaving the developer to dig the plugin id back
+  // out of the manifest(s) printed above.
+  console.log(chalk.cyan('\n🧪 Test it (Playground-equivalent):'));
+  for (const manifest of manifests) {
+    console.log(`   aivin plugin trigger --id ${manifest.id} -a "<try it in natural language>"`);
+  }
+  console.log(chalk.gray('   (or `aivin plugin logs <pluginId>` in another terminal to watch its live console output)'));
+
+  if (process.stdout.isTTY && process.stdin.isTTY) {
+    const { testNow } = await inquirer.prompt([
+      { type: 'confirm', name: 'testNow', message: '\nTest one of them right now?', default: manifests.length === 1 },
+    ]);
+    if (testNow) {
+      let target = manifests[0];
+      if (manifests.length > 1) {
+        const { picked } = await inquirer.prompt([
+          { type: 'select', name: 'picked', message: 'Which one?', choices: manifests.map((m) => ({ name: m.name, value: m })) },
+        ]);
+        target = picked;
+      }
+      const { prompt } = await inquirer.prompt([
+        { type: 'input', name: 'prompt', message: `Prompt to send to "${target.name}":` },
+      ]);
+      if (prompt) {
+        try {
+          await triggerPlugin(undefined, undefined, { id: target.id, auto: prompt });
+        } catch (error) {
+          console.error(chalk.red('❌'), error.message);
+        }
+      }
+    }
+  }
+}
+
 const mcpCommand = program
   .command('mcp')
   .description('MCP proxy plugins - wrap an external MCP server tool/resource/prompt, no code required');
+
+mcpCommand
+  .argument('[url]', 'GitHub/GitLab/npm/Smithery URL, or a live MCP server URL, to scan and convert')
+  .option('--publish', 'Deploy to your org, then submit for community store review (needs admin approval)')
+  .option('--private', 'Deploy to your org only - default')
+  .option('--org', 'Alias of --private - there is no narrower per-workspace scope today')
+  .action(async (url, options) => {
+    try {
+      url = await requireArg(url, {
+        prompt: 'GitHub/GitLab/npm/Smithery URL, or a live MCP server URL:',
+        usage: 'Usage: aivin mcp <url> [--publish|--private|--org]',
+      });
+      await scanAndPublishMcp(url, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
 
 mcpCommand
   .command('create [name]')

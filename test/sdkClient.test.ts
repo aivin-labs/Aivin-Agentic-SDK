@@ -356,29 +356,29 @@ test('store.aggregate() rejects an invalid metrics[].op value locally', async ()
   }, /store\.aggregate/);
 });
 
-test('datastore.addRow() forwards a valid call and rejects a missing table_id locally', async () => {
+test('table.addRow() forwards a valid call and rejects a missing table_id locally', async () => {
   const requests: InvokeRequest[] = [];
   const client = makeClient(async (req) => {
     requests.push(req);
     return { id: 'row1' };
   });
 
-  await client.datastore.addRow({
+  await client.table.addRow({
     workspace_id: 'w1',
     project_id: 'p1',
     table_id: 't1',
     data: { name: 'Ada' },
   });
-  assert.equal(requests[0].namespace, 'datastore.addRow');
+  assert.equal(requests[0].namespace, 'table.addRow');
 
   await assert.rejects(async () => {
-    await (client.datastore.addRow as any)({ workspace_id: 'w1', project_id: 'p1', data: { name: 'Ada' } });
-  }, /datastore\.addRow.*table_id/s);
+    await (client.table.addRow as any)({ workspace_id: 'w1', project_id: 'p1', data: { name: 'Ada' } });
+  }, /table\.addRow.*table_id/s);
 });
 
-test('datastore.getTables() rejects a missing project_id locally', async () => {
+test('table.getTables() rejects a missing project_id locally', async () => {
   const client = makeClient(async () => []);
   await assert.rejects(async () => {
-    await (client.datastore.getTables as any)({ workspace_id: 'w1' });
-  }, /datastore\.getTables.*project_id/s);
+    await (client.table.getTables as any)({ workspace_id: 'w1' });
+  }, /table\.getTables.*project_id/s);
 });

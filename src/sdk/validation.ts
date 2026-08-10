@@ -210,7 +210,7 @@ export const storeGetLinksParamsSchema = z.object({
 });
 
 /**
- * `datastore.*` schemas - verified field-by-field against the real backend `DatastoreSDK.ts`, same
+ * `table.*` schemas - verified field-by-field against the real backend `DatastoreSDK.ts`, same
  * "already correct, just adding the runtime guard" situation as `store.*` above.
  */
 export const ensureTableParamsSchema = z.object({

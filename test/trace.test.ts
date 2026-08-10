@@ -70,7 +70,7 @@ test('sdk.* calls made during the handler are recorded on the active trace via o
       // Simulates the same onCall() firing invokeHost() does internally on every real call, without
       // needing an actual gRPC round trip.
       emitTraceForTest({ namespace: 'ai.prompt', durationMs: 42, attempts: 1, success: true });
-      emitTraceForTest({ namespace: 'datastore.getRow', durationMs: 7, attempts: 2, success: false, error: 'boom' });
+      emitTraceForTest({ namespace: 'table.getRow', durationMs: 7, attempts: 2, success: false, error: 'boom' });
     },
     (trace) => (reported = trace),
   );
@@ -90,7 +90,7 @@ test('formatTraceForConsole renders a readable timeline with status icons and no
     success: true,
     events: [
       { namespace: 'ai.prompt', durationMs: 100, attempts: 1, success: true, seq: 1, ts: 1100 },
-      { namespace: 'datastore.getRow', durationMs: 20, attempts: 2, success: false, error: 'timeout', seq: 2, ts: 1120 },
+      { namespace: 'table.getRow', durationMs: 20, attempts: 2, success: false, error: 'timeout', seq: 2, ts: 1120 },
     ],
   });
 

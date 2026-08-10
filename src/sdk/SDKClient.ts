@@ -310,12 +310,14 @@ export class SDKClient {
   };
 
   /**
-   * `pluginStore.*` — catalog read/write for the plugin marketplace. Gated server-side to
-   * aivin-service's own caller identity (`MARKETPLACE_CALLER_ID`, see BE's
-   * `PluginStoreSDK.ts::assertMarketplaceCaller`) — a regular plugin calling this gets rejected by
-   * the server, so it has no business appearing in a plugin author's Monaco autocomplete. `@internal`
-   * (stripped from the published `.d.ts` via `stripInternal` — still callable at runtime by
-   * `AivinBackend.ts`, which compiles against this same source, just invisible to `.d.ts` consumers).
+   * `plugin.*` — catalog read/write for the plugin marketplace (named `plugin`, not
+   * `pluginStore`, purely for a shorter call site — this is NOT the same thing as a plugin's own
+   * runtime `ctx`/ordinary SDK calls, don't confuse the two). Gated server-side to aivin-service's
+   * own caller identity (`MARKETPLACE_CALLER_ID`, see BE's `PluginStoreSDK.ts::assertMarketplaceCaller`)
+   * — a regular plugin calling this gets rejected by the server, so it has no business appearing in
+   * a plugin author's Monaco autocomplete. `@internal` (stripped from the published `.d.ts` via
+   * `stripInternal` — still callable at runtime by `AivinBackend.ts`, which compiles against this
+   * same source, just invisible to `.d.ts` consumers).
    * Only `findDocsBySourceRepo`/`patchByIds` are given typed sugar here (the two actually consumed
    * in production, by aivin-service's `McpDiscoveryService.ts` via `AivinBackend.ts`) — the
    * namespace has ~14 more registrations (`getPlugin`, `searchPlugins`, `upsertPlugins`, ...) still
@@ -324,11 +326,11 @@ export class SDKClient {
    *
    * @internal
    */
-  readonly pluginStore = {
+  readonly plugin = {
     findDocsBySourceRepo: (repo: string): Promise<any[]> =>
-      this.call('pluginStore.findDocsBySourceRepo', { repo }),
+      this.call('plugin.findDocsBySourceRepo', { repo }),
     patchByIds: (ids: any[], fields: Record<string, any>): Promise<void> =>
-      this.call('pluginStore.patchByIds', { ids, fields }),
+      this.call('plugin.patchByIds', { ids, fields }),
   };
 
   readonly vector = {
@@ -546,7 +548,7 @@ export class SDKClient {
 
   /**
    * `updateRow`/`deleteRow`/`smartQuery`/`batchUpdateByAI` fixed to match the real, simpler
-   * signatures in `src/base/SDK.ts`'s `get datastore()` (no `workspace_id`/`project_id`/`ctx` -
+   * signatures in `src/base/SDK.ts`'s `get table()` (no `workspace_id`/`project_id`/`ctx` -
    * those are resolved server-side from the caller's identity, not passed by the client). Added
    * `ensureTable`/`getRow`, both confirmed there but missing here before.
    *
@@ -554,14 +556,14 @@ export class SDKClient {
    * out - verified field-by-field against the real `DatastoreSDK.ts` (all correct already; this
    * adds the runtime guard against future drift, not a shape fix).
    */
-  readonly datastore = {
+  readonly table = {
     ensureTable: (params: {
       purpose: string;
       workspace_id?: string;
       project_id?: string;
       target_columns?: string[];
     }): Promise<any> =>
-      this.call('datastore.ensureTable', validateParams(ensureTableParamsSchema, params, 'datastore.ensureTable')),
+      this.call('table.ensureTable', validateParams(ensureTableParamsSchema, params, 'table.ensureTable')),
     createTable: (params: {
       workspace_id: string;
       project_id: string;
@@ -571,11 +573,11 @@ export class SDKClient {
       primary_id?: string;
       primary_key_column?: string;
     }): Promise<any> =>
-      this.call('datastore.createTable', validateParams(createTableParamsSchema, params, 'datastore.createTable')),
+      this.call('table.createTable', validateParams(createTableParamsSchema, params, 'table.createTable')),
     getTables: (params: { workspace_id: string; project_id: string }): Promise<any[]> =>
-      this.call('datastore.getTables', validateParams(getTablesParamsSchema, params, 'datastore.getTables')),
+      this.call('table.getTables', validateParams(getTablesParamsSchema, params, 'table.getTables')),
     getTable: (params: { workspace_id: string; table_id: string }): Promise<any> =>
-      this.call('datastore.getTable', validateParams(getTableParamsSchema, params, 'datastore.getTable')),
+      this.call('table.getTable', validateParams(getTableParamsSchema, params, 'table.getTable')),
     updateTable: (params: {
       workspace_id: string;
       table_id: string;
@@ -585,25 +587,25 @@ export class SDKClient {
       primary_id?: string;
       primary_key_column?: string;
     }): Promise<any> =>
-      this.call('datastore.updateTable', validateParams(updateTableParamsSchema, params, 'datastore.updateTable')),
+      this.call('table.updateTable', validateParams(updateTableParamsSchema, params, 'table.updateTable')),
     deleteTable: (params: { workspace_id: string; table_id: string }): Promise<any> =>
-      this.call('datastore.deleteTable', validateParams(deleteTableParamsSchema, params, 'datastore.deleteTable')),
+      this.call('table.deleteTable', validateParams(deleteTableParamsSchema, params, 'table.deleteTable')),
     addRow: (params: {
       workspace_id: string;
       project_id: string;
       table_id: string;
       data: Record<string, any>;
     }): Promise<any> =>
-      this.call('datastore.addRow', validateParams(addRowParamsSchema, params, 'datastore.addRow')),
+      this.call('table.addRow', validateParams(addRowParamsSchema, params, 'table.addRow')),
     getRow: (rowId: string): Promise<any> =>
-      this.call('datastore.getRow', { id: validateParams(z.string().min(1, 'rowId is required'), rowId, 'datastore.getRow') }),
+      this.call('table.getRow', { id: validateParams(z.string().min(1, 'rowId is required'), rowId, 'table.getRow') }),
     updateRow: (rowId: string, data: Record<string, any>): Promise<any> =>
-      this.call('datastore.updateRow', {
-        row_id: validateParams(z.string().min(1, 'rowId is required'), rowId, 'datastore.updateRow'),
+      this.call('table.updateRow', {
+        row_id: validateParams(z.string().min(1, 'rowId is required'), rowId, 'table.updateRow'),
         ...data,
       }),
     deleteRow: (rowId: string): Promise<any> =>
-      this.call('datastore.deleteRow', { row_id: validateParams(z.string().min(1, 'rowId is required'), rowId, 'datastore.deleteRow') }),
+      this.call('table.deleteRow', { row_id: validateParams(z.string().min(1, 'rowId is required'), rowId, 'table.deleteRow') }),
     getRows: (params: {
       workspace_id: string;
       project_id: string;
@@ -613,7 +615,7 @@ export class SDKClient {
       page?: number;
       limit?: number;
     }): Promise<any[]> =>
-      this.call('datastore.getRows', validateParams(getRowsParamsSchema, params, 'datastore.getRows')),
+      this.call('table.getRows', validateParams(getRowsParamsSchema, params, 'table.getRows')),
     batchUpdateRows: (params: {
       workspace_id: string;
       project_id: string;
@@ -621,10 +623,10 @@ export class SDKClient {
       filter: Record<string, any>;
       update: Record<string, any>;
     }): Promise<any> =>
-      this.call('datastore.batchUpdateRows', validateParams(batchUpdateRowsParamsSchema, params, 'datastore.batchUpdateRows')),
+      this.call('table.batchUpdateRows', validateParams(batchUpdateRowsParamsSchema, params, 'table.batchUpdateRows')),
     batchDeleteRows: (ids: string[]): Promise<any> =>
-      this.call('datastore.batchDeleteRows', {
-        ids: validateParams(batchDeleteRowsParamsSchema, ids, 'datastore.batchDeleteRows'),
+      this.call('table.batchDeleteRows', {
+        ids: validateParams(batchDeleteRowsParamsSchema, ids, 'table.batchDeleteRows'),
       }),
     bulkAddRows: (params: {
       workspace_id: string;
@@ -632,39 +634,39 @@ export class SDKClient {
       table_id: string;
       rows: Record<string, any>[];
     }): Promise<any> =>
-      this.call('datastore.bulkAddRows', validateParams(bulkAddRowsParamsSchema, params, 'datastore.bulkAddRows')),
+      this.call('table.bulkAddRows', validateParams(bulkAddRowsParamsSchema, params, 'table.bulkAddRows')),
     smartQuery: (query: string): Promise<any> =>
-      this.call('datastore.smartQuery', { query: validateParams(smartQueryParamSchema, query, 'datastore.smartQuery') }),
+      this.call('table.smartQuery', { query: validateParams(smartQueryParamSchema, query, 'table.smartQuery') }),
     batchUpdateByAI: (instruction: string): Promise<any> =>
-      this.call('datastore.batchUpdateByAI', {
-        instruction: validateParams(batchUpdateByAIParamSchema, instruction, 'datastore.batchUpdateByAI'),
+      this.call('table.batchUpdateByAI', {
+        instruction: validateParams(batchUpdateByAIParamSchema, instruction, 'table.batchUpdateByAI'),
       }),
     searchSemantic: (params: {
       query: string;
       table_id?: string;
       limit?: number;
     }): Promise<any[]> =>
-      this.call('datastore.searchSemantic', validateParams(searchSemanticParamsSchema, params, 'datastore.searchSemantic')),
+      this.call('table.searchSemantic', validateParams(searchSemanticParamsSchema, params, 'table.searchSemantic')),
     /** Restore data from a `snapshot_id` returned by `deduplicateTable`/`batchDeleteRows`/`batchUpdateByAI`. */
     rollback: (snapshotId: string): Promise<any> =>
-      this.call('datastore.rollback', {
-        snapshot_id: validateParams(rollbackParamSchema, snapshotId, 'datastore.rollback'),
+      this.call('table.rollback', {
+        snapshot_id: validateParams(rollbackParamSchema, snapshotId, 'table.rollback'),
       }),
     getAllTables: (params?: { workspace_id?: string; project_id?: string }): Promise<any[]> =>
-      this.call('datastore.getAllTables', validateParams(getAllTablesParamsSchema, params ?? {}, 'datastore.getAllTables')),
+      this.call('table.getAllTables', validateParams(getAllTablesParamsSchema, params ?? {}, 'table.getAllTables')),
     getTableStats: (params: { table_id: string; workspace_id?: string; project_id?: string }): Promise<any> =>
-      this.call('datastore.getTableStats', validateParams(tableIdScopedParamsSchema, params, 'datastore.getTableStats')),
+      this.call('table.getTableStats', validateParams(tableIdScopedParamsSchema, params, 'table.getTableStats')),
     countRows: (params: { table_id: string; workspace_id?: string; project_id?: string }): Promise<number> =>
-      this.call('datastore.countRows', validateParams(tableIdScopedParamsSchema, params, 'datastore.countRows')),
+      this.call('table.countRows', validateParams(tableIdScopedParamsSchema, params, 'table.countRows')),
     exportTable: (params: { table_id: string; workspace_id?: string; project_id?: string }): Promise<any> =>
-      this.call('datastore.exportTable', validateParams(tableIdScopedParamsSchema, params, 'datastore.exportTable')),
+      this.call('table.exportTable', validateParams(tableIdScopedParamsSchema, params, 'table.exportTable')),
     deduplicateTable: (params: {
       table_id: string;
       workspace_id?: string;
       project_id?: string;
       strategy?: any;
     }): Promise<any> =>
-      this.call('datastore.deduplicateTable', validateParams(deduplicateTableParamsSchema, params, 'datastore.deduplicateTable')),
+      this.call('table.deduplicateTable', validateParams(deduplicateTableParamsSchema, params, 'table.deduplicateTable')),
     backfillColumn: (params: {
       table_id: string;
       workspace_id?: string;
@@ -672,7 +674,7 @@ export class SDKClient {
       column_key: string;
       default_value?: any;
     }): Promise<any> =>
-      this.call('datastore.backfillColumn', validateParams(backfillColumnParamsSchema, params, 'datastore.backfillColumn')),
+      this.call('table.backfillColumn', validateParams(backfillColumnParamsSchema, params, 'table.backfillColumn')),
     formatRowsForContext: (params: {
       table_id: string;
       workspace_id?: string;
@@ -680,7 +682,7 @@ export class SDKClient {
       query?: string;
       token_budget?: number;
     }): Promise<string> =>
-      this.call('datastore.formatRowsForContext', validateParams(formatRowsForContextParamsSchema, params, 'datastore.formatRowsForContext')),
+      this.call('table.formatRowsForContext', validateParams(formatRowsForContextParamsSchema, params, 'table.formatRowsForContext')),
   };
 
   /**
