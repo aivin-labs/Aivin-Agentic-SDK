@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## [1.0.2] - 2026-08-10
+
+> `package.json` had drifted out of sync with this file for a while (see the note above `[1.2.0]`
+> below) — everything documented under `[1.1.0]` and `[1.2.0]` was written and merged but never
+> `npm publish`'d under those version numbers. This release is the first real publish since
+> `1.0.1` and carries all of that plus the breaking change below.
+
+### ⚠️ Breaking — renamed `SDK_GRPC_ENDPOINT`/`SDK_GRPC_SECRET` to `SDK_ENDPOINT`/`SDK_SECRET`
+
+Transport (gRPC) is an implementation detail, not something plugin authors should need to know to
+set the right env var. Old names no longer read — update your `.env`/deployment config.
+
 ### 🆕 Added — typed sugar for the last 3 backend routes only reachable via `call()`
 
 `check-contract.mjs` flagged 3 real backend registrations with no `SDKClient.ts` wrapper. Added
@@ -10,6 +22,11 @@
 "no confirmed real implementation", which was stale) and `redis.decr`/`redis.decrby` (mirrors
 `incr`/`incrby`, confirmed against `PluginStorageService.redisDecr`). `check-contract.mjs` now
 reports 0 dead calls and 0 missing-sugar entries against the real backend.
+
+> ⚠️ **Note added retroactively**: the `[1.1.0]` and `[1.2.0]` sections below were written when
+> `package.json`'s version field still matched, but a later commit reverted the version field back
+> to `1.0.1` without reverting the changelog — so neither `1.1.0` nor `1.2.0` was ever actually
+> published to npm. Everything below is real and shipped, just under the `1.0.2` tag above instead.
 
 ## [1.2.0] - 2026-07-29
 

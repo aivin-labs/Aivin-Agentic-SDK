@@ -13,7 +13,7 @@ export interface LocalTestServerConfig {
  * A tiny dependency-free HTTP shim (no Express) around `PluginServer.testInvoke()`, so a plugin's
  * `main()` can be exercised with plain `curl` during development without needing a gRPC client
  * (e.g. grpcurl) or a running Aivin backend. `ctx.sdk.*` calls still work for real if
- * SDK_GRPC_ENDPOINT/SDK_GRPC_SECRET are pointed at an actual (e.g. local dev) backend.
+ * SDK_ENDPOINT/SDK_SECRET are pointed at an actual (e.g. local dev) backend.
  */
 export class LocalTestServer {
   private readonly port: number;

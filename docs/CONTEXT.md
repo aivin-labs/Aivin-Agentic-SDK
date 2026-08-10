@@ -93,7 +93,7 @@ export async function main(
 
 Locally there is no host to mint a real identity, so `ctx.user`/`ctx.workspace`/`ctx.session` are
 whatever your test request supplies (usually absent) — write your handler to tolerate that.
-SDK calls still work if `SDK_GRPC_ENDPOINT`/`SDK_GRPC_SECRET` point at a real backend (they
+SDK calls still work if `SDK_ENDPOINT`/`SDK_SECRET` point at a real backend (they
 default to production `api.aivin.cloud` — see
 [PLUGIN_DEVELOPMENT_GUIDE.md](./PLUGIN_DEVELOPMENT_GUIDE.md#4-test-locally)); otherwise any
 SDK call throws a clear "not set" error.

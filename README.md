@@ -432,7 +432,7 @@ machine — there's no per-project credential to manage.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `SDK_GRPC_ENDPOINT` | Backend gRPC endpoint for the SDK's outbound calls | `api.aivin.cloud:50051` |
+| `SDK_ENDPOINT` | Backend gRPC endpoint for the SDK's outbound calls | `api.aivin.cloud:50051` |
 | `AIVIN_BASE_URL` | Aivin API base URL (only for a self-hosted/staging instance) | `https://api.aivin.cloud` |
 | `AIVIN_WEB_URL` | Platform web app URL, used by `aivin login`'s browser flow | `https://brain.aivin.cloud` |
 | `LOCAL_TEST_PORT` | Port for the local HTTP test shim (`POST /invoke`) | `4001` |

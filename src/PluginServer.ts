@@ -126,7 +126,7 @@ export class PluginServer extends EventEmitter {
   /**
    * Load the plugin without starting the gRPC server, and invoke its entry point directly
    * in-process. Used by LocalTestServer for fast local iteration - no real gRPC round trip, no
-   * host required. `ctx.sdk` still works normally if SDK_GRPC_ENDPOINT/SDK_GRPC_SECRET point at
+   * host required. `ctx.sdk` still works normally if SDK_ENDPOINT/SDK_SECRET point at
    * a real (e.g. local dev) backend; otherwise any `ctx.sdk.*` call throws a clear "not set" error.
    */
   async testInvoke(
@@ -202,7 +202,7 @@ export class PluginServer extends EventEmitter {
     callback: (err: any, res: any) => void,
   ): Promise<void> => {
     try {
-      const secret = process.env.SDK_GRPC_SECRET;
+      const secret = process.env.SDK_SECRET;
       if (secret) {
         const meta = call?.metadata?.get('authorization');
         const token = Array.isArray(meta) ? meta[0] : meta;
@@ -212,7 +212,7 @@ export class PluginServer extends EventEmitter {
         }
       } else {
         console.warn(
-          '[PluginServer] SDK_GRPC_SECRET not set - accepting unauthenticated Invoke calls.',
+          '[PluginServer] SDK_SECRET not set - accepting unauthenticated Invoke calls.',
         );
       }
 

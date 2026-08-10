@@ -137,7 +137,7 @@ message SdkInvokeResponse { bool success = 1; string data_json = 2; string error
 The _same_ `Invoke` RPC is used both ways:
 
 - **Plugin → host** (outbound SDK calls): `GrpcInvoker.invokeHost()` connects to
-  `SDK_GRPC_ENDPOINT` (injected by the host container runtime, typically
+  `SDK_ENDPOINT` (injected by the host container runtime, typically
   `host.docker.internal:50051`; falls back to the production endpoint `api.aivin.cloud:50051` with
   TLS when unset, so local `aivin start` testing works without any config) and sends
   `namespace = "ai.prompt"` etc. Connections to anything other than a local/loopback/
@@ -152,7 +152,7 @@ This symmetry means adding a new backend capability never requires a proto chang
 
 ## Auth: shared secret + per-invocation capability
 
-Every `Invoke` call carries `Authorization: Bearer <SDK_GRPC_SECRET>` in gRPC metadata (both
+Every `Invoke` call carries `Authorization: Bearer <SDK_SECRET>` in gRPC metadata (both
 directions) — a shared secret injected into your container's environment at deploy time.
 
 That alone isn't enough to establish _which tenant/workspace_ an outbound SDK call belongs
@@ -179,4 +179,4 @@ native ESM/TS file — doesn't kick in). This relies on Node's native TypeScript
 starts `LocalTestServer` — a plain `http` server (no framework) exposing `POST /invoke`, which
 calls `PluginServer.testInvoke()` directly (in-process, no gRPC round trip). SDK calls
 still work for real either way - against production by default, or against a local/dev backend if
-you set `SDK_GRPC_ENDPOINT`/`SDK_GRPC_SECRET` yourself.
+you set `SDK_ENDPOINT`/`SDK_SECRET` yourself.

@@ -157,13 +157,13 @@ aivin start --debug-json    # same, one JSON object per line - easier for a scri
 ```
 
 SDK calls made during local testing default to the **production** backend
-(`api.aivin.cloud`) if `SDK_GRPC_ENDPOINT` isn't set — so `ai.prompt(...)` etc. work out of the box,
+(`api.aivin.cloud`) if `SDK_ENDPOINT` isn't set — so `ai.prompt(...)` etc. work out of the box,
 against real production data. Point `.env` at a local/dev backend instead if you don't want that:
 
 ```bash
 # .env
-SDK_GRPC_ENDPOINT=localhost:50051   # a local/dev Aivin backend
-SDK_GRPC_SECRET=
+SDK_ENDPOINT=localhost:50051   # a local/dev Aivin backend
+SDK_SECRET=
 ```
 
 A one-time warning is logged whenever the production default is used, so it's never silent.
@@ -240,7 +240,7 @@ by the host; paginate large result sets rather than returning everything at once
 
 | Symptom                                                             | Likely cause                                                                                                                                                    |
 | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SDK calls seem to hit production unexpectedly               | Expected if `SDK_GRPC_ENDPOINT` isn't set in `.env` — it defaults to `api.aivin.cloud`. Set it to a local/dev backend if that's not what you want — see step 4. |
+| SDK calls seem to hit production unexpectedly               | Expected if `SDK_ENDPOINT` isn't set in `.env` — it defaults to `api.aivin.cloud`. Set it to a local/dev backend if that's not what you want — see step 4. |
 | `aivin start` fails with `EADDRINUSE` on the gRPC port              | Something else (possibly another plugin instance) already owns `:50051`. Set `SDK_GRPC_SERVER_BIND=127.0.0.1:<other-port>`.                                     |
 | Local HTTP test shim didn't start, but the gRPC server did          | The shim failing to bind (e.g. port `:4001` taken) never takes down the real server — check the log line, set `LOCAL_TEST_PORT` to something free.              |
 | `aivin deploy`/`aivin test` fails with 401/403                      | Run `aivin login` again - it saves a fresh key to `~/.aivin/credentials`, shared by every project.                                                              |

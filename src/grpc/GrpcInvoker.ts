@@ -69,9 +69,9 @@ export async function withRetry<T>(
 }
 
 /**
- * Falls back to the production endpoint when SDK_GRPC_ENDPOINT isn't set, so `ctx.sdk.*` still
+ * Falls back to the production endpoint when SDK_ENDPOINT isn't set, so `ctx.sdk.*` still
  * works out of the box during local `aivin start` testing (against real production data - set
- * SDK_GRPC_ENDPOINT yourself to point at a local/dev/staging backend instead). Inside a deployed
+ * SDK_ENDPOINT yourself to point at a local/dev/staging backend instead). Inside a deployed
  * container this env var is always injected by the host (DockerHelper), so this fallback never
  * applies there.
  */
@@ -175,13 +175,13 @@ function getClient(endpoint: string): GrpcInvokeClient {
 }
 
 function resolveEndpoint(): string {
-  const endpoint = process.env.SDK_GRPC_ENDPOINT;
+  const endpoint = process.env.SDK_ENDPOINT;
   if (endpoint) return endpoint;
   if (!warnedDefaultEndpoint) {
     warnedDefaultEndpoint = true;
     console.warn(
-      `[@aivin-labs/sdk] SDK_GRPC_ENDPOINT not set - defaulting to production (${DEFAULT_ENDPOINT}). ` +
-        'Set SDK_GRPC_ENDPOINT to point at a local/dev backend instead.',
+      `[@aivin-labs/sdk] SDK_ENDPOINT not set - defaulting to production (${DEFAULT_ENDPOINT}). ` +
+        'Set SDK_ENDPOINT to point at a local/dev backend instead.',
     );
   }
   return DEFAULT_ENDPOINT;
@@ -194,7 +194,7 @@ function resolveEndpoint(): string {
 export async function invokeHost<T = any>(request: InvokeRequest): Promise<T> {
   const endpoint = resolveEndpoint();
   const client = getClient(endpoint);
-  const secret = process.env.SDK_GRPC_SECRET;
+  const secret = process.env.SDK_SECRET;
   const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxRetries = request.maxRetries ?? DEFAULT_MAX_RETRIES;
 
@@ -299,7 +299,7 @@ export interface StreamHandle<T = any> {
 export function invokeHostStream<T = any>(request: InvokeRequest): StreamHandle<T> {
   const endpoint = resolveEndpoint();
   const client = getClient(endpoint);
-  const secret = process.env.SDK_GRPC_SECRET;
+  const secret = process.env.SDK_SECRET;
   const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
 

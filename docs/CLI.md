@@ -177,7 +177,7 @@ curl -X POST http://localhost:4001/invoke -H 'content-type: application/json' \
 ```
 
 SDK calls made while running default to the **production** backend (`api.aivin.cloud`) if
-`SDK_GRPC_ENDPOINT` isn't set in `.env` - point it at a local/dev backend instead if you don't want
+`SDK_ENDPOINT` isn't set in `.env` - point it at a local/dev backend instead if you don't want
 that (see [Environment variables](#environment-variables) below).
 
 ### Live per-call debugging: `--debug` / `--debug-json`
@@ -779,12 +779,12 @@ machine picks it up automatically - there's no per-project credential to manage.
 
 | Variable            | Used by                                          | Default                     | When you'd touch it                                          |
 | -------------------- | -------------------------------------------------- | ----------------------------- | ---------------------------------------------------------------- |
-| `SDK_GRPC_ENDPOINT`  | SDK calls, `aivin start`                   | `api.aivin.cloud:50051`      | Point `main()`'s SDK calls at a local/dev backend instead of production. |
+| `SDK_ENDPOINT`  | SDK calls, `aivin start`                   | `api.aivin.cloud:50051`      | Point `main()`'s SDK calls at a local/dev backend instead of production. |
 | `AIVIN_BASE_URL`     | `deploy`, `test`, `plugin make/convert/trigger`, `login --basic` | `https://api.aivin.cloud`    | Only for a self-hosted or staging instance.                   |
 | `AIVIN_WEB_URL`      | `login` (browser flow)                             | `https://brain.aivin.cloud`  | Only for a self-hosted or staging instance.                   |
 | `LOCAL_TEST_PORT`    | `aivin start`                                       | `4001`                       | Only if `4001` is already taken on your machine.              |
 
-Everything else (`SDK_GRPC_SECRET`, `SDK_GRPC_SERVER_BIND`, `SDK_GRPC_TLS`, `NODE_ENV`, ...) is
+Everything else (`SDK_SECRET`, `SDK_GRPC_SERVER_BIND`, `SDK_GRPC_TLS`, `NODE_ENV`, ...) is
 either injected automatically inside a deployed container or has a working zero-config default -
 not something you're expected to set by hand.
 
