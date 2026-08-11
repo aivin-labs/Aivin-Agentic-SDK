@@ -236,6 +236,27 @@ re-invokes your own `main()` later — you never manage BullMQ/Redis directly.
 **Respect the response size limit.** Whatever `main()` returns is capped at 1MB (JSON-serialized)
 by the host; paginate large result sets rather than returning everything at once.
 
+**Don't cache per-invocation state at module scope.** Your container isn't restarted between calls -
+it stays warm and serves many invocations in a row, possibly from different workspaces/tenants, over
+the *same* running process (`PluginServer` only re-imports your code on a fresh deploy, never
+per-call). Anything you assign to a module-level variable (outside `main()`) persists across those
+calls. `ctx.sdk`/the capability token are already scoped correctly per-invocation by the host - the
+risk is code you write yourself, e.g. caching `ctx.sdk` or a request's data in a top-level `let` "to
+save a lookup next time." Keep anything invocation-specific inside `main()`'s own scope; module-level
+state is fine only for things that are genuinely safe to share across every caller (e.g. a
+compiled regex, a pure lookup table).
+
+**Design side effects to be safely repeatable.** A Docker-runtime invocation can be retried on a
+*different* node if the one running it dies mid-call (BullMQ `attempts: 3` with exponential backoff,
+plus a stalled-job reroute that can fire before all 3 attempts are even used - see
+`WorkerPluginJobConsumer`/`BullIO` on the backend) - and each plugin container is capped at
+128MB/0.25 CPU, tight enough that a memory-heavy call can genuinely get OOM-killed mid-invocation in
+practice, not just in theory. There's currently no invocation-level idempotency key threaded through
+to your code to detect "this is a retry of a call I already made." If `main()` calls something
+non-idempotent (sends an email, charges a payment, posts to an external webhook), design that call to
+tolerate running twice - e.g. have the *downstream* system dedupe on a key you derive deterministically
+from the input, since you can't rely on this invocation only ever happening once.
+
 ## 7. Troubleshooting
 
 | Symptom                                                             | Likely cause                                                                                                                                                    |

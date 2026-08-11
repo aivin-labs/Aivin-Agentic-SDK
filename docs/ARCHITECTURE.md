@@ -150,10 +150,11 @@ The _same_ `Invoke` RPC is used both ways:
 This symmetry means adding a new backend capability never requires a proto change — just a new
 `namespace` string registered on the host side.
 
-## Auth: shared secret + per-invocation capability
+## Auth: per-container secret + per-invocation capability
 
-Every `Invoke` call carries `Authorization: Bearer <SDK_SECRET>` in gRPC metadata (both
-directions) — a shared secret injected into your container's environment at deploy time.
+Every `Invoke` call carries `Authorization: Bearer <secret>` in gRPC metadata (both directions) —
+a random value minted per *container* (not one static value shared platform-wide) and injected into
+your container's environment/mounted secrets file at deploy time.
 
 That alone isn't enough to establish _which tenant/workspace_ an outbound SDK call belongs
 to: your plugin's own code runs in the same OS process as the SDK client, so it could otherwise claim to
@@ -162,6 +163,10 @@ inbound trigger, threads it through `context.metadata._cap` on the way in, and `
 that same token on every outbound SDK call your handler makes during that invocation. The
 host resolves your real identity from that token server-side — never from anything your process
 claims about itself.
+
+See [SECURITY.md](./SECURITY.md) for the full picture (why there are two separate credentials, what
+each does and doesn't protect against, and `configureTransport()`/`configureMtls()` for callers
+outside a real container).
 
 ## Why erasable-only TypeScript in `src/main.ts`
 

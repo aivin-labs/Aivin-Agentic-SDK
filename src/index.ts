@@ -18,10 +18,10 @@ export { PluginServer } from './PluginServer';
 export { LocalTestServer } from './LocalTestServer';
 export { createMockSDK, withMockSDK, createMockContext } from './sdk/testUtils';
 export type { MockSDK, MockSDKHandlers, CreateMockSDKOptions } from './sdk/testUtils';
-export { invokeHost, invokeHostStream, onCall } from './grpc/GrpcInvoker';
+export { invokeHost, invokeHostStream, onCall, configureTransport, configureMtls } from './grpc/GrpcInvoker';
 export type { CallTrace, StreamHandle } from './grpc/GrpcInvoker';
 export { withTrace, getCurrentTrace, formatTraceForConsole } from './sdk/trace';
-export type { InvocationTrace, TraceEvent } from './sdk/trace';
+export type { InvocationTrace, TraceEvent, CapturedLog, CapturedLogLevel } from './sdk/trace';
 
 export * from './types/PluginTypes';
 export * from './types/SDKTypes';

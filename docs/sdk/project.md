@@ -60,9 +60,9 @@ list (subject to whatever default limit the backend applies).
   dedicated `Project` interface in `SDKTypes.ts` to reference for exact field names. Treat the
   shape as whatever the backend's `project.getProject`/`project.searchProject` handlers return and
   inspect at runtime if you need specific fields.
-- The two datastore-related namespaces (`datastore`, project-scoped tables/rows) are a
-  separate, much larger surface — don't confuse `project.search` (finds project records) with
-  `datastore.getRows`/`getTables` (queries data *within* a project's tables).
+- The `table` namespace (project-scoped tables/rows) is a separate, much larger surface — don't
+  confuse `project.search` (finds project records) with `table.getRows`/`getTables` (queries data
+  *within* a project's tables).
 
 ## See also
 

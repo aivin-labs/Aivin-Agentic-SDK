@@ -1,6 +1,6 @@
-# 📊 `datastore` — project-scoped tabular database
+# 📊 `table` — project-scoped tabular database
 
-`datastore` is a project-scoped tabular database (tables/rows with typed columns), separate from
+`table` is a project-scoped tabular database (tables/rows with typed columns), separate from
 `store`. Use it when you need user-facing, schema-defined tables that belong to a specific
 `workspace_id`/`project_id` — e.g. a table a human can browse in the platform's UI — rather than
 `store`'s plugin-private relational key-value rows.
@@ -8,15 +8,15 @@
 ## Import
 
 ```typescript
-import { datastore } from '@aivin-labs/sdk';
-// legacy (works, not recommended): ctx.sdk.datastore
+import { table } from '@aivin-labs/sdk';
+// legacy (works, not recommended): ctx.sdk.table
 ```
 
 Every method validates its params locally (zod) before the call goes out — a missing `table_id`/
-`workspace_id`/`project_id`, etc. throws immediately with a clear `[datastore.X] invalid params -
+`workspace_id`/`project_id`, etc. throws immediately with a clear `[table.X] invalid params -
 ...` message instead of failing obscurely on the host. Note this validation is looser than
 `store`'s in a few spots (`columns`, `strategy` are `any` rather than a fixed shape) — this
-reflects `datastore` tables having user-defined column structures, not a gap; a fixed union type
+reflects `table`'s tables having user-defined column structures, not a gap; a fixed union type
 doesn't fit a "the user decides the columns" table the way it does `store`'s fixed operation
 vocabulary (`op: count|sum|avg|min|max`, etc.).
 
@@ -38,7 +38,7 @@ vocabulary (`op: count|sum|avg|min|max`, etc.).
 | `batchUpdateRows` | `params: { workspace_id: string; project_id: string; table_id: string; filter: Record<string, any>; update: Record<string, any> }` | `Promise<any>` | Update every row matching `filter`. |
 | `batchDeleteRows` | `ids: string[]` | `Promise<any>` | Delete multiple rows by ID. |
 | `bulkAddRows` | `params: { workspace_id: string; project_id: string; table_id: string; rows: Record<string, any>[] }` | `Promise<any>` | Insert multiple rows in one call. |
-| `smartQuery` | `query: string` | `Promise<any>` | Natural-language query over datastore tables (AI-resolved). |
+| `smartQuery` | `query: string` | `Promise<any>` | Natural-language query over the project's tables (AI-resolved). |
 | `batchUpdateByAI` | `instruction: string` | `Promise<any>` | Natural-language batch update instruction (AI-resolved). |
 | `searchSemantic` | `params: { query: string; table_id?: string; limit?: number }` | `Promise<any[]>` | Semantic search over row content. |
 | `rollback` | `snapshotId: string` | `Promise<any>` | Restores data from a `snapshot_id` returned by `deduplicateTable`/`batchDeleteRows`/`batchUpdateByAI`. |
@@ -53,11 +53,11 @@ vocabulary (`op: count|sum|avg|min|max`, etc.).
 ## `ensureTable` / `createTable` example
 
 ```typescript
-import { datastore } from '@aivin-labs/sdk';
+import { table as tableSdk } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
   // Get-or-create a table by purpose - lets the platform pick/reuse an existing table.
-  const table = await datastore.ensureTable({
+  const table = await tableSdk.ensureTable({
     purpose: 'Track customer support tickets',
     workspace_id: ctx.workspace?.id,
     project_id: input.projectId,
@@ -65,7 +65,7 @@ export async function main(mission, input, ctx) {
   });
 
   // ...or create one explicitly with a fixed schema.
-  const explicitTable = await datastore.createTable({
+  const explicitTable = await tableSdk.createTable({
     workspace_id: ctx.workspace!.id,
     project_id: input.projectId,
     name: 'Support Tickets',
@@ -85,49 +85,49 @@ export async function main(mission, input, ctx) {
 ## `getTables` / `getTable` / `updateTable` / `deleteTable` example
 
 ```typescript
-import { datastore } from '@aivin-labs/sdk';
+import { table } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
-  const tables = await datastore.getTables({
+  const tables = await table.getTables({
     workspace_id: ctx.workspace!.id,
     project_id: input.projectId,
   });
 
-  const table = await datastore.getTable({
+  const oneTable = await table.getTable({
     workspace_id: ctx.workspace!.id,
     table_id: input.tableId,
   });
 
-  await datastore.updateTable({
+  await table.updateTable({
     workspace_id: ctx.workspace!.id,
     table_id: input.tableId,
     description: 'Updated description',
   });
 
-  await datastore.deleteTable({ workspace_id: ctx.workspace!.id, table_id: input.oldTableId });
+  await table.deleteTable({ workspace_id: ctx.workspace!.id, table_id: input.oldTableId });
 
-  return { status: 'success', data: { tables, table } };
+  return { status: 'success', data: { tables, oneTable } };
 }
 ```
 
 ## `addRow` / `getRow` / `updateRow` / `deleteRow` example
 
 ```typescript
-import { datastore } from '@aivin-labs/sdk';
+import { table } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
-  const row = await datastore.addRow({
+  const row = await table.addRow({
     workspace_id: ctx.workspace!.id,
     project_id: input.projectId,
     table_id: input.tableId,
     data: { subject: input.subject, status: 'open', priority: 'medium' },
   });
 
-  const fetched = await datastore.getRow(row.id);
+  const fetched = await table.getRow(row.id);
 
-  const updated = await datastore.updateRow(row.id, { status: 'in_progress' });
+  const updated = await table.updateRow(row.id, { status: 'in_progress' });
 
-  await datastore.deleteRow(row.id);
+  await table.deleteRow(row.id);
 
   return { status: 'success', data: { fetched, updated } };
 }
@@ -136,10 +136,10 @@ export async function main(mission, input, ctx) {
 ## `getRows` example
 
 ```typescript
-import { datastore } from '@aivin-labs/sdk';
+import { table } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
-  const openTickets = await datastore.getRows({
+  const openTickets = await table.getRows({
     workspace_id: ctx.workspace!.id,
     project_id: input.projectId,
     table_id: input.tableId,
@@ -156,10 +156,10 @@ export async function main(mission, input, ctx) {
 ## `batchUpdateRows` / `batchDeleteRows` / `bulkAddRows` example
 
 ```typescript
-import { datastore } from '@aivin-labs/sdk';
+import { table } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
-  await datastore.batchUpdateRows({
+  await table.batchUpdateRows({
     workspace_id: ctx.workspace!.id,
     project_id: input.projectId,
     table_id: input.tableId,
@@ -167,9 +167,9 @@ export async function main(mission, input, ctx) {
     update: { status: 'archived' },
   });
 
-  await datastore.batchDeleteRows(input.rowIdsToRemove);
+  await table.batchDeleteRows(input.rowIdsToRemove);
 
-  const added = await datastore.bulkAddRows({
+  const added = await table.bulkAddRows({
     workspace_id: ctx.workspace!.id,
     project_id: input.projectId,
     table_id: input.tableId,
@@ -186,14 +186,14 @@ export async function main(mission, input, ctx) {
 ## `smartQuery` / `batchUpdateByAI` / `searchSemantic` example
 
 ```typescript
-import { datastore } from '@aivin-labs/sdk';
+import { table } from '@aivin-labs/sdk';
 
 export async function main(mission, input, ctx) {
-  const answer = await datastore.smartQuery('How many open tickets does each customer have?');
+  const answer = await table.smartQuery('How many open tickets does each customer have?');
 
-  await datastore.batchUpdateByAI('Mark all tickets older than 30 days with no activity as archived.');
+  await table.batchUpdateByAI('Mark all tickets older than 30 days with no activity as archived.');
 
-  const matches = await datastore.searchSemantic({
+  const matches = await table.searchSemantic({
     query: 'billing complaints',
     table_id: input.tableId,
     limit: 10,
@@ -206,9 +206,9 @@ export async function main(mission, input, ctx) {
 ## Notes & caveats
 
 - `updateRow`/`deleteRow`/`smartQuery`/`batchUpdateByAI` signatures are fixed to match the real,
-  simpler backend signatures in `src/base/SDK.ts`'s `get datastore()` — they do **not** take
+  simpler backend signatures in `src/base/SDK.ts`'s `get table()` — they do **not** take
   `workspace_id`/`project_id`/`ctx`; those are resolved server-side from the caller's identity, not
-  passed by the client. Do not add them even if other `datastore` methods require them.
+  passed by the client. Do not add them even if other `table` methods require them.
 - `ensureTable` and `getRow` are confirmed in the real backend but were previously missing from this
   client — they've been added here.
 - `updateRow(rowId, data)` sends `{ row_id: rowId, ...data }` on the wire; `deleteRow(rowId)` sends
@@ -221,6 +221,9 @@ export async function main(mission, input, ctx) {
   `backfillColumn`, `formatRowsForContext` were previously only reachable via the HTTP/UI route, not
   through the SDK — `deduplicateTable`/`batchDeleteRows`/`batchUpdateByAI` return a `snapshot_id` you
   can now pass to `rollback` to undo them.
+- Named `table`, not `datastore` — the export was renamed to match the real wire namespace
+  (`table.*`, see `DatastoreSDK.ts` on the backend) in SDK `1.0.4`. `import { datastore } from
+  '@aivin-labs/sdk'` no longer resolves to anything; use `table`.
 
 ## See also
 

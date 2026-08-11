@@ -128,9 +128,9 @@ Full reference: [sdk/task.md](./sdk/task.md), [sdk/project.md](./sdk/project.md)
 | `task.requestSupport({ task_id, assist_user_id, message })`     | Request help from another user on a task.                          |
 | `project.get({ id })` / `.search({ workspace_id?, keyword? })` | Read-only project lookup.                                          |
 
-## Persistent storage — `store`, `datastore`, `mongo`, `redis`
+## Persistent storage — `store`, `table`, `mongo`, `redis`
 
-Full reference: [sdk/store.md](./sdk/store.md), [sdk/datastore.md](./sdk/datastore.md),
+Full reference: [sdk/store.md](./sdk/store.md), [sdk/table.md](./sdk/table.md),
 [sdk/mongo.md](./sdk/mongo.md), [sdk/redis.md](./sdk/redis.md).
 
 Four options, not four ways to do the same thing — each answers a different question. All are
@@ -139,13 +139,13 @@ there's nothing to leak even if the container is compromised.
 
 **Start here: does a human need to see or edit this data as a table in the platform's UI?**
 
-- **Yes → `datastore`.** Project-scoped tabular data (named columns, rows) that shows up as a real
+- **Yes → `table`.** Project-scoped tabular data (named columns, rows) that shows up as a real
   table a user can browse/edit in the platform, not just something your plugin reads back. Reach
   for this for anything that's conceptually "a spreadsheet the user owns" — e.g. a CRM contact
   list your plugin populates that the user then edits by hand.
   ```typescript
-  const table = await datastore.ensureTable({ purpose: 'support tickets', workspace_id });
-  await datastore.addRow({ workspace_id, project_id, table_id: table.id, data: { subject, status: 'open' } });
+  const t = await table.ensureTable({ purpose: 'support tickets', workspace_id });
+  await table.addRow({ workspace_id, project_id, table_id: t.id, data: { subject, status: 'open' } });
   ```
 - **No, this is private state only your plugin's own logic ever reads → pick among `store`/`mongo`/`redis`:**
   - **`store` — the default choice.** Relational key-value with schema, graph edges

@@ -247,7 +247,7 @@ Every namespace below is importable on its own — `import { ai, store } from '@
 | `store` | Plugin-private persistent storage, default choice — relational key-value with schema, graph edges, hybrid search, aggregation, atomic transactions | [docs/sdk/store.md](docs/sdk/store.md) |
 | `redis` | Plugin-private ephemeral cache (counters, dedup locks, short-lived state) | [docs/sdk/redis.md](docs/sdk/redis.md) |
 | `mongo` | Plugin-private document collections, for teams porting existing Mongo-shaped logic | [docs/sdk/mongo.md](docs/sdk/mongo.md) |
-| `datastore` | User-facing tabular data (tables/rows a human browses/edits in the platform's UI) — a different job from `store`/`mongo`/`redis`, not a variant of them. See [Persistent storage](docs/SDK.md#persistent-storage--store-datastore-mongo-redis) for the full decision guide. | [docs/sdk/datastore.md](docs/sdk/datastore.md) |
+| `table` | User-facing tabular data (tables/rows a human browses/edits in the platform's UI) — a different job from `store`/`mongo`/`redis`, not a variant of them. See [Persistent storage](docs/SDK.md#persistent-storage--store-table-mongo-redis) for the full decision guide. | [docs/sdk/table.md](docs/sdk/table.md) |
 | `datasource` | Manage training data sources feeding the workspace's knowledge | [docs/sdk/datasource.md](docs/sdk/datasource.md) |
 | `task` | Create, update, list, and delete tasks | [docs/sdk/task.md](docs/sdk/task.md) |
 | `project` | Read-only project lookup | [docs/sdk/project.md](docs/sdk/project.md) |
@@ -514,6 +514,7 @@ Full reference, including the `sse` transport for remote MCP servers:
 - 🖥️ **[CLI Reference](docs/CLI.md)** — every command, flag, and environment variable
 - 📖 **[Plugin Development Guide](docs/PLUGIN_DEVELOPMENT_GUIDE.md)** — end-to-end walkthrough
 - 🏗️ **[Architecture](docs/ARCHITECTURE.md)** — how the gRPC transport and container model work
+- 🔒 **[Security](docs/SECURITY.md)** — auth model (`cap`/`secret`), threat boundaries, `configureTransport`/`configureMtls`
 - 📚 **[Examples](docs/EXAMPLES.md)** — real, complete plugins across common use cases
 - 📊 **[Data Structures](docs/DATA_STRUCTURES.md)** — `User`, `Workspace`, `Task`, `PluginManifest`, and friends
 - 📝 **[Changelog](docs/CHANGELOG.md)** — release history

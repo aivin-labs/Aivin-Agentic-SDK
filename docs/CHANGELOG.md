@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## [1.0.4] - 2026-08-10
+
+### 🔧 Changed — `datastore` renamed to `table`; `pluginStore` renamed to `plugin`
+
+`export const datastore = bindNamespace('datastore')` (`globalSdk.ts`) never matched the real wire
+namespace the backend registers under (`PluginBridge.sdkFunction('table.*', ...)` in
+`DatastoreSDK.ts`, and the legacy `ctx.sdk` facade's own `get table()` in BE's `src/base/SDK.ts`) -
+`SDKClient.readonly datastore` and every `validateParams(..., 'datastore.X')` call site are now
+`table`/`'table.X'` to match. `import { datastore } from '@aivin-labs/sdk'` no longer resolves to
+anything - use `import { table } from '@aivin-labs/sdk'`. Same rename for the internal
+`@internal`-only `pluginStore` → `plugin` (aivin-service's marketplace catalog access, stripped
+from the published `.d.ts`; not part of the public plugin-author surface).
+
+### 📝 Fixed — docs/CLI-prompt catching up to the `table` rename
+
+The rename above landed in code but not in the docs that shipped in the same release: `README.md`'s
+namespace table, `docs/SDK.md`'s "Persistent storage" section, and the dedicated
+`docs/sdk/datastore.md` page (renamed to [`docs/sdk/table.md`](./sdk/table.md)) all still said
+`datastore`; `docs/sdk/project.md` still cross-referenced it by the old name. Most consequential:
+`bin/cli.mjs`'s AI-codegen system prompt (what `aivin create`/`aivin init` feed the LLM to write new
+plugins) listed `datastore` as an available namespace - any generated plugin calling it would have
+hit an `undefined` import at runtime. That same namespace list was also missing `project` and
+`code` entirely (both real, existing namespaces) - added.
+
 ## [1.0.3] - 2026-08-10
 
 ### 🆕 Added — typed sugar for `pluginStore.findDocsBySourceRepo`/`pluginStore.patchByIds`

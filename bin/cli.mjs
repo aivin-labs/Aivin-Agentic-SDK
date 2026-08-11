@@ -20,21 +20,101 @@ import readline from 'readline';
 // manifest.json's { ...commonFields, plugins: [...] } authoring shape expands into.
 import { flattenManifestFile } from '../dist/types/PluginTypes.js';
 
-// `~/.aivin/credentials` - written once by `aivin login`, read by every plugin project on this
-// machine. `API_KEY` used to only ever get saved to the current project's `.env`, meaning every
-// separate project directory needed its own `aivin login` (and minted its own separate key) even
-// though the credential is really a per-machine thing, not a per-project one.
+// `~/.aivin/credentials` - written once by `aivin login [baseUrl]`, read by every plugin project
+// on this machine. One ACTIVE context at a time (base_url + api_key together, like `kubectl config
+// use-context`) - not a per-project setting, and not a multi-server map either. Logging into a
+// different server (`aivin login beta-api.aivin.vn`) simply replaces the active context outright;
+// every project on the machine picks up wherever you last logged in, with zero `.env` needed for
+// the common case. A project's own `.env` can still set AIVIN_BASE_URL/API_KEY directly to pin
+// itself to something other than the machine's current context (e.g. CI using a fixed scoped key)
+// - dotenv.config() never overrides a variable that's already set, so that always wins.
+//
+// Old files from before this existed were flat `API_KEY=...` (implicitly production) - still loads
+// fine, just with no recorded base_url (falls back to the production default below).
 const GLOBAL_CREDENTIALS_PATH = path.join(os.homedir(), '.aivin', 'credentials');
+const DEFAULT_AIVIN_BASE_URL = 'https://api.aivin.cloud';
 
-// Load env vars: the current project's `.env` first (SDK_GRPC_ENDPOINT, AIVIN_WEB_URL, and any
-// deliberate per-project API_KEY override), then the global credentials file as a fallback for
-// API_KEY specifically. `dotenv.config()` never overrides a variable that's already set, so a
-// project's own `.env` (or a real shell env var) always wins over the global fallback.
-// `quiet: true` - otherwise dotenv prints an "injected env" tip line to stdout on every run,
-// which would corrupt `--json-output` mode (meant for clean, parseable JSON on stdout).
+/**
+ * The REST API and the gRPC SDK channel are two different hostnames behind the same login (e.g.
+ * `api.aivin.cloud` / `sdk.aivin.cloud` in production, `beta-api.aivin.vn` / `beta-sdk.aivin.vn` in
+ * staging - proven consistent across both real environments this SDK talks to). Derived once at
+ * login time by swapping the leading `api.` label for `sdk.`, so `SDK_ENDPOINT` never needs its own
+ * separate manual config for the common case - same context, same command.
+ */
+function deriveSdkEndpoint(baseUrl) {
+  try {
+    const host = new URL(baseUrl).hostname;
+    // Match "api." as its own label, whether at the very start ("api.aivin.cloud") or after a
+    // prefix like "beta-" ("beta-api.aivin.vn" -> "beta-sdk.aivin.vn") - a plain `^api\.` anchor
+    // only caught the production case and silently produced no SDK_ENDPOINT for staging.
+    if (!/(^|-)api\./.test(host)) return null;
+    return host.replace(/(^|-)api\./, '$1sdk.');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * No guessing/hardcoded map - the backend already knows its own web app URL (`config/app.json`'s
+ * `app_url`, admin-tunable via ConfigIO, same value every branded page/asset link on that instance
+ * already uses) and serves it through `GET /setting/lang/default`, a public route (no auth) meant
+ * for exactly this: reading branding/config before a session exists. Each real backend (production,
+ * staging, self-hosted) already has this correct for itself - a hardcoded CLI-side map would just
+ * be a second, driftable copy of the same fact.
+ */
+async function fetchWebUrl(baseUrl) {
+  try {
+    const res = await axios.get(`${baseUrl}/setting/lang/default`, { timeout: 5000 });
+    const appUrl = res.data?.app_url;
+    return typeof appUrl === 'string' && appUrl ? appUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * JSON-only, no legacy flat `API_KEY=...` dotenv-format fallback - a hard cutover, by request.
+ * Anyone with an old-format credentials file just needs to `aivin login` again; this stays simple
+ * instead of carrying a permanent "read either shape" branch for a one-time migration.
+ */
+function loadActiveContext() {
+  if (!fs.existsSync(GLOBAL_CREDENTIALS_PATH)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(GLOBAL_CREDENTIALS_PATH, 'utf8'));
+    if (!parsed?.api_key) return null;
+    const base_url = parsed.base_url || DEFAULT_AIVIN_BASE_URL;
+    return { base_url, api_key: parsed.api_key, sdk_endpoint: parsed.sdk_endpoint || deriveSdkEndpoint(base_url) };
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveContext(baseUrl, apiKey) {
+  fs.mkdirSync(path.dirname(GLOBAL_CREDENTIALS_PATH), { recursive: true });
+  const sdkEndpoint = deriveSdkEndpoint(baseUrl);
+  fs.writeFileSync(
+    GLOBAL_CREDENTIALS_PATH,
+    JSON.stringify({ base_url: baseUrl, api_key: apiKey, sdk_endpoint: sdkEndpoint }, null, 2) + '\n',
+    { mode: 0o600 },
+  );
+  return sdkEndpoint;
+}
+
+// Load env vars: the current project's `.env` first (any deliberate per-project override), THEN
+// fill in AIVIN_BASE_URL/API_KEY/SDK_ENDPOINT from the machine's active context if the project
+// didn't set them. `dotenv.config()` never overrides a variable that's already set, so a project's
+// own `.env` (or a real shell env var) always wins over the global context, exactly like before -
+// but nothing requires a project to have a `.env` at all anymore for the common single-context case.
+// `quiet: true` - otherwise dotenv prints an "injected env" tip line to stdout on every run, which
+// would corrupt `--json-output` mode (meant for clean, parseable JSON on stdout).
 dotenv.config({ quiet: true });
-if (fs.existsSync(GLOBAL_CREDENTIALS_PATH)) {
-  dotenv.config({ path: GLOBAL_CREDENTIALS_PATH, quiet: true });
+{
+  const activeContext = loadActiveContext();
+  if (activeContext) {
+    if (!process.env.AIVIN_BASE_URL) process.env.AIVIN_BASE_URL = activeContext.base_url;
+    if (!process.env.API_KEY) process.env.API_KEY = activeContext.api_key;
+    if (!process.env.SDK_ENDPOINT && activeContext.sdk_endpoint) process.env.SDK_ENDPOINT = activeContext.sdk_endpoint;
+  }
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -452,7 +532,7 @@ export async function main(mission: string, input: PluginInput, ctx: PluginConte
 
 \`ctx.sdk.*\` is the legacy mechanism - it still works (same client under the hood) but is NOT recommended; don't generate new code with it. Its one remaining niche: calling the platform from somewhere that isn't guaranteed to be inside a running \`main()\` invocation, where the top-level import's \`AsyncLocalStorage\` scoping doesn't reach.
 
-Namespaces available: \`ai\`, \`vector\`, \`knowledge\`, \`datastore\`, \`task\`, \`store\`, \`redis\`, \`mongo\`, \`workspace\`, \`agent\`, \`realtime\`, \`queue\`, \`message\`, \`notification\`, \`file\`, \`session\`, \`resource\`, \`setting\`, \`usage\`, \`automation\`, \`browser\`, \`causality\`, \`attachment\`, \`datasource\`. Full per-namespace reference: \`node_modules/@aivin-labs/sdk/docs/sdk/*.md\`.
+Namespaces available: \`ai\`, \`knowledge\`, \`vector\`, \`datasource\`, \`causality\`, \`attachment\`, \`workspace\`, \`agent\`, \`browser\`, \`project\`, \`table\`, \`code\`, \`task\`, \`message\`, \`notification\`, \`realtime\`, \`queue\`, \`usage\`, \`automation\`, \`resource\`, \`session\`, \`file\`, \`setting\`, \`store\`, \`redis\`, \`mongo\`. Full per-namespace reference: \`node_modules/@aivin-labs/sdk/docs/sdk/*.md\`.
 
 ## Reusing another plugin instead of writing new logic
 
@@ -477,7 +557,7 @@ Call one from your own \`main()\` with \`import { call } from '@aivin-labs/sdk'\
 ## Debugging a failure
 
 1. Reproduce locally first: \`aivin start --debug-json\`, then \`curl -X POST http://localhost:4001/invoke -H 'content-type: application/json' -d '{"input":{...}}'\` in another terminal (or read the JSON lines this process prints as it runs, if you're driving it directly).
-2. Each \`sdk.*\` call's own error message is usually the fastest signal - namespaces validated with zod (\`automation.*\`, \`resource.*\`, \`store.*\`, \`datastore.*\`) throw \`[namespace.method] invalid params - field: reason\` immediately on a bad shape, before any network call.
+2. Each \`sdk.*\` call's own error message is usually the fastest signal - namespaces validated with zod (\`automation.*\`, \`resource.*\`, \`store.*\`, \`table.*\`) throw \`[namespace.method] invalid params - field: reason\` immediately on a bad shape, before any network call.
 3. If a call's *shape* is right but the *result* is wrong, check the relevant \`node_modules/@aivin-labs/sdk/docs/sdk/*.md\` page - several namespaces have "Notes & caveats" documenting real field names/behavior that differ from what you'd guess (e.g. \`automation.createJob\` takes \`mission\`/\`schedule_condition\`, not \`name\`/\`schedule\`).
 
 Full docs: \`node_modules/@aivin-labs/sdk/README.md\` and \`node_modules/@aivin-labs/sdk/docs/\`.
@@ -810,12 +890,14 @@ program
   .description('Start plugin server')
   .option('--debug', 'Log every sdk.* call live as it happens (human-readable), not just the final trace summary')
   .option('--debug-json', 'Same live per-call logging as --debug, but one JSON object per line on stdout - for a script/coding agent to parse instead of a human')
+  .option('--no-watch', 'Disable hot-reload - restart manually (Ctrl+C + `aivin start` again) after editing src/ instead')
   .action((options) => {
     const serverPath = path.join(__dirname, 'server.mjs');
     const debugEnv = options.debugJson ? { SDK_DEBUG: 'json' } : options.debug ? { SDK_DEBUG: 'true' } : {};
+    const watchEnv = options.watch === false ? { AIVIN_START_WATCH: 'false' } : {};
     const child = spawn('node', [serverPath], {
       stdio: 'inherit',
-      env: { ...process.env, ...debugEnv },
+      env: { ...process.env, ...debugEnv, ...watchEnv },
     });
 
     child.on('error', (error) => {
@@ -2091,6 +2173,49 @@ function resolveTriggerEntry(manifest, funcOption) {
 }
 
 /**
+ * Subscribes to a deployed plugin's live console output over the same Socket.IO channel
+ * `aivin plugin logs` uses (`subscribe-plugin-logs` / `plugin-log`), but returns as soon as
+ * subscribing settles (success OR denial) instead of running until Ctrl+C - meant to be opened
+ * right before a single `trigger` call and stopped right after, not to own the process lifetime.
+ *
+ * Subscribing is permission-scoped server-side to plugins you can see the container logs for
+ * (your own/org's deployments) - triggering a plugin from the public store that some other org
+ * owns will very likely have this come back `subscribed: false`. That's expected, not an error:
+ * the caller falls back to the REST result only, same as before `--watch-logs` existed.
+ */
+async function watchPluginLogLines(pluginId, { serverUrl, apiKey, onLine }) {
+  // Explicit connect timeout (not just socket.io-client's own ~20s default) so `trigger
+  // --watch-logs` fails fast into "no live output" instead of leaving the whole command feeling
+  // stuck for a while first.
+  const socket = io(serverUrl, { auth: { token: apiKey || 'dev-token' }, transports: ['websocket'], reconnection: true, timeout: 8000 });
+  let subscribed = false;
+  let denyReason;
+
+  await new Promise((resolve) => {
+    const giveUp = setTimeout(() => {
+      denyReason = 'timed out connecting';
+      resolve();
+    }, 8000);
+    socket.on('connect_error', (error) => {
+      clearTimeout(giveUp);
+      denyReason = error.message;
+      resolve();
+    });
+    socket.on('connect', () => {
+      socket.emit('subscribe-plugin-logs', { plugin_id: pluginId }, (ack) => {
+        clearTimeout(giveUp);
+        if (ack?.success) subscribed = true;
+        else denyReason = ack?.error || 'no permission to view this plugin\'s logs';
+        resolve();
+      });
+    });
+  });
+
+  if (subscribed) socket.on('plugin-log', onLine);
+  return { subscribed, denyReason, stop: () => socket.disconnect() };
+}
+
+/**
  * `aivin plugin trigger` - invokes an already-deployed plugin for real via the same
  * `POST /plugins/execute` the platform's own Playground uses (PluginExecutionService.executePlugin
  * on the backend), and prints the result. Two modes:
@@ -2101,16 +2226,38 @@ function resolveTriggerEntry(manifest, funcOption) {
  *   `<input>` can still be given alongside `-a` for fields you want to force rather than let the AI
  *   infer - explicit `arguments` win over auto-mapped ones per field.
  *
- * This only surfaces what `/plugins/execute`'s response itself carries: `processing_log` (the
- * mapping/execution stage messages, all at once, not the plugin's own internal console output) and
- * `mapped_arguments` (only present when `-a` was used). Run `aivin plugin logs <id>` in another
- * terminal first to watch the plugin's own console.log/console.error output live while this runs.
+ * By default this only surfaces what `/plugins/execute`'s response itself carries: `processing_log`
+ * (the mapping/execution stage messages, all at once, not the plugin's own internal console output)
+ * and `mapped_arguments` (only present when `-a` was used). Pass `--watch-logs` to also stream the
+ * plugin's own console.log/console.error output inline (subscribes right before the call, same feed
+ * `aivin plugin logs` tails) instead of needing a second terminal - see `watchPluginLogLines` for
+ * why this silently does nothing for a plugin you don't have log-view permission on.
  *
  * `--id <pluginId>` skips the local manifest.json lookup - required for plugins with no scaffolded
  * project directory, e.g. proxy plugins built by `aivin mcp <url>`, which deploy straight from an
  * in-memory scan and never write a manifest.json anywhere.
+ *
+ * `--save` writes this run's result to `.test/trigger/<timestamp>.json`; `--compare <file>` diffs
+ * the current run against a previously saved one - a lightweight way to turn ad-hoc "thử nghiệm"
+ * calls (your own plugin mid-development, or someone else's from the store) into a regression check,
+ * without needing the full `aivin test` deploy+smoke-test flow.
  */
 async function triggerPlugin(mission, inputJson, options) {
+  // Read + validate --compare's file upfront, before spending a real (possibly side-effecting,
+  // possibly billable) invocation on a typo'd path.
+  let compareAgainst;
+  if (options.compare) {
+    const comparePath = path.resolve(process.cwd(), options.compare);
+    if (!fs.existsSync(comparePath)) {
+      throw new Error(`--compare file not found: ${comparePath}`);
+    }
+    try {
+      compareAgainst = JSON.parse(fs.readFileSync(comparePath, 'utf8'));
+    } catch (error) {
+      throw new Error(`--compare file isn't valid JSON (${comparePath}): ${error.message}`, { cause: error });
+    }
+  }
+
   // `--id` bypasses the manifest.json lookup entirely - needed for plugins that were never
   // scaffolded into a local directory (e.g. `aivin mcp <url>` deploys straight from a scan, no
   // src/manifest.json on disk to resolve `entry` from). Without this, testing a freshly-converted
@@ -2161,11 +2308,18 @@ async function triggerPlugin(mission, inputJson, options) {
     console.log(chalk.yellow('⚠️  API_KEY not set - run `aivin login` first'));
   }
   const authHeaders = { headers: { Authorization: `Bearer ${apiKey || 'dev-token'}` } };
+  // No client-side timeout here before meant a hung backend (or a genuinely stuck plugin - the
+  // server side already caps at MAX_DOCKER_TIMEOUT_MS/effectiveTimeout, but that's enforced on the
+  // backend, not by this CLI process) could leave `trigger` sitting forever with no feedback short
+  // of Ctrl+C. `AIVIN_TRIGGER_TIMEOUT_MS` overrides if 3 minutes isn't enough for a legitimately
+  // slow plugin.
+  const EXECUTE_TIMEOUT_MS = parseInt(process.env.AIVIN_TRIGGER_TIMEOUT_MS || '180000');
+  const WORKSPACE_LOOKUP_TIMEOUT_MS = 15000;
 
   let workspaceId = options.workspace;
   if (!workspaceId) {
     try {
-      const wsRes = await axios.get(`${serverUrl}/workspace/list`, authHeaders);
+      const wsRes = await axios.get(`${serverUrl}/workspace/list`, { ...authHeaders, timeout: WORKSPACE_LOOKUP_TIMEOUT_MS });
       const workspaces = Array.isArray(wsRes.data) ? wsRes.data : wsRes.data?.items || [];
       workspaceId = workspaces[0]?.id || workspaces[0]?._id;
     } catch (error) {
@@ -2177,15 +2331,43 @@ async function triggerPlugin(mission, inputJson, options) {
   }
   body.workspace_id = workspaceId;
 
+  let logWatcher;
+  if (options.watchLogs) {
+    logWatcher = await watchPluginLogLines(entryId, {
+      serverUrl,
+      apiKey,
+      onLine: (payload) => {
+        const time = new Date(payload.timestamp || Date.now()).toLocaleTimeString();
+        const streamColor = payload.stream === 'stderr' ? chalk.red : payload.stream === 'system' ? chalk.yellow : chalk.gray;
+        console.log(chalk.gray(`[${time}]`), streamColor(payload.line));
+      },
+    });
+    if (logWatcher.subscribed) {
+      console.log(chalk.blue(`📡 Watching live console output for ${entryLabel || entryId}...`));
+    } else {
+      console.log(chalk.gray(`(--watch-logs: no live console output - ${logWatcher.denyReason})`));
+    }
+  }
+
   console.log(chalk.blue(`🚀 Triggering ${entryLabel || entryId}...`));
 
   let response;
   try {
-    response = await axios.post(`${serverUrl}/plugins/execute`, body, authHeaders);
+    response = await axios.post(`${serverUrl}/plugins/execute`, body, { ...authHeaders, timeout: EXECUTE_TIMEOUT_MS });
   } catch (error) {
+    if (logWatcher?.subscribed) {
+      // Give trailing log lines from this failed call a moment to arrive before disconnecting.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    logWatcher?.stop();
     const message = error.response?.data?.message || error.message;
     throw new Error(`Trigger failed: ${message}`, { cause: error });
   }
+
+  if (logWatcher?.subscribed) {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  logWatcher?.stop();
 
   const result = response.data ?? {};
 
@@ -2210,7 +2392,54 @@ async function triggerPlugin(mission, inputJson, options) {
   if (result.error_code) console.log(chalk.gray(`Error code: ${result.error_code}`));
   console.log(JSON.stringify(result.data ?? null, null, 2));
 
+  if (compareAgainst) {
+    printTriggerDiff(compareAgainst.result ?? {}, result);
+  }
+
+  if (options.save) {
+    const currentDir = process.cwd();
+    const dir = path.join(currentDir, '.test', 'trigger');
+    fs.mkdirSync(dir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const savePath = path.join(dir, `${timestamp}.json`);
+    fs.writeFileSync(
+      savePath,
+      JSON.stringify({ plugin_id: entryId, mission: body.purpose, arguments: body.arguments, result }, null, 2),
+    );
+    console.log(chalk.gray(`\nSaved: ${path.relative(currentDir, savePath)} (--compare ${path.relative(currentDir, savePath)} next time)`));
+  }
+
   if (!ok) process.exitCode = 1;
+}
+
+/**
+ * Prints a before/after summary for `trigger --compare <file>` - status changes are the headline
+ * (a plugin that used to succeed now failing, or vice versa, is the actual regression signal most
+ * of the time), full data payloads only get dumped when they actually differ so an unchanged
+ * comparison stays a two-line "nothing moved" instead of two walls of identical JSON.
+ */
+function printTriggerDiff(oldResult, newResult) {
+  console.log(chalk.gray('\n--- Compare ---'));
+
+  const oldStatus = oldResult.status ?? 'unknown';
+  const newStatus = newResult.status ?? 'unknown';
+  if (oldStatus === newStatus) {
+    console.log(chalk.gray(`Status: ${newStatus} (unchanged)`));
+  } else {
+    console.log(chalk.yellow(`Status: ${oldStatus} → ${newStatus} (CHANGED)`));
+  }
+
+  const oldData = JSON.stringify(oldResult.data ?? null, null, 2);
+  const newData = JSON.stringify(newResult.data ?? null, null, 2);
+  if (oldData === newData) {
+    console.log(chalk.gray('Data: unchanged'));
+  } else {
+    console.log(chalk.yellow('Data: CHANGED'));
+    console.log(chalk.gray('  --- before ---'));
+    console.log(oldData.split('\n').map((l) => `  ${l}`).join('\n'));
+    console.log(chalk.gray('  --- after ---'));
+    console.log(newData.split('\n').map((l) => `  ${l}`).join('\n'));
+  }
 }
 
 /**
@@ -2506,6 +2735,9 @@ pluginCommand
   .option('--func <name>', 'Which function to trigger, for a multi-function plugin (matches name/func/id) - ignored when --id is given')
   .option('--workspace <id>', 'Workspace id to run against (default: auto-picks your first one)')
   .option('--agent <id>', 'Agent id to run as, if the plugin needs one for HIL/confirm behavior to be accurate')
+  .option('--watch-logs', 'Also stream the plugin\'s own live console output inline (same feed as `aivin plugin logs`) instead of needing a second terminal - requires permission to view that plugin\'s logs (your own/org\'s deployments; most store plugins from other orgs will just skip this and fall back to the REST result only)')
+  .option('--save', 'Write this run\'s result to .test/trigger/<timestamp>.json for later --compare')
+  .option('--compare <file>', 'Diff this run\'s result against a previously --save\'d .test/trigger/*.json file')
   .action(async (mission, input, options) => {
     try {
       await triggerPlugin(mission, input, options);
@@ -3206,14 +3438,14 @@ mcpCommand
 
 /**
  * Writes to `~/.aivin/credentials`, not the current project's `.env` - a login is a per-machine
- * credential, not a per-project one, so `aivin login` only needs to happen once regardless of how
- * many plugin projects you work in on this machine. A project's own `.env` can still set `API_KEY`
- * directly to override this for a specific project (e.g. CI using a scoped key) - see the
- * dotenv.config() precedence at the top of this file.
+ * context, not a per-project one, so `aivin login` only needs to happen once regardless of how many
+ * plugin projects you work in on this machine, and switching targets is just logging in again with
+ * a different `baseUrl`. A project's own `.env` can still set `AIVIN_BASE_URL`/`API_KEY` directly to
+ * pin itself to something other than the machine's current context - see the dotenv.config()
+ * precedence at the top of this file.
  */
-function saveGlobalApiKey(apiKey) {
-  fs.mkdirSync(path.dirname(GLOBAL_CREDENTIALS_PATH), { recursive: true });
-  fs.writeFileSync(GLOBAL_CREDENTIALS_PATH, `API_KEY=${apiKey}\n`, { mode: 0o600 });
+function saveGlobalApiKey(apiKey, baseUrl = process.env.AIVIN_BASE_URL || DEFAULT_AIVIN_BASE_URL) {
+  return saveActiveContext(baseUrl, apiKey);
 }
 
 function openBrowser(url) {
@@ -3405,27 +3637,43 @@ async function basicLogin(options) {
 
 program
   .command('login')
+  .argument('[baseUrl]', 'Server to log into (REST API base) - defaults to production (api.aivin.cloud). Pass a staging/self-hosted host to switch the machine\'s active context to it, e.g. `aivin login beta-api.aivin.vn`.')
   .description('Log in and save an API key for plugin deployment (opens your browser by default)')
   .option('-k, --api-key <key>', 'Set API key directly (skip login entirely)')
   .option('--basic', 'Log in with email/password directly in the terminal instead of a browser')
   .option('--google', 'Alias of the default browser flow - pick Google once the page opens')
   .option('--client <client>', 'Client/org id to use with --basic (default: "aivin.cloud")')
-  .action(async (options) => {
+  .action(async (baseUrl, options) => {
     try {
+      // Bare hostname (no scheme) is the common case for a quick `aivin login beta-api.aivin.vn` -
+      // assume https, same as every other *.aivin.* endpoint in this file.
+      const resolvedBaseUrl = baseUrl ? (/^https?:\/\//.test(baseUrl) ? baseUrl : `https://${baseUrl}`) : DEFAULT_AIVIN_BASE_URL;
+      process.env.AIVIN_BASE_URL = resolvedBaseUrl;
+
       if (options.apiKey) {
         console.log(chalk.blue('🔑 Setting API key...'));
-        saveGlobalApiKey(options.apiKey);
+        const sdkEndpoint = saveGlobalApiKey(options.apiKey, resolvedBaseUrl);
         console.log(chalk.green('✅ API key set successfully!'));
         console.log(chalk.yellow('🔑 Your API Key:'), chalk.cyan(options.apiKey));
-        console.log(chalk.green(`💾 Saved to ${GLOBAL_CREDENTIALS_PATH} - every project on this machine can use it now.`));
+        console.log(chalk.gray(`   Active context: ${resolvedBaseUrl}${sdkEndpoint ? ` (SDK_ENDPOINT: ${sdkEndpoint})` : ''}`));
+        console.log(chalk.green(`💾 Saved to ${GLOBAL_CREDENTIALS_PATH} - every project on this machine now targets this server.`));
         return;
+      }
+
+      // Only the browser flow needs a web app URL - fetch it from the backend itself (not needed/
+      // fetched for --basic, which never touches AIVIN_WEB_URL at all). Same override precedence
+      // as everywhere else: a caller-set AIVIN_WEB_URL (project .env/shell) always wins.
+      if (!options.basic && !process.env.AIVIN_WEB_URL) {
+        const webUrl = await fetchWebUrl(resolvedBaseUrl);
+        if (webUrl) process.env.AIVIN_WEB_URL = webUrl;
       }
 
       const apiKey = options.basic ? await basicLogin(options) : await browserLogin();
 
       console.log(chalk.green('✅ Login successful!'));
-      saveGlobalApiKey(apiKey);
-      console.log(chalk.green(`💾 Saved to ${GLOBAL_CREDENTIALS_PATH} - every project on this machine can use it now.`));
+      const sdkEndpoint = saveGlobalApiKey(apiKey, resolvedBaseUrl);
+      console.log(chalk.gray(`   Active context: ${resolvedBaseUrl}${sdkEndpoint ? ` (SDK_ENDPOINT: ${sdkEndpoint})` : ''}`));
+      console.log(chalk.green(`💾 Saved to ${GLOBAL_CREDENTIALS_PATH} - every project on this machine now targets this server.`));
     } catch (error) {
       console.log(chalk.red('❌ Login failed:'), error.message);
       process.exit(1);

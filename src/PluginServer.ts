@@ -4,6 +4,7 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import * as grpc from '@grpc/grpc-js';
 import { loadSdkTransportService } from './grpc/loadProto';
+import { resolveSdkSecret } from './grpc/GrpcInvoker';
 import { SDKClient } from './sdk/SDKClient';
 import { invocationStorage } from './sdk/currentInvocation';
 import { withTrace, formatTraceForConsole, type InvocationTrace } from './sdk/trace';
@@ -167,7 +168,28 @@ export class PluginServer extends EventEmitter {
     return { id: manifest.id, name: manifest.name, version: manifest.version ?? '0.0.0' };
   }
 
-  private async loadPlugin(): Promise<void> {
+  /**
+   * Re-imports `src/main.ts` (and re-reads `manifest.json`) from disk, replacing whatever is
+   * currently loaded - used by `aivin start`'s file-watcher (see `bin/server.mjs`) to hot-reload
+   * on save, without restarting the process or dropping the gRPC/HTTP servers already listening.
+   *
+   * If the reload itself fails (syntax error, missing export, bad manifest JSON mid-edit), the
+   * PREVIOUS working `this.plugin` is left in place and the error is rethrown to the caller (the
+   * watcher) to report - a typo mid-save shouldn't take down an otherwise-running local dev
+   * server, and the next invocation should still hit the last-known-good code.
+   */
+  async reload(): Promise<{ id: string; name: string; version: string }> {
+    const previous = this.plugin;
+    try {
+      await this.loadPlugin(true);
+      return this.summarizeManifest();
+    } catch (err) {
+      this.plugin = previous;
+      throw err;
+    }
+  }
+
+  private async loadPlugin(cacheBust = false): Promise<void> {
     const pluginsPath = this.config.plugins_path;
     const manifestPath = path.join(pluginsPath, 'manifest.json');
     const entryPath = path.join(pluginsPath, 'src', 'main.ts');
@@ -188,7 +210,12 @@ export class PluginServer extends EventEmitter {
     // require()-based helper that can't load a real ESM/.ts file) is bypassed - see the SDK
     // README for the full rationale.
     const absolutePath = path.resolve(entryPath);
-    const importPath = pathToFileURL(absolutePath).href;
+    // Node's ESM module cache is keyed by the full specifier (including query string), not just
+    // the file path - `?t=<timestamp>` on a `reload()` forces a genuinely fresh import instead of
+    // silently handing back the stale, already-cached module for the same `file://` path. Omitted
+    // on the normal first load so a plain `require.resolve`-style repeated call (e.g. `testInvoke`
+    // when `this.plugin` is already set) still short-circuits without ever reaching this at all.
+    const importPath = pathToFileURL(absolutePath).href + (cacheBust ? `?t=${Date.now()}` : '');
     const dynamicImport = new Function('specifier', 'return import(specifier)');
     // Kept as the raw module namespace (not pre-resolved to `.default`) - a multi-function plugin
     // needs to look up ANY of its named exports by name, not just one.
@@ -202,7 +229,7 @@ export class PluginServer extends EventEmitter {
     callback: (err: any, res: any) => void,
   ): Promise<void> => {
     try {
-      const secret = process.env.SDK_SECRET;
+      const secret = resolveSdkSecret();
       if (secret) {
         const meta = call?.metadata?.get('authorization');
         const token = Array.isArray(meta) ? meta[0] : meta;

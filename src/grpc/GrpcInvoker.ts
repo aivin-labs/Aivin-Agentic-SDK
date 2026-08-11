@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as grpc from '@grpc/grpc-js';
 import { loadSdkTransportService } from './loadProto';
 
@@ -86,6 +88,29 @@ let cachedClient: GrpcInvokeClient | undefined;
 let cachedEndpoint: string | undefined;
 let warnedDefaultEndpoint = false;
 
+/**
+ * Explicit override for `endpoint`/`secret`, set via `configureTransport()` instead of
+ * `process.env.SDK_ENDPOINT`/`SDK_SECRET` - for callers that mint their own per-invocation identity
+ * at runtime (e.g. a test harness driving `mintCap()`) and want to hand it straight to the SDK
+ * without going through a process-wide global. Takes priority over env/file resolution in
+ * `resolveEndpoint()`/`resolveSdkSecret()` below, but doesn't replace them: a real deployed
+ * container never calls this, and keeps working exactly as before (`SDK_SECRET_FILE`/`SDK_SECRET`/
+ * `SDK_ENDPOINT`, injected by DockerHelper - see those functions' own comments).
+ */
+let explicitTransportConfig: { endpoint?: string; secret?: string } = {};
+
+/**
+ * Hand the SDK an endpoint/secret directly instead of setting `process.env.SDK_ENDPOINT`/
+ * `SDK_SECRET` yourself. Clears the cached gRPC client/endpoint/secret so the new values take
+ * effect on the very next call, even if something already invoked the SDK earlier in this process.
+ */
+export function configureTransport(config: { endpoint?: string; secret?: string }): void {
+  explicitTransportConfig = { ...explicitTransportConfig, ...config };
+  cachedClient = undefined;
+  cachedEndpoint = undefined;
+  cachedSecret = undefined;
+}
+
 export interface CallTrace {
   namespace: string;
   durationMs: number;
@@ -155,16 +180,64 @@ function isLocalEndpoint(endpoint: string): boolean {
   return ['localhost', '127.0.0.1', '::1', '0.0.0.0', 'host.docker.internal'].includes(host);
 }
 
+interface MtlsIdentity {
+  ca?: Buffer;
+  cert?: Buffer;
+  key?: Buffer;
+}
+
+let explicitMtls: MtlsIdentity = {};
+
+/**
+ * PROTOTYPE - client-cert (mTLS) identity, read once from a local directory instead of going
+ * through the container-secret Bearer flow (`configureTransport({ secret })` / `SDK_SECRET_FILE`).
+ * Purely additive for now: the real backend (`GrpcSDKServer`) doesn't verify peer certs for caller
+ * identity yet (`buildServerCredentials` only *terminates* TLS with a server cert; it only demands
+ * a client cert back when `SDK_GRPC_TLS_CA` happens to be set, and even then doesn't resolve an
+ * identity from it) - a call made with this configured still needs `secret`/`cap` to actually
+ * authenticate, exactly as before. This exists to shape the client-side API ahead of that
+ * server-side work (see docs/draft/plugins/sdk-bridge.md), not to replace anything in a live call
+ * yet.
+ *
+ * Expects `ca.pem`, `client.crt`, `client.key` in `certDir` - deliberately the same one-directory-
+ * per-machine shape as `~/.aivin/credentials` (see the CLI's `GLOBAL_CREDENTIALS_PATH`), so
+ * `aivin login` could someday write these the same way instead of a separate config surface.
+ * Resets the cached gRPC client so a new identity takes effect on the very next call.
+ */
+export function configureMtls(config: { certDir?: string; ca?: string | Buffer; cert?: string | Buffer; key?: string | Buffer }): void {
+  const read = (filePath: string): Buffer | undefined => (fs.existsSync(filePath) ? fs.readFileSync(filePath) : undefined);
+  const toBuffer = (value: string | Buffer | undefined): Buffer | undefined =>
+    value === undefined ? undefined : Buffer.isBuffer(value) ? value : Buffer.from(value);
+
+  explicitMtls = {
+    ca: toBuffer(config.ca) ?? (config.certDir ? read(path.join(config.certDir, 'ca.pem')) : undefined),
+    cert: toBuffer(config.cert) ?? (config.certDir ? read(path.join(config.certDir, 'client.crt')) : undefined),
+    key: toBuffer(config.key) ?? (config.certDir ? read(path.join(config.certDir, 'client.key')) : undefined),
+  };
+  cachedClient = undefined;
+  cachedEndpoint = undefined;
+}
+
 /**
  * TLS by default for anything that isn't a local/loopback/container-internal address - this
  * endpoint may now point at a real host over the public internet. Override with
  * SDK_GRPC_TLS=true|false if you need to force one way or the other (e.g. a local endpoint that
  * still requires TLS, or a remote one that's plaintext on a private network).
+ *
+ * Presents `explicitMtls`'s client cert on the handshake when configured (see `configureMtls`) -
+ * harmless no-op against a server that isn't asking for one yet, and `rootCerts` left `undefined`
+ * (not `explicitMtls.ca`) unless a custom CA was actually given, so the system's default trust
+ * store still validates the *server's* cert exactly as before (mTLS adds a client identity to the
+ * handshake, it doesn't change how this side trusts the server).
  */
 function buildCredentials(endpoint: string): grpc.ChannelCredentials {
   const override = process.env.SDK_GRPC_TLS;
   const useTls = override ? override.toLowerCase() === 'true' : !isLocalEndpoint(endpoint);
-  return useTls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure();
+  if (!useTls) return grpc.credentials.createInsecure();
+  if (explicitMtls.cert && explicitMtls.key) {
+    return grpc.credentials.createSsl(explicitMtls.ca, explicitMtls.key, explicitMtls.cert);
+  }
+  return grpc.credentials.createSsl();
 }
 
 function getClient(endpoint: string): GrpcInvokeClient {
@@ -179,7 +252,45 @@ function getClient(endpoint: string): GrpcInvokeClient {
   return cachedClient;
 }
 
+let cachedSecret: string | null | undefined; // undefined = not yet resolved this process
+
+/**
+ * Reads the per-container gRPC secret once and caches it in this module-private variable - NEVER
+ * re-exposed via `process.env`, deliberately. If it stayed in `process.env` (the old design: BE
+ * wrote it via `env_file:` in docker-compose), any code running in this same container - including
+ * the plugin's own business logic, which is untrusted community code sharing this one OS process -
+ * could leak it with something as ordinary as a debug `console.log(process.env)`. That output goes
+ * straight to the container's stdout, which the host streams live (PluginLogStreamService) to
+ * anyone watching `aivin plugin logs`. Reading it from a file instead closes that off entirely -
+ * only code that explicitly reads this exact file path can ever see the value.
+ *
+ * `SDK_SECRET_FILE` (set by DockerHelper alongside the bind-mounted `.secrets.env` file) points at
+ * where to read it from; `SDK_SECRET` (plain env var) is kept as a fallback for `aivin start`
+ * local testing, where there's no real container/host relationship and no file to mount.
+ */
+export function resolveSdkSecret(): string | undefined {
+  if (explicitTransportConfig.secret) return explicitTransportConfig.secret;
+  if (cachedSecret !== undefined) return cachedSecret ?? undefined;
+  const filePath = process.env.SDK_SECRET_FILE;
+  if (!filePath) {
+    cachedSecret = process.env.SDK_SECRET || null;
+    return cachedSecret ?? undefined;
+  }
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    // Same dotenv-style shape DockerHelper.writeSecretsEnvFile writes (`SDK_SECRET=<value>`) -
+    // tolerate a bare value too in case something mounts just the raw secret directly.
+    const match = raw.match(/^SDK_SECRET=(.*)$/m);
+    cachedSecret = (match ? match[1] : raw).trim() || null;
+  } catch (err: any) {
+    console.warn(`[@aivin-labs/sdk] Could not read SDK_SECRET_FILE (${filePath}): ${err.message}`);
+    cachedSecret = null;
+  }
+  return cachedSecret ?? undefined;
+}
+
 function resolveEndpoint(): string {
+  if (explicitTransportConfig.endpoint) return explicitTransportConfig.endpoint;
   const endpoint = process.env.SDK_ENDPOINT;
   if (endpoint) return endpoint;
   if (!warnedDefaultEndpoint) {
@@ -199,7 +310,7 @@ function resolveEndpoint(): string {
 export async function invokeHost<T = any>(request: InvokeRequest): Promise<T> {
   const endpoint = resolveEndpoint();
   const client = getClient(endpoint);
-  const secret = process.env.SDK_SECRET;
+  const secret = resolveSdkSecret();
   const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxRetries = request.maxRetries ?? DEFAULT_MAX_RETRIES;
 
@@ -304,7 +415,7 @@ export interface StreamHandle<T = any> {
 export function invokeHostStream<T = any>(request: InvokeRequest): StreamHandle<T> {
   const endpoint = resolveEndpoint();
   const client = getClient(endpoint);
-  const secret = process.env.SDK_SECRET;
+  const secret = resolveSdkSecret();
   const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
 

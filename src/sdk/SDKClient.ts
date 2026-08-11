@@ -50,6 +50,9 @@ import type {
   AutomationJob,
   ConnectionInfo,
   LLMPromptOptions,
+  MediaGenerationResult,
+  MediaItem,
+  MediaPromptOptions,
   MessageSession,
   PluginContext,
   ResourceMeta,
@@ -84,6 +87,37 @@ export type PluginIdentity = Omit<PluginContext, 'sdk'>;
  */
 export function looksLikeAgentId(target: string): boolean {
   return !target.includes(' ') && target.length <= 32 && /^[0-9a-fA-F-]+$/.test(target);
+}
+
+const LOG_LEVEL_COLOR: Record<'info' | 'warn' | 'error', string> = {
+  info: '\x1b[36m', // cyan
+  warn: '\x1b[33m', // yellow
+  error: '\x1b[31m', // red
+};
+const ANSI_RESET = '\x1b[0m';
+const ANSI_DIM = '\x1b[2m';
+
+/** `HH:MM:SS.mmm`, local time - matches what a dev staring at their own terminal wants (log
+ *  ordering/latency at a glance), not a machine-parseable timestamp. */
+function logTimestamp(): string {
+  const d = new Date();
+  const pad = (n: number, len = 2) => String(n).padStart(len, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
+/**
+ * Color is opt-out, not opt-in, but only ever kicks in where it's safe: a real local TTY that
+ * isn't production. `sdk.log()` runs unmodified inside a production Docker container too (same
+ * code path as local `aivin start`) - ANSI codes in *that* stdout would pollute whatever log
+ * collector is scraping it, so this stays plain there even if someone sets NODE_ENV wrong. Piped
+ * output (`| tee`, CI) also loses TTY-ness and falls back to plain automatically.
+ */
+function logColorEligible(): boolean {
+  return (
+    process.env.NODE_ENV !== 'production' &&
+    process.env.SDK_LOG_COLOR !== 'false' &&
+    !!process.stdout.isTTY
+  );
 }
 
 /**
@@ -193,7 +227,14 @@ export class SDKClient {
   }
 
   log(msg: string, level: 'info' | 'warn' | 'error' = 'info'): void {
-    console[level === 'warn' ? 'warn' : level === 'error' ? 'error' : 'log'](`[plugin] ${msg}`);
+    const method = level === 'warn' ? 'warn' : level === 'error' ? 'error' : 'log';
+    const ts = logTimestamp();
+    if (logColorEligible()) {
+      const color = LOG_LEVEL_COLOR[level];
+      console[method](`${ANSI_DIM}${ts}${ANSI_RESET} ${color}[plugin:${level}]${ANSI_RESET} ${msg}`);
+    } else {
+      console[method](`${ts} [plugin:${level}] ${msg}`);
+    }
   }
 
   wait(ms: number): Promise<void> {
@@ -288,6 +329,18 @@ export class SDKClient {
     getModels: (provider?: string): Promise<any> => this.call('ai.getModels', { provider }),
     calculateTokens: (data: Record<string, any>): Promise<any> =>
       this.call('ai.calculateTokens', { data }),
+    /** Extract text from an image via OCR. `image` needs either a real `url` or `file` (base64
+     *  dataURL/Buffer) - `id` is caller-chosen, not looked up server-side. */
+    ocr: (image: MediaItem): Promise<string> => this.call('ai.ocr', { image }),
+    /** Generate an image from a text prompt. Set `opts.max_cost_usd` to cap spend - over-estimate
+     *  auto-downgrades to a cheaper tier (or throws if none fits) instead of silently costing more. */
+    image: (prompt: string, opts?: MediaPromptOptions): Promise<MediaGenerationResult> =>
+      this.call('ai.image', { prompt, opts }),
+    /** Generate a video from a text prompt - same cost-guard/tier options as `image()`. Slower and
+     *  more expensive than image generation; always set `opts.max_cost_usd` unless cost is a
+     *  non-concern for this call site. */
+    video: (prompt: string, opts?: MediaPromptOptions): Promise<MediaGenerationResult> =>
+      this.call('ai.video', { prompt, opts }),
   };
 
   /**
@@ -333,19 +386,112 @@ export class SDKClient {
       this.call('plugin.patchByIds', { ids, fields }),
   };
 
+  /**
+   * `search`/`index` confirmed against `BrainSDK.ts`'s `registerVectorHandlers()`.
+   * `searchBatch`/`get`/`delete`/`matchBatch` are newer additions to that same registrar - server
+   * always re-derives `workspace_id` from ctx for `get`/`delete` (plugin-supplied ids are filtered
+   * down to what actually belongs to the caller's workspace before returning/deleting).
+   * `similarity`/`normalize` are PURE LOCAL MATH (no `call()`, no network round-trip) - safe to use
+   * on embeddings you already hold (e.g. from `ai.getEmbedding`) without hitting the server.
+   *
+   * All read/write methods take an optional `collection` (a label, not a raw Milvus name) to target
+   * a DEDICATED collection instead of the shared default one - see `requestCollection`/
+   * `getCollectionStatus`. The label only resolves once its request has been admin-approved
+   * (`VectorCollectionRequestService` + `AdminVectorCollectionController`); passing an
+   * unrecognized/still-pending label throws rather than silently falling back to the shared
+   * collection - self-serve collection *creation* is deliberately not exposed here (provisioning a
+   * new physical Milvus collection is resource-affecting, so it goes through human approval). The
+   * same is true in reverse: there is no plugin-facing "delete my collection" - an admin archives
+   * (physically drops) it via `AdminVectorCollectionController`'s `:id/archive` route once a
+   * request is approved; after that, the label stops resolving and further calls with it throw.
+   */
   readonly vector = {
     search: (params: {
       query: string;
       type?: string;
       limit?: number;
       threshold?: number;
+      collection?: string;
+      /** Re-score results with `ai.rerank` (LLM-based, more accurate than raw cosine similarity)
+       *  before returning - costs one extra AI call. */
+      rerank?: boolean;
     }): Promise<any[]> => this.call('vector.searchDocuments', params),
     index: (params: {
       content: string;
       type?: string;
       id?: string;
       metadata?: Record<string, unknown>;
+      collection?: string;
     }): Promise<void> => this.call('vector.indexDocument', params),
+    searchBatch: (params: {
+      queries: string[];
+      type?: string;
+      limit?: number;
+      threshold?: number;
+      collection?: string;
+      /** Applied per-query - see `search()`'s `rerank`. Costs one extra AI call per query. */
+      rerank?: boolean;
+    }): Promise<any[][]> => this.call('vector.searchBatch', params),
+    get: (ids: string[], collection?: string): Promise<any[]> =>
+      this.call('vector.getDocuments', { ids, collection }),
+    delete: (ids: string[], collection?: string): Promise<{ deleted: number }> =>
+      this.call('vector.deleteDocuments', { ids, collection }),
+    matchBatch: (
+      texts: string[],
+      query: string,
+      threshold?: number,
+    ): Promise<{ text: string; isMatch: boolean; score: number }[]> =>
+      this.call('vector.matchBatch', { texts, query, threshold }),
+    similarity: (a: Float32Array, b: Float32Array): number => {
+      if (!a || !b || a.length !== b.length) return 0;
+      let dot = 0, na = 0, nb = 0;
+      for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+      }
+      if (na === 0 || nb === 0) return 0;
+      return dot / Math.sqrt(na * nb);
+    },
+    normalize: (v: Float32Array): Float32Array => {
+      if (!v || v.length === 0) return v;
+      let normSq = 0;
+      for (let i = 0; i < v.length; i++) normSq += v[i] * v[i];
+      if (normSq === 0) return v;
+      const invNorm = 1 / Math.sqrt(normSq);
+      const out = new Float32Array(v.length);
+      for (let i = 0; i < v.length; i++) out[i] = v[i] * invNorm;
+      return out;
+    },
+    /**
+     * Requests a dedicated Milvus collection (physically isolated from the shared default one).
+     * Only creates a 'pending' request - does NOT provision anything yet; an admin must approve it
+     * via `AdminVectorCollectionController` (`/brain/admin/vector-collections/:id/approve`) before
+     * `collection: label` resolves anywhere else in this namespace. Idempotent: calling again with
+     * the same `label` while pending/approved returns the existing request instead of duplicating.
+     * `dimension`, if given, must equal the platform's current default embedding dimension - custom
+     * collections get physical isolation, not a different vector dimension (see
+     * `VectorCollectionRequestService`'s class doc for why).
+     */
+    requestCollection: (params: {
+      label: string;
+      reason?: string;
+      dimension?: number;
+    }): Promise<{
+      id: string;
+      label: string;
+      collection_name: string;
+      status: 'pending' | 'approved' | 'rejected';
+      dimension: number;
+    }> => this.call('vector.requestCollection', params),
+    /** Checks the status of a collection request made via `requestCollection()`. */
+    getCollectionStatus: (
+      label: string,
+    ): Promise<{
+      status: 'pending' | 'approved' | 'rejected' | 'not_requested';
+      label: string;
+      collection_name?: string;
+    }> => this.call('vector.getCollectionStatus', { label }),
   };
 
   readonly datasource = {
@@ -1179,29 +1325,42 @@ export class SDKClient {
    */
   readonly redis = {
     get: (key: string): Promise<string | null> => this.call('storage.redisGet', { key }),
+    /** Backend's `redisSet` returns `{ success: true }`, not the raw `'OK'` this promises (ioredis
+     *  convention) - unwrapped here so the declared return type is actually true at runtime, not
+     *  just documentation. Same for every other method below whose backend handler wraps its
+     *  result in an object instead of returning the primitive ioredis itself would. */
     set: (key: string, value: string | number | Buffer): Promise<'OK'> =>
-      this.call('storage.redisSet', { key, value }),
+      this.call('storage.redisSet', { key, value }).then(() => 'OK' as const),
     setex: (key: string, seconds: number, value: string | number | Buffer): Promise<'OK'> =>
-      this.call('storage.redisSet', { key, value, options: { EX: seconds } }),
+      this.call('storage.redisSet', { key, value, options: { EX: seconds } }).then(() => 'OK' as const),
+    /** Backend's `redisDel` doesn't report how many keys actually existed (`{ success: true }`
+     *  either way) - this can only report the count of keys *requested*, not keys that actually
+     *  existed and were removed (matches ioredis's return shape, not its exact semantics). */
     del: (...keys: string[]): Promise<number> =>
-      this.call('storage.redisDel', { key: keys.length === 1 ? keys[0] : keys }),
+      this.call('storage.redisDel', { key: keys.length === 1 ? keys[0] : keys }).then(() => keys.length),
+    /** Backend's `redisHas` only ever checks a single key (`{ exists: boolean }`) even when this is
+     *  called with several - passing more than one `key` silently checks just the first. */
     exists: (...keys: string[]): Promise<number> =>
-      this.call('storage.redisHas', { key: keys.length === 1 ? keys[0] : keys }),
-    incr: (key: string): Promise<number> => this.call('storage.redisIncr', { key }),
+      this.call('storage.redisHas', { key: keys.length === 1 ? keys[0] : keys }).then((r: { exists: boolean }) => (r?.exists ? 1 : 0)),
+    incr: (key: string): Promise<number> => this.call('storage.redisIncr', { key }).then((r: { value: number }) => r?.value),
     incrby: (key: string, increment: number): Promise<number> =>
-      this.call('storage.redisIncr', { key, amount: increment }),
+      this.call('storage.redisIncr', { key, amount: increment }).then((r: { value: number }) => r?.value),
     /** Confirmed against `PluginStorageService.redisDecr` - previously reachable only via `call()`. */
-    decr: (key: string): Promise<number> => this.call('storage.redisDecr', { key }),
+    decr: (key: string): Promise<number> => this.call('storage.redisDecr', { key }).then((r: { value: number }) => r?.value),
     decrby: (key: string, decrement: number): Promise<number> =>
-      this.call('storage.redisDecr', { key, amount: decrement }),
+      this.call('storage.redisDecr', { key, amount: decrement }).then((r: { value: number }) => r?.value),
     hget: (key: string, field: string): Promise<string | null> =>
       this.call('storage.redisHget', { key, field }),
+    /** Backend's `redisHset` returns `{ success: true }`, not a real "new fields added" count -
+     *  always resolves to 1 on success (matches ioredis's return shape, not its exact semantics). */
     hset: (key: string, field: string, value: string | number): Promise<number> =>
-      this.call('storage.redisHset', { key, field, value }),
+      this.call('storage.redisHset', { key, field, value }).then(() => 1),
     hgetall: (key: string): Promise<Record<string, string>> =>
       this.call('storage.redisHgetall', { key }),
     hdel: (key: string, ...fields: string[]): Promise<number> =>
-      this.call('storage.redisHdel', { key, field: fields.length === 1 ? fields[0] : fields }),
+      this.call('storage.redisHdel', { key, field: fields.length === 1 ? fields[0] : fields }).then(
+        (r: { deletedCount: number }) => r?.deletedCount,
+      ),
     keys: (pattern: string): Promise<string[]> => this.call('storage.redisKeys', { pattern }),
   };
 

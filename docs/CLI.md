@@ -180,6 +180,24 @@ SDK calls made while running default to the **production** backend (`api.aivin.c
 `SDK_ENDPOINT` isn't set in `.env` - point it at a local/dev backend instead if you don't want
 that (see [Environment variables](#environment-variables) below).
 
+### Hot-reload
+
+Saving `src/**` or `manifest.json` re-imports the plugin in place - no more Ctrl+C + `aivin start`
+again after every edit. Both the real gRPC server and the `:4001` HTTP test shim pick up the change
+together. A broken save (syntax error, missing export) is reported and the *previous* working
+version keeps serving until you fix it - a typo mid-edit doesn't kill the running server.
+
+```
+♻️  Reloaded (src/main.ts): my-plugin (My Plugin) v0.1.0
+```
+
+On by default in development; disabled automatically inside a real deployed container (detected via
+`SDK_SECRET_FILE`, which only a real deploy sets - `NODE_ENV=production` alone doesn't reliably mean
+"deployed", the platform's own container build never sets it). This same file is also the
+container's entrypoint in production, where the plugin source is also bind-mounted read-only, so
+there'd be nothing for the watcher to see even without this check. Turn it off by hand with
+`--no-watch` or `AIVIN_START_WATCH=false`.
+
 ### Live per-call debugging: `--debug` / `--debug-json`
 
 By default you only see a trace summary once the whole invocation finishes (`AIVIN_TRACE`, on by
@@ -442,6 +460,13 @@ Options:
                        first one)
   --agent <id>         Agent id to run as, if the plugin needs one for
                        HIL/confirm behavior to be accurate
+  --watch-logs         Also stream the plugin's own live console output inline
+                       (same feed as `aivin plugin logs`) - no second terminal
+                       needed. Requires permission to view that plugin's logs;
+                       most store plugins from other orgs just fall back to
+                       the REST result only.
+  --save               Write this run's result to .test/trigger/<ts>.json
+  --compare <file>     Diff this run against a previously --save'd file
 ```
 
 ```bash
@@ -470,11 +495,45 @@ infer - explicit values win over auto-mapped ones per field.
 What gets printed:
 - `--- Log ---` - the backend's own mapping/execution stage messages (`processing_log`), if any.
   This is **not** your plugin's own `console.log()` output from inside `main.ts` - it's everything
-  the HTTP response itself carries, printed after the call completes. Run `aivin plugin logs` in
-  another terminal first if you want to watch your plugin's own console output live while this runs.
+  the HTTP response itself carries, printed after the call completes.
 - `--- Auto-mapped input ---` - what `-a`'s prompt actually got mapped to (`mapped_arguments`),
   only present in auto mode.
 - `--- Result: <status> ---` - the plugin's real `status`/`message`/`error_code`/`data`.
+- `--- Compare ---` (only with `--compare <file>`) - status + data diffed against the saved run.
+
+Both the workspace lookup and the execute call have a client-side timeout (15s and 3 minutes) - a
+hung backend fails with a clear error instead of `trigger` sitting there forever. Override the
+execute one with `AIVIN_TRIGGER_TIMEOUT_MS` if you have a legitimately slow plugin.
+
+### Watching your plugin's own console output inline: `--watch-logs`
+
+By default `trigger` only shows what's above - not the plugin's own `console.log()`/`sdk.log()`
+calls from inside `main.ts`. Pass `--watch-logs` to subscribe to that live, over the same channel
+`aivin plugin logs` uses, right before firing the call - one terminal instead of two:
+
+```bash
+aivin plugin trigger --watch-logs "summarize this" '{"text":"..."}'
+```
+
+This is permission-scoped server-side to plugins you can see the container logs for (your own or
+your org's deployments). Triggering a plugin from the public store that some other org owns will
+print `(--watch-logs: no live console output - ...)` and fall back to the REST result only - there's
+no way around that from the CLI, raw container stdout isn't something the platform exposes across
+org boundaries.
+
+### Turning ad-hoc tries into a regression check: `--save` / `--compare`
+
+```bash
+aivin plugin trigger "summarize this" '{"text":"..."}' --save
+# Saved: .test/trigger/2026-01-15T10-30-00-000Z.json
+
+# ...later, after changing the plugin (or re-testing the same store plugin)...
+aivin plugin trigger "summarize this" '{"text":"..."}' \
+  --compare .test/trigger/2026-01-15T10-30-00-000Z.json
+```
+
+Lighter-weight than `aivin test`'s full deploy+smoke-test+report flow - useful for a quick "did this
+still behave the same way" check on any plugin you can trigger, including ones you don't own.
 
 ## `aivin plugin logs [pluginId]`
 

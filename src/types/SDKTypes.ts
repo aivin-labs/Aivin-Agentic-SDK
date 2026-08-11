@@ -110,6 +110,51 @@ export interface LLMPromptOptions {
   websearch?: 'none' | 'low' | 'medium' | 'high';
 }
 
+/** Verified against the backend's real `MediaItem` (`src/base/dto/BaseDTO.ts`) - the shape
+ *  `ai.ocr` expects for its `image` argument. Either `url` or `file` (base64 dataURL/Buffer) must
+ *  actually resolve to real image bytes server-side; `id` is caller-chosen, not looked up. */
+export interface MediaItem {
+  id: string;
+  url: string;
+  mime?: string;
+  extension?: string;
+  name?: string;
+  size?: number | string;
+  file?: any;
+}
+
+/** `ai.image`/`ai.video`-only options - verified against the backend's real `MediaPromptOptions`
+ *  (`src/ai/dto/MediaGenerationDTO.ts`). `max_cost_usd` is the one worth knowing about early: set
+ *  it to force a downgrade to a cheaper tier (or throw) instead of silently spending more than
+ *  expected - there is no other client-side cost guard for media generation. */
+export interface MediaPromptOptions extends LLMPromptOptions {
+  image_opts?: Record<string, any>;
+  video_opts?: Record<string, any>;
+  /** Skip semantic routing, pick a tier directly. Image: quality|balanced|fast|budget|text|vector|
+   *  creative|cinematic. Video: quality|balanced|fast|budget|motion|cinematic|creative|character. */
+  media_tier?: string;
+  /** Preference among several models in the same tier. */
+  media_preference?: 'quality' | 'price' | 'balanced';
+  /** Max USD for this one request - over-estimate triggers auto-downgrade to a cheaper tier, or
+   *  throws if no tier fits. */
+  max_cost_usd?: number;
+}
+
+/** Verified against the backend's real `MediaGenerationResult` (`src/ai/dto/MediaGenerationDTO.ts`) -
+ *  the return shape of `ai.image`/`ai.video`. Exactly one of `url`/`data` is populated depending on
+ *  whether the result was uploaded to storage or returned inline as base64. */
+export interface MediaGenerationResult {
+  url?: string;
+  data?: string;
+  mimeType?: string;
+  width?: number;
+  height?: number;
+  file?: any;
+  created?: number;
+  provider?: string;
+  model?: string;
+}
+
 /**
  * `agent.reply`-only options - a superset of `LLMPromptOptions`. `rich_content` has no meaning for
  * `ai.prompt`/`ai.promptStream` (those never touch chat rendering), which is why it lives here and
