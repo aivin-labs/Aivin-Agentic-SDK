@@ -1,0 +1,10 @@
+{
+  "id": "echo-plugin-fixture",
+  "name": "echo-plugin-fixture",
+  "description": "Test fixture for PluginWorkerHost/PluginWorkerRuntime - not a real plugin.",
+  "input": {
+    "action": "string",
+    "payload": "any",
+    "path": "string"
+  }
+}

@@ -12,7 +12,8 @@ import os from 'os';
 import dotenv from 'dotenv';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname } from 'path';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash, randomUUID } from 'crypto';
+import WSClient from 'ws';
 import { io } from 'socket.io-client';
 import readline from 'readline';
 // Same flatten logic PluginServer.ts uses for local/production runtime resolution - imported from
@@ -3878,7 +3879,19 @@ function missionAuthHeaders() {
   if (!apiKey) {
     console.log(chalk.yellow('⚠️  API_KEY not set - run `aivin login` first'));
   }
-  return { headers: { Authorization: `Bearer ${apiKey || 'dev-token'}` } };
+  // `x-client-slug` - required for any request hitting the API host directly (no browser
+  // Origin/Referer for TrustDomainService to map): checkRegisteredClient falls back to the Host
+  // header otherwise (e.g. "beta_api_aivin_vn"), which never matches a real registered_clients
+  // entry - not a missing-tenant error, just a gap between "FE calls via its own domain" (has an
+  // Origin) and "CLI/SDK calls the API host directly" (nothing to map but this header). Same fix
+  // as test-sdk's mintCap.ts applies for its own direct calls.
+  const clientSlug = apiKey ? parseApiKeyClient(apiKey) : undefined;
+  return {
+    headers: {
+      Authorization: `Bearer ${apiKey || 'dev-token'}`,
+      ...(clientSlug ? { 'x-client-slug': clientSlug } : {}),
+    },
+  };
 }
 
 function missionServerUrl() {
@@ -4154,6 +4167,702 @@ function streamMissionLog(serverUrl, apiKey, threadId, { idleTimeoutMs = 120_000
     console.log(chalk.gray(`📡 Watching live progress for ${threadId}... (Ctrl+C to stop watching - the run keeps going either way)\n`));
     bumpIdleTimer();
   });
+}
+
+// ── `aivin browser` - dedicated AI Browser trigger with a real interactive viewer for HIL ──────
+//
+// Unlike `sdk.browser.run()`/`runStream()` (code-plugin escape hatch, deliberately refuses to
+// suspend on HIL - see docs/sdk/browser.md), this goes through the SAME `/agent/start-work` path
+// `aivin do` uses, because that's the only trigger path wired to the real BullMQ suspend/resume
+// plumbing (`PluginBridge.trigger()`) - `/plugins/execute` (what `aivin plugin trigger` calls)
+// does NOT catch HilSuspendSignal at all and would just 500 on a mission that needs a human.
+// The mission prompt is prefixed to bias the agent's own NLU tool-selection toward AI Browser
+// specifically (not a hard guarantee - there's no "force this exact tool" param exposed on
+// start-work today - but reliable in practice for an unambiguous browser-shaped mission).
+const BROWSER_MISSION_PREFIX =
+  'Use the AI Browser tool (official.ai_browser) to accomplish the following mission directly - do not just describe how, actually browse: ';
+
+/**
+ * Self-contained viewer page: connects to the SAME Socket.IO channel the web app's HIL screencast
+ * panel uses (AIBrowserGateway/AIBrowserScreencastService), renders the live CDP frame stream
+ * fullscreen on a <canvas>, and relays mouse/keyboard back as `browser:click`/`type`/`scroll`/...
+ * - the exact same wire protocol, just a purpose-built fullscreen client instead of the chat UI's
+ * embedded panel. `token`/`client` are injected server-side (this file is generated fresh per
+ * `aivin browser` run, never written to disk) - not exposed via query string, which would leak
+ * into shell history/proxy logs/browser history.
+ */
+function browserViewerHtml({ serverUrl, apiKey, tenantClient }) {
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>aivin browser - live session</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #111; overflow: hidden; }
+  #status { position: fixed; top: 0; left: 0; right: 0; padding: 8px 14px; background: rgba(0,0,0,.7);
+            color: #eee; font: 13px/1.4 -apple-system, Segoe UI, sans-serif; z-index: 10; display: flex;
+            justify-content: space-between; align-items: center; }
+  #status button { background: #2563eb; color: #fff; border: none; padding: 6px 14px; border-radius: 6px;
+                    font-size: 13px; cursor: pointer; }
+  #status button:hover { background: #1d4ed8; }
+  #stage { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex;
+           align-items: center; justify-content: center; }
+  canvas { cursor: default; box-shadow: 0 0 40px rgba(0,0,0,.6); }
+  #waiting { color: #888; font: 15px -apple-system, Segoe UI, sans-serif; text-align: center; }
+</style>
+</head>
+<body>
+<div id="status">
+  <span id="statusText">Đang kết nối...</span>
+  <button id="doneBtn" style="display:none">✅ Xong - tiếp tục mission</button>
+</div>
+<div id="stage"><div id="waiting">Đang chờ mission mở phiên tương tác (HIL)...</div></div>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+(function () {
+  const serverUrl = ${JSON.stringify(serverUrl)};
+  const apiKey = ${JSON.stringify(apiKey)};
+  const tenantClient = ${JSON.stringify(tenantClient)};
+  const statusText = document.getElementById('statusText');
+  const doneBtn = document.getElementById('doneBtn');
+  const stage = document.getElementById('stage');
+
+  let sessionKey = null;
+  let canvas = null, ctx = null;
+  let viewportW = 1280, viewportH = 800;
+
+  const socket = io(serverUrl, { auth: { token: apiKey }, transports: ['websocket'], reconnection: true });
+
+  socket.on('connect_error', (e) => { statusText.textContent = 'Lỗi kết nối: ' + e.message; });
+  socket.on('connect', () => { statusText.textContent = 'Đã kết nối - chờ phiên tương tác cho ' + tenantClient + '...'; });
+
+  function ensureCanvas() {
+    if (canvas) return;
+    stage.innerHTML = '';
+    canvas = document.createElement('canvas');
+    canvas.width = viewportW;
+    canvas.height = viewportH;
+    fitCanvas();
+    stage.appendChild(canvas);
+    ctx = canvas.getContext('2d');
+    wireInput();
+  }
+
+  function fitCanvas() {
+    if (!canvas) return;
+    const availW = window.innerWidth, availH = window.innerHeight - 40;
+    const scale = Math.min(availW / viewportW, availH / viewportH, 1);
+    canvas.style.width = Math.round(viewportW * scale) + 'px';
+    canvas.style.height = Math.round(viewportH * scale) + 'px';
+  }
+  window.addEventListener('resize', fitCanvas);
+
+  socket.on('browser:cast-start', (payload) => {
+    sessionKey = payload.clientId;
+    viewportW = payload.viewportWidth || 1280;
+    viewportH = payload.viewportHeight || 800;
+    statusText.textContent = 'Phiên tương tác: ' + sessionKey + ' (' + (payload.url || '') + ')';
+    doneBtn.style.display = 'inline-block';
+    socket.emit('join-room', { name: 'aivin-cli', rooms: ['aibrowser:' + sessionKey] });
+    ensureCanvas();
+  });
+
+  socket.on('browser:screenshot', (payload) => {
+    if (!payload || !payload.screenshot) return;
+    ensureCanvas();
+    const bytes = payload.screenshot instanceof ArrayBuffer ? new Uint8Array(payload.screenshot) : payload.screenshot;
+    const blob = new Blob([bytes], { type: 'image/jpeg' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); URL.revokeObjectURL(url); };
+    img.src = url;
+    if (payload.title) statusText.textContent = payload.title + '  —  ' + (payload.url || '');
+  });
+
+  socket.on('browser:cast-error', (payload) => {
+    statusText.textContent = '⚠️ ' + (payload.reason || 'Mất kết nối phiên trình duyệt');
+  });
+
+  socket.on('browser:resolved', () => {
+    statusText.textContent = '✅ Đã gửi tín hiệu hoàn tất - mission đang tiếp tục...';
+    doneBtn.style.display = 'none';
+  });
+
+  doneBtn.addEventListener('click', () => {
+    if (!sessionKey) return;
+    socket.emit('browser:resolve', { clientId: sessionKey, option: 'approve' });
+  });
+
+  function toPageCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) * (viewportW / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (viewportH / rect.height));
+    return { x, y };
+  }
+
+  const SPECIAL_KEYS = {
+    Enter: '__ENTER__', Backspace: '__BACKSPACE__', Delete: '__DELETE__', Tab: '__TAB__',
+    Escape: '__ESCAPE__', ArrowUp: '__ARROW_UP__', ArrowDown: '__ARROW_DOWN__',
+    ArrowLeft: '__ARROW_LEFT__', ArrowRight: '__ARROW_RIGHT__', Home: '__HOME__', End: '__END__',
+    PageUp: '__PAGE_UP__', PageDown: '__PAGE_DOWN__', F5: '__F5__', F12: '__F12__',
+  };
+
+  function wireInput() {
+    canvas.addEventListener('click', (e) => {
+      if (!sessionKey) return;
+      const { x, y } = toPageCoords(e);
+      socket.emit('browser:click', { clientId: sessionKey, x, y });
+    });
+    canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (!sessionKey) return;
+      const { x, y } = toPageCoords(e);
+      socket.emit('browser:rightclick', { clientId: sessionKey, x, y });
+    });
+    canvas.addEventListener('dblclick', (e) => {
+      if (!sessionKey) return;
+      const { x, y } = toPageCoords(e);
+      socket.emit('browser:dblclick', { clientId: sessionKey, x, y });
+    });
+    let lastHover = 0;
+    canvas.addEventListener('mousemove', (e) => {
+      if (!sessionKey) return;
+      const now = Date.now();
+      if (now - lastHover < 50) return;
+      lastHover = now;
+      const { x, y } = toPageCoords(e);
+      socket.emit('browser:hover', { clientId: sessionKey, x, y });
+    });
+    canvas.addEventListener('wheel', (e) => {
+      if (!sessionKey) return;
+      e.preventDefault();
+      socket.emit('browser:scroll', { clientId: sessionKey, deltaY: e.deltaY });
+    }, { passive: false });
+    canvas.tabIndex = 0;
+    canvas.addEventListener('keydown', (e) => {
+      if (!sessionKey) return;
+      if (e.ctrlKey || e.metaKey) return; // let browser-level shortcuts (devtools, refresh...) through
+      const special = SPECIAL_KEYS[e.key];
+      if (special) {
+        e.preventDefault();
+        socket.emit('browser:type', { clientId: sessionKey, text: special });
+        return;
+      }
+      if (e.key.length === 1) {
+        e.preventDefault();
+        socket.emit('browser:type', { clientId: sessionKey, text: e.key });
+      }
+    });
+    canvas.addEventListener('mouseenter', () => canvas.focus());
+  }
+})();
+</script>
+</body>
+</html>`;
+}
+
+/**
+ * Serves the viewer page on a random local port (127.0.0.1 only - never exposed beyond this
+ * machine) and opens it in the default OS browser. The HTTP server is torn down when the CLI
+ * process exits (SIGINT/mission end) - it only needs to live for the duration of `aivin browser`.
+ */
+function openBrowserViewer(serverUrl, apiKey, tenantClient) {
+  return new Promise((resolve) => {
+    const html = browserViewerHtml({ serverUrl, apiKey, tenantClient });
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      const url = `http://127.0.0.1:${port}/`;
+      console.log(chalk.cyan(`\n🖥️  Mở phiên tương tác trực tiếp: ${url}`));
+      openBrowser(url);
+      resolve(server);
+    });
+  });
+}
+
+/**
+ * Same live-progress watcher as `streamMissionLog`, plus: on the first `ai_browser.hil_required`
+ * event (mission hit a step that needs a human - captcha, login, free-text confirmation), opens
+ * the fullscreen viewer automatically instead of leaving the user to go find it. Only opens once
+ * per run even if HIL fires again later (e.g. a second captcha) - the SAME viewer page keeps
+ * working across multiple HIL rounds since it just reacts to whatever `browser:cast-start` fires
+ * next on this tenant's room.
+ */
+function streamBrowserMissionLog(serverUrl, apiKey, threadId, tenantClient, { idleTimeoutMs = 120_000 } = {}) {
+  return new Promise((resolve) => {
+    const socket = io(serverUrl, { auth: { token: apiKey || 'dev-token' }, transports: ['websocket'], reconnection: true });
+
+    let idleTimer;
+    let settled = false;
+    let viewerOpened = false;
+    const statusIcon = (status) =>
+      status === 'error' ? chalk.red('✗') : status === 'success' ? chalk.green('✓') : status === 'warning' ? chalk.yellow('!') : chalk.gray('·');
+
+    const stop = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(idleTimer);
+      socket.disconnect();
+      process.off('SIGINT', stop);
+      resolve();
+    };
+
+    const bumpIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        console.log(chalk.gray(`\n(no activity for ${Math.round(idleTimeoutMs / 1000)}s - stopped watching; the run may still be going in the background)`));
+        stop();
+      }, idleTimeoutMs);
+    };
+
+    process.on('SIGINT', stop);
+
+    socket.on('connect_error', (error) => {
+      console.log(chalk.yellow(`⚠️  Couldn't watch live progress (${error.message}) - the run continues regardless.`));
+      stop();
+    });
+
+    for (const eventName of MISSION_LOG_EVENTS) {
+      socket.on(eventName, (payload) => {
+        if (!payload || payload.thread_id !== threadId) return;
+        bumpIdleTimer();
+        const time = new Date(payload.timestamp || Date.now()).toLocaleTimeString();
+        const label = payload.event_key || eventName;
+        console.log(`${chalk.gray(`[${time}]`)} ${statusIcon(payload.status)} ${chalk.gray(label)} ${payload.message || ''}`.trimEnd());
+
+        if (payload.event_key === 'ai_browser.hil_required' && !viewerOpened) {
+          viewerOpened = true;
+          console.log(chalk.magenta('\n👤 Mission cần bạn tương tác trực tiếp (captcha/đăng nhập/xác nhận) - đang mở trình duyệt...'));
+          openBrowserViewer(serverUrl, apiKey, tenantClient).catch((e) =>
+            console.log(chalk.yellow(`⚠️  Không mở được viewer tự động: ${e.message} - thử lại bằng \`aivin browser --view ${tenantClient}\`.`)),
+          );
+        }
+        // `execute-interactive` calls triggerMission directly (not the multi-step `flow.*` runner
+        // aivin do's missions go through), so its real terminal signal is ai_browser.success/failed,
+        // not anything in MISSION_DONE_EVENT_KEYS - checked in addition to (not instead of) that set
+        // since this function is also reused as a fallback for --remote missions triggered elsewhere.
+        if (payload.event_key === 'ai_browser.success' || payload.event_key === 'ai_browser.failed' || MISSION_DONE_EVENT_KEYS.has(payload.event_key)) stop();
+      });
+    }
+
+    console.log(chalk.gray(`📡 Watching live progress for ${threadId}... (Ctrl+C to stop watching - the run keeps going either way)\n`));
+    bumpIdleTimer();
+  });
+}
+
+// ── `aivin browser` default mode: drive the user's OWN local, already-running browser ──────────
+//
+// Real cookies/logins, real fingerprint - much better bot-detection resistance than the server-
+// side pooled browser `--remote` uses. Architecture: a raw WebSocket relay on the backend
+// (BrowserTunnelRelay) pairs this CLI's connection to the user's local Chrome CDP endpoint with
+// AIBrowserService's own `BrowserIO.connect(...)` call server-side - the EXISTING agentic loop
+// (causality, bot-guard, semantic matching, HIL) drives that real browser unmodified, this file
+// only ever pipes opaque frames, never inspects them.
+
+const BROWSER_CLI_AGENT_CACHE_PATH = path.join(os.homedir(), '.aivin', 'browser-cli-agents.json');
+const CHROME_DEBUG_PORT = 9222;
+
+function loadBrowserCliAgentCache() {
+  try {
+    return JSON.parse(fs.readFileSync(BROWSER_CLI_AGENT_CACHE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveBrowserCliAgentCache(cache) {
+  fs.mkdirSync(path.dirname(BROWSER_CLI_AGENT_CACHE_PATH), { recursive: true });
+  fs.writeFileSync(BROWSER_CLI_AGENT_CACHE_PATH, JSON.stringify(cache, null, 2) + '\n');
+}
+
+/**
+ * `aivin browser` shouldn't require the user to know/pick an "agent" - AI Browser is what actually
+ * does the work, the agent is just session/HIL identity plumbing the platform's data model requires
+ * underneath. Creates one dedicated agent per workspace the first time, with `official.ai_browser`
+ * already enabled, and caches its id so every later run is instant. Both API calls below (create,
+ * then a second update call with `plugins.plugin_ids`) were verified working directly against the
+ * API this session - `workspace_id` must be a query param on the update call (the DTO whitelists
+ * it out of the body), and name/nickname/email must be repeated even though only `plugins` changed.
+ */
+async function resolveOrCreateBrowserAgent(serverUrl, authHeaders, workspace) {
+  const workspaceId = workspace.id || workspace._id;
+  const cache = loadBrowserCliAgentCache();
+  const cachedId = cache[workspaceId];
+  if (cachedId && workspace.agents?.some((a) => (a.id || a.agent_id) === cachedId)) {
+    return cachedId;
+  }
+
+  console.log(chalk.gray('   (no cached browser agent for this workspace yet - creating one, one-time only)'));
+  const identity = {
+    name: 'AI Browser (CLI)',
+    nickname: 'aivin-browser-cli',
+    email: `aivin-browser-cli+${workspaceId}@local.invalid`,
+  };
+
+  // `/ai-staff/update` requires name/nickname/email again even though only `plugins` is actually
+  // changing (confirmed while testing) - default to the NEW agent's own identity, but when falling
+  // back to an EXISTING agent below, this must become THAT agent's real identity instead, or the
+  // update call would silently overwrite/rename someone's real agent with the CLI's placeholder
+  // name - a real, destructive bug caught in review before ever shipping.
+  let agentId;
+  let updateIdentity = identity;
+  try {
+    const created = await createAgent(serverUrl, authHeaders, {
+      ...identity,
+      bio: 'Auto-created by `aivin browser` - runs AI Browser missions triggered from the CLI.',
+      workspaceId,
+    });
+    agentId = created.id || created.agent_id;
+    await pullAgentIntoWorkspace(serverUrl, authHeaders, { agentId, workspaceId });
+  } catch (error) {
+    // Confirmed hitting this directly while testing: accounts on a plan with a low agent-count
+    // limit get a clear "limit reached" error here. Rather than dead-ending, fall back to reusing
+    // the workspace's own first existing agent (if any) - enabling official.ai_browser on it is a
+    // much better outcome than making the user go figure out --agent <id> themselves after a
+    // confusing failure.
+    const existing = workspace.agents?.[0];
+    if (!existing) throw error; // nothing to fall back to - surface the original error as-is
+    const message = error.response?.data?.message || error.message;
+    console.log(chalk.yellow(`   ⚠️  Couldn't create a dedicated agent (${message}) - reusing "${existing.nickname || existing.name}" instead.`));
+    agentId = existing.id || existing.agent_id;
+    updateIdentity = { name: existing.name, nickname: existing.nickname, email: existing.email };
+  }
+
+  // Merge, don't replace - an existing agent (the fallback path above) may already have OTHER
+  // plugins enabled; sending plugin_ids: ['official.ai_browser'] alone would silently wipe those.
+  const existingPluginIds = workspace.agents?.find((a) => (a.id || a.agent_id) === agentId)?.plugins?.plugin_ids || [];
+  const mergedPluginIds = existingPluginIds.includes('official.ai_browser') ? existingPluginIds : [...existingPluginIds, 'official.ai_browser'];
+
+  await axios
+    .post(
+      `${serverUrl}/ai-staff/update?workspace_id=${encodeURIComponent(workspaceId)}`,
+      { id: agentId, ...updateIdentity, plugins: { plugin_ids: mergedPluginIds } },
+      authHeaders,
+    )
+    .catch((error) => {
+      const message = error.response?.data?.message || error.message;
+      console.log(chalk.yellow(`   ⚠️  Could not enable official.ai_browser on the agent automatically: ${message}`));
+    });
+
+  cache[workspaceId] = agentId;
+  saveBrowserCliAgentCache(cache);
+  console.log(chalk.green(`   ✅ Agent ready for AI Browser CLI use (cached for next time).`));
+  return agentId;
+}
+
+/** Chrome's own remote-debugging discovery endpoint - reachable only if the user already relaunched
+ *  Chrome with `--remote-debugging-port`. Returns the CDP WebSocket URL for the whole browser, or
+ *  null if nothing's listening there. */
+async function probeLocalChromeDebugger() {
+  try {
+    const res = await axios.get(`http://127.0.0.1:${CHROME_DEBUG_PORT}/json/version`, { timeout: 2000 });
+    return res.data?.webSocketDebuggerUrl || null;
+  } catch {
+    return null;
+  }
+}
+
+// Any Chromium-based browser works identically here (same --remote-debugging-port / CDP protocol)
+// - Edge listed FIRST since it's the actual OS default on a stock Windows install (and what this
+// was tested against), Chrome as the common alternative. `findLocalBrowser()` returns the first
+// one actually installed, in this order - not a guess at which the user "prefers", just which
+// exists to try launching.
+const LOCAL_BROWSERS = [
+  {
+    name: 'Microsoft Edge',
+    win32: ['C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'],
+    darwin: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    linux: 'microsoft-edge',
+    profileDirWin32: ['AppData', 'Local', 'Microsoft', 'Edge', 'User Data'],
+    profileDirDarwin: ['Library', 'Application Support', 'Microsoft Edge'],
+    profileDirLinux: ['.config', 'microsoft-edge'],
+  },
+  {
+    name: 'Google Chrome',
+    win32: ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'],
+    darwin: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    linux: 'google-chrome',
+    profileDirWin32: ['AppData', 'Local', 'Google', 'Chrome', 'User Data'],
+    profileDirDarwin: ['Library', 'Application Support', 'Google', 'Chrome'],
+    profileDirLinux: ['.config', 'google-chrome'],
+  },
+];
+
+/** First installed browser from LOCAL_BROWSERS, with its executable path and default profile dir
+ *  resolved for the current OS - or null if neither is found at any of the usual install paths. */
+function findLocalBrowser() {
+  const home = os.homedir();
+  for (const browser of LOCAL_BROWSERS) {
+    let exe = null;
+    let profileSegments;
+    if (process.platform === 'win32') {
+      exe = browser.win32.find((p) => fs.existsSync(p)) || null;
+      profileSegments = browser.profileDirWin32;
+    } else if (process.platform === 'darwin') {
+      exe = fs.existsSync(browser.darwin) ? browser.darwin : null;
+      profileSegments = browser.profileDirDarwin;
+    } else {
+      exe = browser.linux; // assumed on PATH on Linux - no reliable single default install path there
+      profileSegments = browser.profileDirLinux;
+    }
+    if (exe) return { name: browser.name, exe, profileDir: path.join(home, ...profileSegments) };
+  }
+  return null;
+}
+
+function launchCommandHint(browser) {
+  const label = browser ? browser.name : 'Chrome or Edge';
+  const exe = browser ? `"${browser.exe}"` : '<your browser>';
+  if (process.platform === 'win32') return `& ${exe} --remote-debugging-port=${CHROME_DEBUG_PORT}  (${label})`;
+  if (process.platform === 'darwin') return `open -a "${label}" --args --remote-debugging-port=${CHROME_DEBUG_PORT}`;
+  return `${browser ? browser.exe : 'google-chrome'} --remote-debugging-port=${CHROME_DEBUG_PORT}`;
+}
+
+function printChromeLaunchHelp() {
+  const browser = findLocalBrowser();
+  console.log(chalk.yellow('\n⚠️  No local Chrome/Edge found with remote debugging enabled.'));
+  console.log(chalk.gray("   `aivin browser` (default, local mode) drives YOUR OWN already-open browser - real cookies/logins, no server-side browser."));
+  console.log(chalk.gray('   Close it, then relaunch with remote debugging on:\n'));
+  console.log(`   ${chalk.cyan(launchCommandHint(browser))}\n`);
+  console.log(chalk.gray('   ...then run this command again. Or pass --launch-chrome to have aivin do that for you, or --remote for a server-side browser instead (no local browser needed).'));
+}
+
+/** `--launch-chrome`: best-effort auto-launch using the user's REAL default profile (so it carries
+ *  their actual cookies/logins) - refuses instead of silently failing if that profile is already
+ *  locked by a running instance (SingletonLock), since launching a second process against a locked
+ *  profile just errors confusingly rather than opening anything. */
+async function launchLocalChromeWithDebugging() {
+  const browser = findLocalBrowser();
+  if (!browser) {
+    throw new Error(`Could not find a local Chrome/Edge install automatically - relaunch one manually with: ${launchCommandHint(null)}`);
+  }
+  if (fs.existsSync(path.join(browser.profileDir, 'SingletonLock'))) {
+    throw new Error(
+      `${browser.name} is already running with your default profile (${browser.profileDir}) - close all its windows first, then retry, or relaunch it manually with: ${launchCommandHint(browser)}`,
+    );
+  }
+  console.log(chalk.gray(`   Launching your local ${browser.name} with remote debugging...`));
+  const child = spawn(browser.exe, [`--remote-debugging-port=${CHROME_DEBUG_PORT}`], { detached: true, stdio: 'ignore' });
+  child.unref();
+  for (let i = 0; i < 20; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const wsUrl = await probeLocalChromeDebugger();
+    if (wsUrl) return wsUrl;
+  }
+  throw new Error(`${browser.name} launched but its debug port never came up in time.`);
+}
+
+/**
+ * Opens 2 raw WebSocket connections - one to the backend's relay (authenticated by API key), one
+ * to the user's own local Chrome's real CDP endpoint - and pipes frames both directions verbatim.
+ * `close()` disconnects both sides; the user's actual browser window is never touched beyond this
+ * one CDP connection, closing the tunnel just detaches Puppeteer server-side.
+ */
+function openLocalTunnel(serverUrl, apiKey, chromeWsUrl) {
+  const tunnelId = randomUUID();
+  const relayUrl = `${serverUrl.replace(/^http/, 'ws')}/browser-tunnel/external?tunnel_id=${tunnelId}`;
+
+  // API key goes in a header, NOT a `?token=` query param - WS upgrade URLs are exactly the kind
+  // of thing that ends up verbatim in reverse-proxy/CDN/access logs, unlike headers.
+  const toBackend = new WSClient(relayUrl, { headers: { Authorization: `Bearer ${apiKey || ''}` } });
+  const toChrome = new WSClient(chromeWsUrl);
+
+  const relay = (from, to) => {
+    from.on('message', (data, isBinary) => {
+      if (to.readyState === WSClient.OPEN) to.send(data, { binary: isBinary });
+    });
+    from.on('close', () => {
+      if (to.readyState === WSClient.OPEN) to.close();
+    });
+    from.on('error', () => {
+      if (to.readyState === WSClient.OPEN) to.close();
+    });
+  };
+  relay(toBackend, toChrome);
+  relay(toChrome, toBackend);
+
+  const ready = Promise.all([
+    new Promise((resolve, reject) => {
+      toBackend.once('open', resolve);
+      toBackend.once('error', reject);
+    }),
+    new Promise((resolve, reject) => {
+      toChrome.once('open', resolve);
+      toChrome.once('error', reject);
+    }),
+  ]);
+
+  const close = () => {
+    try { toBackend.close(); } catch { /* already closed */ }
+    try { toChrome.close(); } catch { /* already closed */ }
+  };
+
+  return { tunnelId, ready, close };
+}
+
+async function runBrowserMissionLocal(mission, options) {
+  const serverUrl = missionServerUrl();
+  const apiKey = process.env.API_KEY;
+  const authHeaders = missionAuthHeaders();
+  const tenantClient = parseApiKeyClient(apiKey || '') || 'unknown';
+
+  let chromeWsUrl = await probeLocalChromeDebugger();
+  if (!chromeWsUrl) {
+    if (options.launchChrome) {
+      chromeWsUrl = await launchLocalChromeWithDebugging();
+    } else {
+      printChromeLaunchHelp();
+      throw new Error('No local Chrome with remote debugging found (see instructions above).');
+    }
+  }
+
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+  const agentId = options.agent || (await resolveOrCreateBrowserAgent(serverUrl, authHeaders, workspace));
+
+  console.log(chalk.blue('🌐 AI Browser (local - your own browser):'), mission);
+  console.log(chalk.gray(`   Workspace: ${workspace.name || workspace.id}`));
+
+  const tunnel = openLocalTunnel(serverUrl, apiKey, chromeWsUrl);
+  try {
+    await tunnel.ready;
+  } catch (error) {
+    tunnel.close();
+    throw new Error(`Could not open the local browser tunnel: ${error.message}`, { cause: error });
+  }
+
+  const sessionId = `browser-cli-${randomUUID()}`;
+  console.log(chalk.gray(`   Session: ${sessionId}`));
+
+  // Ctrl+C: request cooperative cancellation (same mechanism sdk.browser.cancel() uses - checked
+  // between agentic-loop steps, can't interrupt a step already in flight) AND close the tunnel.
+  // Closing the tunnel alone isn't enough to stop a mission stuck in an LLM call that hasn't
+  // touched the browser connection yet (confirmed while testing this) - the cancel request is what
+  // actually gets it to stop at its next chance to check. The tab this mission was using stays open
+  // either way - never force-closed, since local mode is explicitly "your own browser, your tabs".
+  let interrupted = false;
+  const onSigint = () => {
+    if (interrupted) return;
+    interrupted = true;
+    console.log(chalk.yellow('\n\n⏹  Stopping... (requesting cancellation - may take a moment, one agentic step at a time)'));
+    requestBrowserCancel(serverUrl, authHeaders).catch(() => {});
+    tunnel.close();
+    console.log(chalk.gray('   The tab this mission was using is still open in your browser - close it yourself if you don\'t need it.'));
+  };
+  process.on('SIGINT', onSigint);
+
+  // Fired concurrently, not sequentially - execute-interactive is a SYNCHRONOUS call (blocks until
+  // the mission ends), so the log watcher has to already be listening before/as it fires, not after.
+  const missionPromise = axios.post(
+    // `/plugins/` prefix: OfficialPluginModules.ts registers every official plugin module (incl.
+    // AIBrowserModule) via RouterModule.register({ path: 'plugins', ... }) - easy to miss, confirmed
+    // by testing directly against the API (plain /ai-browser/... 404s, /plugins/ai-browser/... works).
+    `${serverUrl}/plugins/ai-browser/execute-interactive`,
+    {
+      mission,
+      workspace_id: workspace.id || workspace._id,
+      agent_id: agentId,
+      session_id: sessionId,
+      data: { __local_tunnel_id: tunnel.tunnelId },
+    },
+    authHeaders,
+  );
+  const watchPromise = options.watch !== false ? streamBrowserMissionLog(serverUrl, apiKey, sessionId, tenantClient) : Promise.resolve();
+
+  try {
+    // execute-interactive responds immediately (fire-and-forget - see AIBrowserController.ts's
+    // comment on why: a synchronous wait here would hit the same Cloudflare 524 the gRPC
+    // browser.run() call did). The REAL outcome is whatever the log stream above already printed
+    // (ai_browser.success/failed) - this Promise.all is just making sure both sides are done.
+    await Promise.all([missionPromise, watchPromise]);
+  } catch (error) {
+    if (!interrupted) {
+      const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+      throw new Error(`AI Browser mission failed to start: ${message}`, { cause: error });
+    }
+  } finally {
+    process.off('SIGINT', onSigint);
+    tunnel.close();
+  }
+
+  if (!interrupted) {
+    console.log(chalk.gray('\n   Done - see the log lines above for the outcome, and your own browser for the result.'));
+  }
+}
+
+/** REST twin of `sdk.browser.cancel()` - the CLI has no gRPC client, only axios. See
+ *  AIBrowserController.cancel's comment for the exact semantics (cooperative, own-tenant-only). */
+async function requestBrowserCancel(serverUrl, authHeaders) {
+  await axios.post(`${serverUrl}/plugins/ai-browser/cancel`, {}, authHeaders);
+}
+
+async function runBrowserMissionRemote(mission, options) {
+  const serverUrl = missionServerUrl();
+  const apiKey = process.env.API_KEY;
+  const authHeaders = missionAuthHeaders();
+  const tenantClient = parseApiKeyClient(apiKey || '') || 'unknown';
+
+  const workspace = await resolveWorkspace(serverUrl, authHeaders, options.workspace);
+  // Same interactive resolver `aivin do` uses (not the throw-if-missing resolveAgentId) - a fresh
+  // workspace commonly has zero agents installed yet, and this offers to search/install/create one
+  // instead of just failing. AI Browser itself is always used as the TOOL; the agent is only the
+  // identity/session context the mission (and HIL suspend/resume) runs under.
+  const agent = await resolveAgentInteractive(serverUrl, authHeaders, workspace, options.agent);
+  const agentId = agent.id || agent.agent_id;
+
+  console.log(chalk.blue('🌐 AI Browser (remote - server-side browser):'), mission);
+  console.log(chalk.gray(`   Workspace: ${workspace.name || workspace.id}   Agent: ${agent.nickname || agent.name || agentId}`));
+
+  let response;
+  try {
+    response = await axios.post(
+      `${serverUrl}/agent/start-work`,
+      {
+        prompt: BROWSER_MISSION_PREFIX + mission,
+        mission: BROWSER_MISSION_PREFIX + mission,
+        workspace_id: workspace.id || workspace._id,
+        agent_id: agentId,
+        project_id: options.project,
+      },
+      authHeaders,
+    );
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || error.code || 'Unknown error';
+    throw new Error(`Failed to start AI Browser mission: ${message}`, { cause: error });
+  }
+
+  const result = response.data ?? {};
+  if (result.success === false) {
+    throw new Error(result.message || 'Failed to start AI Browser mission');
+  }
+  const threadId = result.data?.thread_id;
+  console.log(chalk.gray(`   Thread: ${threadId || 'unknown'}`));
+
+  if (options.watch !== false && threadId) {
+    await streamBrowserMissionLog(serverUrl, apiKey, threadId, tenantClient);
+  }
+}
+
+async function runBrowserMission(mission, options) {
+  const serverUrl = missionServerUrl();
+  const apiKey = process.env.API_KEY;
+  const tenantClient = parseApiKeyClient(apiKey || '') || 'unknown';
+
+  // --view alone (no mission) - just open the viewer for whatever HIL session is already active,
+  // without starting a new mission. Useful if the auto-open above was missed/closed by accident.
+  // Same for both modes - the viewer just reacts to whatever browser:cast-start fires next.
+  if (options.view) {
+    await openBrowserViewer(serverUrl, apiKey, tenantClient);
+    return;
+  }
+
+  if (options.remote) {
+    await runBrowserMissionRemote(mission, options);
+  } else {
+    await runBrowserMissionLocal(mission, options);
+  }
 }
 
 async function runMission(agentNickname, mission, options) {
@@ -4522,6 +5231,31 @@ async function deleteProjectCmd(projectId, options) {
   await deleteProjectById(serverUrl, authHeaders, { workspaceId: workspace.id || workspace._id, projectId });
   console.log(chalk.green(`✅ Project ${projectId} deleted.`));
 }
+
+program
+  .command('browser [mission]')
+  .description('Run an AI Browser mission - by default drives YOUR OWN local browser (real cookies/logins) with live progress; --remote uses a server-side browser instead')
+  .option('--remote', 'Use a server-side pooled browser instead of your own local one (no local Chrome needed, no real cookies/logins carried over)')
+  .option('--launch-chrome', "Local mode only: if no Chrome with remote debugging is found, launch the user's default Chrome install with it automatically")
+  .option('--workspace <id>', 'Workspace id to run in (default: your personal workspace)')
+  .option('--project <id>', 'Project id within the workspace (--remote only)')
+  .option('--agent <id>', "Agent id to run as (default: an auto-created/cached agent for local mode, or the workspace's default agent for --remote) - AI Browser is triggered as a tool this agent uses, real HIL suspend/resume requires an agent context")
+  .option('--no-watch', 'Fire the mission and return immediately - skip streaming live progress and auto-opening the viewer')
+  .option('--view', 'Just (re)open the fullscreen interactive viewer for whatever HIL session is already active - no mission is started')
+  .action(async (mission, options) => {
+    try {
+      if (!options.view) {
+        mission = await requireArg(mission, {
+          prompt: 'What should the AI Browser do?',
+          usage: 'Usage: aivin browser "<mission detail>"  (or: aivin browser --view to just reopen the interactive viewer)',
+        });
+      }
+      await runBrowserMission(mission, options);
+    } catch (error) {
+      console.error(chalk.red('❌'), error.message);
+      process.exit(1);
+    }
+  });
 
 const doCommand = program
   .command('do [agentNickname] [mission]')

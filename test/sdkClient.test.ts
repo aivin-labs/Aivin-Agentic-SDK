@@ -382,3 +382,86 @@ test('table.getTables() rejects a missing project_id locally', async () => {
     await (client.table.getTables as any)({ workspace_id: 'w1' });
   }, /table\.getTables.*project_id/s);
 });
+
+test('notification.push() remaps the documented user_id/body to the fields the backend actually reads (receiver_id/message)', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return undefined;
+  });
+
+  await client.notification.push({ user_id: 'u42', title: 'Hi', body: 'export ready' });
+
+  assert.equal(requests[0].namespace, 'notification.pushNotification');
+  assert.equal(requests[0].params.receiver_id, 'u42');
+  assert.equal(requests[0].params.message, 'export ready');
+  // the wrong-for-the-backend field names must not also leak through unremapped
+  assert.equal((requests[0].params as any).user_id, undefined);
+  assert.equal((requests[0].params as any).body, undefined);
+});
+
+test('notification.push() prefers an explicitly-passed receiver_id/message over a derived user_id/body', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return undefined;
+  });
+
+  await (client.notification.push as any)({
+    user_id: 'wrong-user',
+    receiver_id: 'right-user',
+    body: 'wrong body',
+    message: 'right message',
+  });
+
+  assert.equal(requests[0].params.receiver_id, 'right-user');
+  assert.equal(requests[0].params.message, 'right message');
+});
+
+test('notification.push() accepts receiver_ids (batch) and topic (broadcast) as alternatives to user_id', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return undefined;
+  });
+
+  await (client.notification.push as any)({ receiver_ids: ['u1', 'u2'], title: 'Hi', body: 'x' });
+  assert.deepEqual(requests[0].params.receiver_ids, ['u1', 'u2']);
+
+  await (client.notification.push as any)({ topic: 'billing-alerts', title: 'Hi', body: 'x' });
+  assert.equal(requests[1].params.topic, 'billing-alerts');
+});
+
+test('notification.push() rejects locally when no audience field (user_id/receiver_id/receiver_ids/topic) is given', async () => {
+  let called = false;
+  const client = makeClient(async () => {
+    called = true;
+    return undefined;
+  });
+
+  await assert.rejects(async () => {
+    await (client.notification.push as any)({ title: 'Hi', body: 'x' });
+  }, /notification\.push.*audience/s);
+  assert.equal(called, false, 'the network call must never fire when local validation fails');
+});
+
+test('notification.push() forwards channels/priority/prompt/messageIsHtml as-is', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return undefined;
+  });
+
+  await (client.notification.push as any)({
+    user_id: 'u1',
+    prompt: 'tell the user their export finished',
+    priority: 'urgent',
+    channels: ['database', 'email'],
+    messageIsHtml: true,
+  });
+
+  assert.equal(requests[0].params.prompt, 'tell the user their export finished');
+  assert.equal(requests[0].params.priority, 'urgent');
+  assert.deepEqual(requests[0].params.channels, ['database', 'email']);
+  assert.equal(requests[0].params.messageIsHtml, true);
+});

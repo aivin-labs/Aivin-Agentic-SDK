@@ -322,6 +322,62 @@ export const backfillColumnParamsSchema = z.object({
   default_value: z.any().optional(),
 });
 
+/**
+ * `notification.push` - verified field-by-field against the real backend handler chain
+ * (`be/src/notification/service/NotificationSDK.ts` -> `NotificationService.pushNotification` ->
+ * `NotificationRequest` DTO -> each engine's `render()`/`process()`). Two real bugs this schema-plus-
+ * remap combo fixes (see `push()` in SDKClient.ts for the remap, this schema only validates):
+ *   1. Audience: the backend resolves recipients from `user` (full object) / `receiver_id` /
+ *      `receiver_ids` / `topic` - it NEVER reads `user_id`. A bare `{ user_id, title, body }` call
+ *      round-tripped successfully (no thrown error) but silently delivered to nobody - the audience
+ *      list came back empty and `pushNotification`'s try/catch swallows that outcome.
+ *   2. Content: every engine (`DatabaseEngine`, `PushEngine`, `WebPushEngine`, `MessageEngine`,
+ *      `EmailEngine`) reads `notiReq.message`, never `notiReq.body` - a bare `body` was silently
+ *      dropped in favor of an AI-generated (`prompt`) or generic fallback instead of the caller's text.
+ * `receiver_id`/`message` (what the backend reads) are accepted directly too, so callers who already
+ * discovered the working field names aren't penalized.
+ */
+export const pushNotificationParamsSchema = z
+  .object({
+    user_id: z.string().optional(),
+    receiver_id: z.string().optional(),
+    receiver_ids: z.array(z.string()).optional(),
+    topic: z.string().optional(),
+    sender_id: z.string().optional(),
+    title: z.string().optional(),
+    body: z.string().optional(),
+    message: z.string().optional(),
+    /** Rendered into title/message via AI (`NotificationHelper`) when those aren't supplied directly. */
+    prompt: z.string().optional(),
+    /** i18n key (config/i18n/default.json), rendered per-recipient's language - takes precedence
+     *  over `title` when both are set. */
+    title_key: z.string().optional(),
+    message_key: z.string().optional(),
+    /** {{var}} interpolation values for title_key/message_key. */
+    vars: z.record(z.string(), z.any()).optional(),
+    /** Set when `body`/`message` is already fully-built HTML (e.g. an invoice) - EmailEngine sends
+     *  it as-is instead of escaping/wrapping it in the shared template. */
+    messageIsHtml: z.boolean().optional(),
+    /** Determines which engines are even eligible before `channels` filters further: low -> push
+     *  only; normal (default) -> push+database; high -> +message; urgent -> +email too. */
+    priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
+    /** Restricts delivery to exactly these channels - filters AFTER priority has already picked
+     *  eligible engines; does not substitute for priority (e.g. 'email' here still needs
+     *  priority high/urgent, since low/normal never make EmailEngine eligible in the first place). */
+    channels: z.array(z.enum(['database', 'push', 'message', 'email'])).optional(),
+    /** NotificationType enum value (be/src/base/enum/NotificationType.ts has 90+ members, e.g.
+     *  'task_assigned', 'general') - influences the AI-generated fallback content and is used as the
+     *  topic name when broadcasting without an explicit `topic`. Left as `string` here rather than a
+     *  literal union since that enum is large and changes independently of this SDK. */
+    type: z.string().optional(),
+    event: z.string().optional(),
+    args: z.record(z.string(), z.any()).optional(),
+  })
+  .catchall(z.any())
+  .refine((p) => !!(p.user_id || p.receiver_id || (p.receiver_ids && p.receiver_ids.length > 0) || p.topic), {
+    message: 'at least one of user_id, receiver_id, receiver_ids, or topic is required to resolve an audience',
+  });
+
 export const formatRowsForContextParamsSchema = z.object({
   table_id: z.string().min(1, 'table_id is required'),
   workspace_id: z.string().optional(),

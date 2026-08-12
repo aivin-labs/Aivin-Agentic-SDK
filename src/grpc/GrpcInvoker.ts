@@ -138,7 +138,14 @@ export function emitTraceForTest(trace: CallTrace): void {
   emitTrace(trace);
 }
 
-function emitTrace(trace: CallTrace): void {
+/**
+ * Fires a finished call through every `onCall()` listener - what `invokeHost`/`invokeHostStream`
+ * call internally on every real call, and what `worker/PluginWorkerRuntime`'s relayed `sdk.call`/
+ * `sdk.stream.*` calls also call directly (they never reach `invokeHost` itself, since the actual
+ * network call happens host-side - see `PluginWorkerHost`), so a sandboxed invocation's trace
+ * still gets a real `CallTrace` entry per call, same as an unsandboxed one.
+ */
+export function emitTrace(trace: CallTrace): void {
   for (const listener of callInterceptors) {
     try {
       listener(trace);

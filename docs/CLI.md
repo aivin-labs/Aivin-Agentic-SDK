@@ -895,6 +895,8 @@ machine picks it up automatically - there's no per-project credential to manage.
 | `AIVIN_BASE_URL`     | `deploy`, `test`, `plugin make/convert/trigger`, `login --basic` | `https://api.aivin.cloud`    | Only for a self-hosted or staging instance. Staging: `https://beta-api.aivin.vn`. |
 | `AIVIN_WEB_URL`      | `login` (browser flow)                             | `https://brain.aivin.cloud`  | Only for a self-hosted or staging instance.                   |
 | `LOCAL_TEST_PORT`    | `aivin start`                                       | `4001`                       | Only if `4001` is already taken on your machine.              |
+| `LOCAL_TEST_HOST`    | `aivin start`                                       | `127.0.0.1`                  | Loopback-only by default (`/invoke` has no auth) - only widen this if you deliberately want another device on your network to reach it. See `docs/SECURITY.md`. |
+| `AIVIN_SANDBOX_WORKER` | `aivin start`, deployed containers                | `false`                      | Set `true` to run `src/main.ts` inside an isolated `worker_threads.Worker` (no direct access to the container's secret, restricted fs/child_process) instead of loading it in-process. Off by default - see `docs/draft/plugins/worker-sandbox.md`. |
 
 Everything else (`SDK_SECRET`, `SDK_GRPC_SERVER_BIND`, `SDK_GRPC_TLS`, `NODE_ENV`, ...) is
 either injected automatically inside a deployed container or has a working zero-config default -

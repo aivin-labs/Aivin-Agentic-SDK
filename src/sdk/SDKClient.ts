@@ -20,6 +20,7 @@ import {
   getRowsParamsSchema,
   getTableParamsSchema,
   getTablesParamsSchema,
+  pushNotificationParamsSchema,
   removeParamsSchema,
   rollbackParamSchema,
   searchSemanticParamsSchema,
@@ -684,6 +685,50 @@ export class SDKClient {
      */
     cancel: (sessionId?: string): Promise<{ success: boolean; session_id: string }> =>
       this.call('browser.cancel', sessionId ? { session_id: sessionId } : {}),
+
+    /**
+     * Streaming counterpart of `run()` - identical mission/opts shape, but returns live per-step
+     * progress chunks as the mission runs, instead of only the final result once everything is
+     * done. Each chunk is the same step payload the chat UI's screencast panel receives over
+     * `browser:agent-step` (`{ step, type, url, summary, clientId }`), JSON-stringified:
+     * ```ts
+     * const { steps, result } = ctx.sdk.browser.runStream('...', { start_url: '...' });
+     * for await (const raw of steps) console.log(JSON.parse(raw));
+     * const final = await result;
+     * ```
+     * Solves two things `run()` can't: (1) real visibility into what the agent is doing while it's
+     * still running, useful for debugging a mission live instead of only seeing pass/fail at the
+     * end; (2) missions whose total duration exceeds an intermediate proxy's response-timeout (e.g.
+     * a reverse proxy/tunnel that gives up waiting after ~100s of silence) - because this is a
+     * stream, each step is a real byte flowing over the connection, so it's never mistaken for a
+     * stalled request and cut off, unlike a single unary call that stays silent until the whole
+     * mission resolves.
+     *
+     * Uses a longer built-in timeout than the SDK's general default (10 minutes, matching the
+     * documented AI Browser mission ceiling) since this call is specifically for long-running
+     * missions - unlike `run()`, which inherits the generic default and needs the `call()` escape
+     * hatch for a longer deadline (see docs/sdk/browser.md).
+     *
+     * Same HIL caveat as `run()`: not supported through this call either (see `run()`'s doc above).
+     */
+    runStream: (
+      mission: string,
+      opts?: {
+        start_url?: string;
+        success_criteria?: string[];
+        steps?: string[];
+        output_schema?: Record<string, any>;
+        [key: string]: any;
+      },
+    ): { steps: AsyncGenerator<string, void, void>; result: Promise<any> } => {
+      const handle = this.invokeStream<any>({
+        namespace: 'browser.runStream',
+        params: { mission, data: opts },
+        context: this.buildContext(),
+        timeoutMs: 600_000,
+      });
+      return { steps: handle.chunks, result: handle.final };
+    },
   };
 
   readonly project = {
@@ -901,17 +946,57 @@ export class SDKClient {
     }): Promise<any> => this.call('message.streamResponse', params),
   };
 
-  /**
-   * `push`/`sendMail` param shapes fixed to match the real `get notification()` in
-   * `src/base/SDK.ts`: single `user_id` (not `user_ids`) and `body` (not `content`/`html`).
-   */
   readonly notification = {
+    /**
+     * Multi-channel notification dispatch (in-app push, DB/Notification Center, internal message,
+     * email) via the backend's `NotificationService.pushNotification` pipeline.
+     *
+     * `user_id`/`body` here are remapped to the fields the backend actually reads (`receiver_id`/
+     * `message`) before the call leaves the client - see `pushNotificationParamsSchema` in
+     * `validation.ts` for the full story: sending `user_id`/`body` untranslated used to
+     * round-trip successfully while silently delivering to nobody (audience) and dropping the text
+     * (content). `receiver_id`/`message` are also accepted directly and take precedence if you
+     * pass them explicitly. Use `receiver_ids` (batch) or `topic` (broadcast to that topic's
+     * subscribers - see `subscribeTopic`/`unsubscribeTopic` below) instead of `user_id` for other
+     * audience shapes; at least one audience field is required (validated locally). Omit
+     * `title`/`body` and pass `prompt` instead to have the backend AI-generate localized
+     * title/message content for you. `channels` restricts delivery to specific channels;
+     * `priority` controls which engines are eligible in the first place (channels only filters
+     * further, it doesn't override priority - e.g. `channels: ['email']` still needs
+     * `priority: 'high'` or `'urgent'` to make EmailEngine eligible at all).
+     */
     push: (params: {
-      user_id: string;
-      title: string;
-      body: string;
+      user_id?: string;
+      receiver_ids?: string[];
+      topic?: string;
+      sender_id?: string;
+      title?: string;
+      body?: string;
+      prompt?: string;
+      title_key?: string;
+      message_key?: string;
+      vars?: Record<string, any>;
+      messageIsHtml?: boolean;
+      priority?: 'low' | 'normal' | 'high' | 'urgent';
+      channels?: ('database' | 'push' | 'message' | 'email')[];
+      type?: string;
       [key: string]: any;
-    }): Promise<void> => this.call('notification.pushNotification', params),
+    }): Promise<void> => {
+      const { user_id, body, ...rest } = validateParams(pushNotificationParamsSchema, params, 'notification.push');
+      return this.call('notification.pushNotification', {
+        ...rest,
+        receiver_id: rest.receiver_id ?? user_id,
+        message: rest.message ?? body,
+      });
+    },
+    /**
+     * NOTE: unlike `push()`, this does NOT support a per-workspace SMTP override - the backend
+     * bridge (`NotificationSDK.ts`'s `notification.sendMail` handler) destructures only
+     * `to`/`subject`/`html`/`body` and calls `EmailEngine.sendMail()` directly, ignoring any other
+     * field (including `workspace_id`/`cert`) passed here. If you need workspace-scoped SMTP,
+     * use `push()` with `channels: ['email']` and `priority: 'high'`/`'urgent'` instead - that path
+     * does read `workspace_id` (via `EmailEngine.process()`).
+     */
     sendMail: (params: {
       to: string;
       subject: string;

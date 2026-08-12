@@ -1,10 +1,47 @@
 # Design draft: worker-thread sandbox for plugin `main()`
 
-Status: **draft, not implemented**. Written in response to the residual risk noted in
+Status: **Phase 1 implemented**, behind `AIVIN_SANDBOX_WORKER=true` (default off - see
+`docs/CLI.md#environment-variables`). Written in response to the residual risk noted in
 `docs/SECURITY.md`'s "Future direction: a credential-holding sidecar" section - this is one way to
 build that sidecar *inside* the same OS process (a `worker_threads.Worker`) instead of as a
 separate process, avoiding new process-supervision/IPC-transport work while still getting the two
 concrete properties that section asks for.
+
+## Implementation notes (Phase 1, as actually shipped)
+
+The design below matches what shipped, with a few simplifications discovered while building it:
+
+- **No `RemoteSDKClient` needed.** `SDKClient` already accepts `invoke`/`invokeStream` overrides
+  via its constructor (`SDKClientOptions`, originally added for unit tests) - the worker just
+  constructs a normal `SDKClient` with those two swapped for relay functions. Every typed namespace
+  method (`ai.*`, `table.*`, ...) keeps working unmodified.
+- **No `console.log` relay message.** A `worker_threads.Worker`'s stdout/stderr pipe to the parent
+  process's real stdout/stderr by default (verified directly) - `trace.ts`'s existing
+  `installConsoleCapture()` (which runs the moment the worker imports `trace.ts`, same as the
+  non-sandboxed path) handles capture/redaction locally inside the worker's own module instance, no
+  extra protocol needed.
+- **`GrpcInvoker.ts`'s private `emitTrace` is now exported** (was already called via the
+  test-only `emitTraceForTest` escape hatch) - the worker's relay functions call it directly after
+  a relayed call/stream resolves, so `CallTrace` bookkeeping (and therefore `trace.events`) works
+  identically to the non-sandboxed path instead of silently staying empty.
+- **Shared plugin-loading logic extracted to `src/pluginLoader.ts`** (`loadPluginModule`,
+  `resolveTargetFunction`, `summarizeManifest`, `readManifest`) - used by both `PluginServer`
+  (direct load) and `worker/PluginWorkerRuntime` (same load, inside the worker), so the two paths
+  can't silently diverge in how they resolve a plugin project.
+- **Env allowlist is just `NODE_ENV`** for now (see "Env filtering" below) - nothing else is
+  forwarded into the worker's `process.env` by default.
+- **Long-lived worker, not one-per-invocation** - per the "Open questions" recommendation below.
+  `reload()` terminates and respawns a fresh worker (empty module cache by construction) rather
+  than reusing the non-sandboxed path's cache-busting `?t=timestamp` trick.
+- **Verified against a real fixture plugin + Node's Permission Model**, not just unit-tested in
+  isolation - `test/pluginWorkerHost.test.ts` proves a sandboxed plugin's own `fs.readFileSync()`
+  outside its project directory and `child_process` spawn both fail with `ERR_ACCESS_DENIED`,
+  while the same plugin's real `ctx.sdk.call()` still round-trips correctly through the relay.
+
+Not yet done (tracked as future phases, not blocking this one): the Phase 2-5 rollout plan below
+(dogfooding against a real deployed plugin, benchmarking, flipping the default), `resourceLimits`,
+and resolving the "Open questions" that don't block a default-off flag (env allowlist mechanism,
+rollout gating).
 
 ## Problem recap
 

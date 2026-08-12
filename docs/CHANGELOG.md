@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### 🐛 Fixed — `notification.push()` silently delivered nothing and dropped message text
+
+Verified field-by-field against the real backend handler chain
+(`NotificationSDK.ts` → `NotificationService.pushNotification` → `NotificationRequest` DTO → each
+engine's `render()`/`process()`) and found two field-name mismatches that both round-tripped without
+throwing, so neither was ever caught by a test that only checks "did the call succeed":
+
+1. **Audience**: the backend resolves recipients from `user` (full object) / `receiver_id` /
+   `receiver_ids` / `topic` — it never reads `user_id`. A bare `{ user_id, title, body }` call
+   resolved to an empty audience and `pushNotification`'s try/catch swallowed the resulting no-op.
+2. **Content**: every engine reads `notiReq.message`, never `notiReq.body` — a bare `body` was
+   silently dropped in favor of an AI-generated (`prompt`) or generic fallback message instead of
+   the caller's text.
+
+`push()` still accepts `user_id`/`body` (kept for API familiarity) but now remaps them to
+`receiver_id`/`message` before the call leaves the client, via a new `pushNotificationParamsSchema`
+(`validation.ts`) that also requires at least one real audience field (`user_id`/`receiver_id`/
+`receiver_ids`/`topic`) locally, so a missing/mistyped recipient fails immediately instead of
+vanishing silently.
+
+### 🆕 Added — typed `channels`/`priority`/`receiver_ids`/`topic`/`prompt`/`title_key`/`message_key`/`vars`/`messageIsHtml` on `notification.push()`
+
+The backend's `NotificationService.pushNotification` pipeline already supported multi-channel
+dispatch, priority-based engine routing, batch/topic-broadcast audience resolution, i18n rendering,
+and AI-generated content from a `prompt` — none of it was typed or documented on the SDK side, only
+reachable through the untyped `[key: string]: any` escape hatch. See
+[`docs/sdk/notification.md`](./sdk/notification.md) for the full field reference and examples.
+
 ## [1.0.4] - 2026-08-10
 
 ### 🔧 Changed — `datastore` renamed to `table`; `pluginStore` renamed to `plugin`
