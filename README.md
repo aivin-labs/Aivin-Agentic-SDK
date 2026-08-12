@@ -78,7 +78,8 @@ is. Everything else is handled for you:
   Just describe what your plugin does in `manifest.json`, and AI Staff figures out when to use
   it — see [How AI Staff discovers your plugin](#how-ai-staff-discovers-your-plugin).
 - **Bring whatever you already have.** Start from scratch, convert an existing project with
-  `aivin plugin convert`, or skip code entirely and connect an MCP server with `aivin mcp create`
+  `aivin plugin convert`, or skip code entirely and point `aivin mcp` at an MCP server — a whole
+  server or just one tool — to deploy it as one or more plugins with no manifest written by hand
   (REST, n8n, Zapier, Make, Coze, and Dify hookups work through the platform dashboard too).
   Either way, it becomes a skill every AI Staff agent can call.
 - **One function is the whole contract.** Export `main(mission, input, ctx)` and you're done —
@@ -352,7 +353,7 @@ point resolved from the `main` export — is still accepted everywhere, as are c
 | `initable` | `string[]` | Fields that must be configured once per workspace before the plugin can run (e.g. an API key). |
 | `depend_on` | `string \| PluginDependency \| (...)[]` | Other plugin(s) this one depends on — the dependency is scheduled into an earlier execution stage, so it always runs (and its result is available) before this plugin does. A bare string is required; an object (`{ plugin, optional, condition, fallback_field }`) is conditional. |
 | `mapping_reasoning` | `boolean \| string[]` | How the planner maps its output onto `input`'s fields: via LLM reasoning, direct key mapping, or a mix. |
-| `connection_id` | `string` | Namespace for a shared connection — plugins sharing this id share one set of credentials. |
+| `connection_id` | `string` | Namespace for a shared connection — plugins sharing this id share one set of credentials. Create or find one with `aivin connector register` / `aivin connector search`. |
 | `timeout_ms` | `number` | Execution timeout (the host also enforces its own hard cap). |
 | `circuit_breaker` | `object` | Per-plugin override of the default failure threshold/cooldown. |
 | `expose` | `string[]` | Field paths from this plugin exposed externally. |
@@ -423,7 +424,13 @@ variable: [docs/CLI.md](docs/CLI.md).
 | `aivin test` | Deploy to a non-production test instance, then smoke-test it with generated input and save a report to `.test/`. Blocked in production. |
 | `aivin deploy` | Deploy to your org. |
 | `aivin mcp create <name>` | Scaffold a manifest-only plugin that proxies to an external MCP server tool/resource/prompt — no code needed. |
+| `aivin connector register` | Register a reusable connector (OAuth app / credential namespace) for a `manifest.json` `connection_id` — `aivin connector search`/`list` to find one that already exists instead. |
 | `aivin login` | Authenticate and save an API key to `~/.aivin/credentials` (once per machine, shared by every project). |
+
+`aivin` is also how you drive your Aivin workspace directly, not just build plugins —
+`aivin do`/`task`/`agent`/`project`/`workspace`/`browser`/`key` run agents, manage tasks/projects,
+and automate a real browser from the terminal. Out of scope for a plugin-building doc; see
+`aivin --help` or [docs/CLI.md](docs/CLI.md) for the full surface.
 
 ## Environment variables
 
@@ -489,9 +496,20 @@ generates before you deploy, same as any AI-written code.
 
 **Just wrapping an external service?** Skip code entirely — the manifest's `proxy_config` turns an
 existing external system into something every AI Staff agent can call directly, with no container
-to build and no `src/main.ts` at all. This SDK authors the `mcp` variant for you: if your plugin's
-job is just to expose an existing [MCP](https://modelcontextprotocol.io) server's tool, resource, or
-prompt, skip straight to the manifest:
+to build and no `src/main.ts` at all. This SDK authors the `mcp` variant for you.
+
+Already have a whole [MCP](https://modelcontextprotocol.io) server, not just one tool? Point
+`aivin mcp` at it and every tool/resource/prompt it exposes becomes its own deployed plugin in one
+pass — a GitHub/GitLab repo, an npm/Smithery package, or a live server URL all work:
+
+```bash
+aivin mcp https://github.com/example-org/example-mcp-server
+```
+
+It scans the server, lets you pick which tools to keep (all selected by default), generates and
+deploys one manifest per tool, and hands back ready-to-run `aivin plugin trigger`/`aivin plugin logs`
+commands for each — no manifest written by hand. Know exactly the one tool/command you want instead?
+`aivin mcp create` skips the scan:
 
 ```bash
 aivin mcp create fs-tools --command npx \

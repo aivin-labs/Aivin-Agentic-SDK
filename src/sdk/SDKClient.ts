@@ -40,6 +40,7 @@ import {
   storeTransactionParamsSchema,
   storeUnlinkParamsSchema,
   tableIdScopedParamsSchema,
+  runFlowParamsSchema,
   updateJobParamsSchema,
   updateTableParamsSchema,
   uploadParamsSchema,
@@ -50,6 +51,8 @@ import type {
   AgentReplyOptions,
   AutomationJob,
   ConnectionInfo,
+  FlowStage,
+  FlowStepResult,
   LLMPromptOptions,
   MediaGenerationResult,
   MediaItem,
@@ -57,9 +60,11 @@ import type {
   MessageSession,
   PluginContext,
   ResourceMeta,
+  RunFlowContext,
   Task,
   User,
   Workspace,
+  WorkflowGraph,
 } from '../types/SDKTypes';
 
 export interface SDKClientOptions {
@@ -645,6 +650,64 @@ export class SDKClient {
       payload?: any;
     }): Promise<{ success: boolean; reply_id: string; error?: string }> =>
       this.call('agent.resolveHil', params),
+    /**
+     * Runs a flow directly - CONDITION/ROUTER/PARALLEL/RETRY/WAIT/LOOP/ACTION steps executed in
+     * order, no NLU/LLM planning step first (unlike `agent.processMessage`, which routes a message
+     * through agentic/action/assistant). Same engine `automation.createJob`'s `workflow` field and
+     * a published `workflow`-type plugin run on - this is that engine called directly from code,
+     * skipping the "save as a plugin"/"schedule as a job" step.
+     *
+     * `flow` accepts either:
+     *  - a `WorkflowGraph` (`{ nodes, edges }`) - the exact JSON the platform's Workflow Editor
+     *    (WorkflowSkillEditor) exports/saves - so a flow built visually can be pasted straight in, or
+     *  - a `FlowStage[]` already built by hand for full control over control-flow stages.
+     *
+     * `context` (build with `ContextBuilder`) is the flow's explicit identity - which agent it runs
+     * as, which workspace, and optionally an existing `session_id` to run inside (instead of a new,
+     * invisible session/thread). Nothing here is inferred from the caller's own live session state
+     * beyond a bare agent/workspace fallback - the sandbox boundary this call crosses does not carry
+     * the caller's live runtime data across automatically, so anything the flow needs must be passed
+     * explicitly via `context` or baked into the flow's own nodes.
+     */
+    runFlow: (
+      flow: WorkflowGraph | FlowStage[],
+      opts?: { flowName?: string; context?: RunFlowContext },
+    ): Promise<FlowStepResult[]> => {
+      const params = validateParams(
+        runFlowParamsSchema,
+        { flow, flowName: opts?.flowName, context: opts?.context },
+        'agent.runFlow',
+      );
+      return this.call('agent.runFlow', params);
+    },
+    /**
+     * Forces the full agentic planner (`GoalPursuitService` - multi-step plan/audit/replan) for
+     * `prompt`, skipping the NLU classification step `agent.processMessage` would normally run
+     * first. Use when the caller already knows this needs multi-step planning (e.g. a workflow node
+     * that always wants "plan and execute this," not a re-guess every run). Still falls back to
+     * `promptAssistant` internally on failure (that fallback is baked into the backend method
+     * itself, not something forcing the mode turns off) - only the initial mode CHOICE is forced,
+     * not the error-recovery path.
+     */
+    promptAgentic: (
+      prompt: string,
+      opts?: { args?: Record<string, any>; context?: RunFlowContext },
+    ): Promise<any> => this.call('agent.promptAgentic', { prompt, args: opts?.args, context: opts?.context }),
+    /**
+     * Forces the single-plugin direct-execution mode (`promptAction` - select one plugin, run it, no
+     * multi-step planning), skipping NLU classification. Falls back to `promptAssistant` internally
+     * if no plugin matches, or to `promptAgentic` if the selected plugin's execution fails - same
+     * caveat as `promptAgentic` above: only the initial mode choice is forced.
+     */
+    promptAction: (prompt: string, opts?: { context?: RunFlowContext }): Promise<any> =>
+      this.call('agent.promptAction', { prompt, context: opts?.context }),
+    /**
+     * Forces plain conversational (RAG-backed, no tool use, no planning) mode, skipping NLU
+     * classification. Use when the caller already knows this turn is a question/answer, not an
+     * action request.
+     */
+    promptAssistant: (prompt: string, opts?: { context?: RunFlowContext }): Promise<any> =>
+      this.call('agent.promptAssistant', { prompt, context: opts?.context }),
   };
 
   readonly browser = {

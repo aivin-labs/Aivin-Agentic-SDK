@@ -106,6 +106,8 @@ Full reference: [sdk/workspace.md](./sdk/workspace.md), [sdk/agent.md](./sdk/age
 | `agent.tell(text)`                                         | Push text you already have into the chat bubble with a typing animation — no LLM call. Shares `reply`'s per-session rate limit (the only thing throttling it, since it has no LLM cost). |
 | `agent.processMessage(message, storageContext?)`          | Run a full message-processing pass through the agent (NLU -> routing).         |
 | `agent.resolveHil({ session_id, reply_id, payload? })`     | Resolve a PAUSED human-in-the-loop checkpoint to resume a workflow.            |
+| `agent.runFlow(flow, opts?)`                                | Run a flow (`WorkflowGraph` from the Workflow Editor, or a `FlowStage[]`) directly - no NLU/planning step first. `opts.context` (build with `ContextBuilder`) sets which agent/session it runs as. See [sdk/agent.md](./sdk/agent.md#runflow). |
+| `agent.promptAgentic(prompt, opts?)` / `agent.promptAction(prompt, opts?)` / `agent.promptAssistant(prompt, opts?)` | Force one of the 3 modes `agent.processMessage`'s NLU step would otherwise pick between, skipping that classification. See [sdk/agent.md](./sdk/agent.md#forcing-a-mode-promptagentic--promptaction--promptassistant). |
 | `user(id)`                                        | Public profile for a user in the current tenant.                               |
 | `getCachedUser(id)`                               | Redis-cached variant of `user(id)` - for high-traffic channels.                |
 

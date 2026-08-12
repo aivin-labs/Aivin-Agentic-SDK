@@ -24,6 +24,10 @@ import { agent } from '@aivin-labs/sdk';
 | `tell` | `text: string` | `Promise<{ success: boolean }>` | Push text **you already have** into the chat bubble with a typing animation, persisted like any other message — **no LLM call**. `success: false` (not a throw) when there's no live chat session to stream into. |
 | `processMessage` | `message: Record<string, any>, storageContext?: Record<string, any>` | `Promise<any>` | Runs a full message-processing pass through the agent (NLU → agentic/action/assistant routing) as if `message` had arrived on the invoking user's session. Identity is always taken from `ctx.user`, never `message`. |
 | `resolveHil` | `params: { session_id: string; reply_id: string; payload?: any }` | `Promise<{ success: boolean; reply_id: string; error?: string }>` | Resolves a PAUSED human-in-the-loop checkpoint (e.g. a visitor's selection/form reply arriving over a transport other than the SDK's own `agent.hil()` wait) to resume the paused workflow. |
+| `runFlow` | `flow: WorkflowGraph \| FlowStage[], opts?: { flowName?: string; context?: RunFlowContext }` | `Promise<FlowStepResult[]>` | Runs a flow (CONDITION/ROUTER/PARALLEL/RETRY/WAIT/LOOP/ACTION steps) directly, no NLU/planning step first — see [`runFlow`](#runflow) below. |
+| `promptAgentic` | `prompt: string, opts?: { args?: Record<string, any>; context?: RunFlowContext }` | `Promise<any>` | Forces the full multi-step planner (plan/audit/replan), skipping NLU mode classification — see [Forcing a mode](#forcing-a-mode-promptagentic--promptaction--promptassistant) below. |
+| `promptAction` | `prompt: string, opts?: { context?: RunFlowContext }` | `Promise<any>` | Forces single-plugin direct execution (no planning), skipping NLU mode classification. |
+| `promptAssistant` | `prompt: string, opts?: { context?: RunFlowContext }` | `Promise<any>` | Forces plain conversational (RAG, no tool use) mode, skipping NLU mode classification. |
 
 `Agent` shape (from `SDKTypes.ts`):
 
@@ -166,6 +170,132 @@ UX matches a normal streamed reply even though nothing is actually streaming fro
 - Shares the same per-session rate limit bucket as `agent.reply` (20 pushes / 60s by default) —
   see `reply`'s notes above. Since `tell` has no LLM cost to act as a natural throttle, this is the
   *only* thing stopping a loop from flooding a chat with unlimited persisted messages.
+
+## `runFlow`
+
+Runs a flow — CONDITION/ROUTER/PARALLEL/RETRY/WAIT/LOOP/ACTION steps executed in order — directly
+from code, with no LLM planning/NLU step deciding what to do first (unlike `agent.processMessage`,
+which routes a message through agentic/action/assistant, or `automation.createJob`, which infers a
+schedule and *may* run the `workflow` field through the full planner too). Same execution engine a
+published `workflow`-type plugin runs on, and the same one `automation.createJob`'s `workflow` field
+eventually drives — this is that engine called straight from your own code, skipping the "save this
+as a plugin" or "schedule this as a job" step.
+
+```typescript
+import { agent, ContextBuilder } from '@aivin-labs/sdk';
+
+export async function main(mission, input, ctx) {
+  // `flow` here is a WorkflowGraph { nodes, edges } — exported/copied straight out of the
+  // platform's Workflow Editor (WorkflowSkillEditor), no hand-conversion needed.
+  const results = await agent.runFlow(input.flow, {
+    flowName: 'Nightly reconciliation',
+    context: ContextBuilder()
+      .useAgent(input.agentId)
+      .useSession(ctx.session?.id) // run inside THIS conversation instead of a new hidden one
+      .useAttachments(input.attachments)
+      .build(),
+  });
+
+  return { status: 'success', data: results };
+}
+```
+
+### Input: `WorkflowGraph` vs `FlowStage[]`
+
+`flow` accepts either shape — pick whichever matches how the flow was produced:
+
+- **`WorkflowGraph`** (`{ nodes, edges }`) — the JSON the Workflow Editor exports/saves into a
+  plugin manifest's `workflow_data`. This is the shape to reach for whenever the flow was designed
+  visually and you just need to *run* it from code (a webhook handler, a scheduled check, a manual
+  trigger) without publishing it as its own plugin first. The backend
+  (`WorkflowPluginService.buildStages`) converts it into executable stages and throws a specific
+  error naming the offending node if something's malformed — nothing is silently ignored.
+- **`FlowStage[]`** — an already-built list of stages, for building/generating a flow programmatically
+  (e.g. constructing steps from data rather than a canvas) instead of hand-authoring a node graph.
+  Loosely typed on purpose (`{ id, type, ...rest }`) — the backend validates/guards per stage type at
+  runtime; an unrecognized or misconfigured stage is skipped with a warning rather than crashing the
+  whole flow.
+
+### `context`: what identity the flow runs as
+
+`agent.runFlow` does **not** automatically inherit the calling invocation's live conversation state
+beyond a bare fallback (the current session's agent/workspace) — the sandbox boundary this call
+crosses does not carry that state across. Anything the flow needs — which agent it runs as, which
+session/thread to attach to, extra attachments — must be passed explicitly via `context`. Build one
+with `ContextBuilder`:
+
+```typescript
+import { ContextBuilder } from '@aivin-labs/sdk';
+
+const context = ContextBuilder()
+  .useAgent(agentId)       // which AI Staff agent runs the flow
+  .useWorkspace(wsId)      // defaults to the calling invocation's workspace if omitted
+  .useSession(sessionId)   // reuse an existing session/thread instead of a new invisible one
+  .useProject(projectId)
+  .useAttachments(files)
+  .build();
+```
+
+- Omitting `useAgent`/`useWorkspace` falls back to the calling invocation's own current
+  agent/workspace — omit both entirely for "run as me, in my workspace."
+- Omitting `useSession` runs the flow in a **new, separate session/thread** you won't see appear
+  anywhere in the current chat (same as how a published `workflow`-type plugin runs today) — pass
+  the current session's ID (e.g. `ctx.session?.id` from a chat-triggered invocation) to have the
+  flow's steps show up as part of the ongoing conversation instead.
+- A flow calling `agent.runFlow` on itself (directly, or through a chain of flows calling each
+  other) is capped at depth 5 server-side — same guard the platform already applies to
+  agent-to-agent delegation and workflow-plugin-calling-workflow-plugin chains.
+
+`FlowStepResult` shape (one entry per executed stage):
+
+```typescript
+interface FlowStepResult {
+  stepIndex: number;
+  action_intent: string;
+  mission: string;
+  result: { status: string; message?: string; data?: any };
+}
+```
+
+## Forcing a mode: `promptAgentic` / `promptAction` / `promptAssistant`
+
+`agent.processMessage` runs a message through NLU classification first, which picks exactly one of
+three modes before doing anything else:
+
+- **agentic** — full multi-step planner (plan → execute → audit → replan)
+- **action** — pick one plugin, run it, no planning
+- **assistant** — plain conversational reply (RAG-backed), no tool use
+
+`promptAgentic`/`promptAction`/`promptAssistant` call the backend's own implementation of each mode
+**directly**, skipping that classification step entirely — for when the caller already knows which
+mode this turn needs and doesn't want to pay for (or risk a wrong) NLU guess:
+
+```typescript
+import { agent, ContextBuilder } from '@aivin-labs/sdk';
+
+export async function main(mission, input, ctx) {
+  // This step of the plugin's own logic always wants a straight, tool-free answer — no reason to
+  // let NLU re-decide that every run.
+  const answer = await agent.promptAssistant(`Summarize the risk in plain terms: ${input.text}`, {
+    context: ContextBuilder().useSession(ctx.session?.id).build(),
+  });
+  return { status: 'success', data: answer };
+}
+```
+
+- Each mode **keeps its own internal fallback chain** — forcing the initial choice does not disable
+  it. `promptAgentic` still falls back to assistant on failure; `promptAction` still falls back to
+  assistant (no plugin matched) or agentic (plugin execution failed). Only the *first* decision is
+  forced; error recovery behaves exactly as it does through `processMessage`.
+- `opts.context` works exactly like `runFlow`'s — build with `ContextBuilder`, same fallback to the
+  calling invocation's own agent/workspace when omitted, same `useSession(...)` to keep the reply
+  inside the current conversation instead of a new hidden one.
+- `promptAgentic`'s `opts.args` is passed straight through to the planner's own `args` parameter
+  (rarely needed — most callers can omit it).
+- Return shape is whatever that mode's own result looks like (not `FlowStepResult[]` like
+  `runFlow`) — `promptAssistant`/`promptAgentic` resolve to a chat-message-shaped result,
+  `promptAction` resolves to either that or the executed plugin's raw response, depending on the
+  plugin's `feedbackable` flag. Treat the return value as `any` and read what you need from it.
 
 ## Rich components and HIL
 

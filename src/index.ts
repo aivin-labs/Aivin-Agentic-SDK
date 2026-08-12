@@ -22,6 +22,8 @@ export { invokeHost, invokeHostStream, onCall, configureTransport, configureMtls
 export type { CallTrace, StreamHandle } from './grpc/GrpcInvoker';
 export { withTrace, getCurrentTrace, formatTraceForConsole } from './sdk/trace';
 export type { InvocationTrace, TraceEvent, CapturedLog, CapturedLogLevel } from './sdk/trace';
+export { ContextBuilder } from './sdk/ContextBuilder';
+export type { ContextBuilderHandle } from './sdk/ContextBuilder';
 
 export * from './types/PluginTypes';
 export * from './types/SDKTypes';

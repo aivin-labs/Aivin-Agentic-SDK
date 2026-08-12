@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 🆕 Added — `agent.runFlow()` and `ContextBuilder`
+
+Plugins can now run a flow (CONDITION/ROUTER/PARALLEL/RETRY/WAIT/LOOP/ACTION steps) directly from
+code — the same engine a published `workflow`-type plugin and `automation.createJob`'s `workflow`
+field already run on (`FlowService.runFlow` + `WorkflowPluginService.buildStages`, backend), now
+reachable without first publishing/scheduling anything. `flow` accepts either a `WorkflowGraph`
+(`{ nodes, edges }`, the exact JSON the platform's Workflow Editor exports) or an already-built
+`FlowStage[]`. New `ContextBuilder(...)` helper (top-level export) builds the flow's explicit
+identity — which agent/workspace it runs as, and optionally an existing `session_id` to attach to
+instead of a new hidden session. See [`docs/sdk/agent.md#runflow`](./sdk/agent.md#runflow).
+
+Also added `agent.promptAgentic()`/`agent.promptAction()`/`agent.promptAssistant()` — force one of
+the 3 modes `agent.processMessage`'s NLU classification step would otherwise pick between
+(multi-step planner / single-plugin direct execution / plain conversational reply), for callers
+that already know which mode a given turn needs. Each keeps its own backend fallback chain
+(agentic→assistant, action→assistant/agentic) — only the initial mode choice is forced. See
+[`docs/sdk/agent.md#forcing-a-mode`](./sdk/agent.md#forcing-a-mode-promptagentic--promptaction--promptassistant).
+
 ### 🐛 Fixed — `notification.push()` silently delivered nothing and dropped message text
 
 Verified field-by-field against the real backend handler chain

@@ -68,6 +68,40 @@ export const deleteJobParamsSchema = z.object({
 
 export const executeByIdParamSchema = z.string().min(1, 'id is required');
 
+/**
+ * `agent.runFlow` - `flow` accepts either a `WorkflowGraph` ({ nodes, edges }, the JSON exported
+ * from the Workflow Editor) or an already-built `FlowStage[]`; both are validated loosely here
+ * (shape only) since the backend (`WorkflowPluginService.buildStages`) owns the real per-node-type
+ * schema and throws a clear, specific error on a malformed graph/stage.
+ */
+const workflowGraphSchema = z.object({
+  nodes: z.array(z.object({ id: z.string(), type: z.string(), data: z.record(z.string(), z.any()) })),
+  edges: z.array(
+    z.object({
+      id: z.string(),
+      source: z.string(),
+      target: z.string(),
+      sourceHandle: z.string().optional(),
+      targetHandle: z.string().optional(),
+    }),
+  ),
+});
+const flowStageSchema = z.object({ id: z.string(), type: z.string() }).catchall(z.any());
+
+export const runFlowParamsSchema = z.object({
+  flow: z.union([workflowGraphSchema, z.array(flowStageSchema).min(1, 'flow must have at least one stage')]),
+  flowName: z.string().optional(),
+  context: z
+    .object({
+      agent_id: z.string().optional(),
+      workspace_id: z.string().optional(),
+      session_id: z.string().optional(),
+      project_id: z.string().optional(),
+      attachments: z.array(z.any()).optional(),
+    })
+    .optional(),
+});
+
 export const uploadParamsSchema = z.object({
   file: z.union([
     z.string(),

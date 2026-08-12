@@ -121,9 +121,39 @@ dotenv.config({ quiet: true });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Single source of truth for "what version of @aivin-labs/sdk is this" - both the CLI's own
+// `--version` output and the exact pin `createPackageJson()` writes into new scaffolds read from
+// here, so they can never drift apart again (previously two separate hardcoded '1.2.0' literals
+// - one in `.version()` below, one in the scaffold's `dependencies` - fell out of sync with the
+// actual published npm version, breaking every fresh `npm install` with ETARGET).
+const SDK_PACKAGE_JSON = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+const SDK_VERSION = SDK_PACKAGE_JSON.version;
+
+/**
+ * `aivin start` spawns `node server.mjs`, which loads the plugin's own `src/main.ts` directly via
+ * Node's native TS execution (no separate compile step) - the same mechanism this package's own
+ * `engines.node` field (">=22.0.0") documents as required. Node <22 doesn't strip TS types at all,
+ * so that failure doesn't surface as anything about Node versions - it's a raw loader error
+ * ("Unknown file extension \".ts\"") thrown from deep inside `server.mjs`, giving no hint that the
+ * fix is just "use a newer Node". Check the constraint up front instead, once, with a message that
+ * says exactly what's wrong and how to fix it.
+ */
+function checkNodeVersion() {
+  const required = SDK_PACKAGE_JSON.engines?.node;
+  const requiredMajor = required && parseInt(required.match(/(\d+)/)?.[1], 10);
+  const currentMajor = parseInt(process.versions.node.split('.')[0], 10);
+  if (requiredMajor && currentMajor < requiredMajor) {
+    console.error(
+      chalk.red(`❌ Node ${process.version} detected - @aivin-labs/sdk requires Node ${required} (native TypeScript execution).`),
+    );
+    console.error(chalk.gray(`   Switch versions (e.g. \`nvm use ${requiredMajor}\`) and try again.`));
+    process.exit(1);
+  }
+}
+
 const program = new Command();
 
-program.name('aivin').description('Aivin Plugin SDK - Build and run AI plugins').version('1.2.0');
+program.name('aivin').description('Aivin Plugin SDK - Build and run AI plugins').version(SDK_VERSION);
 
 // Command: create plugin
 program
@@ -808,9 +838,10 @@ async function createPackageJson(pluginDir, name, description, currentPackageJso
     dependencies: {
       // Pinned to an exact version, not "latest" - the platform's own AI security scan flags
       // "latest"/range dependency pins as a supply-chain risk (a later, unreviewed version could
-      // get pulled in silently) and blocks deployment over it. Bump this alongside this CLI's own
-      // version() call above when publishing a new @aivin-labs/sdk release.
-      '@aivin-labs/sdk': '1.2.0',
+      // get pulled in silently) and blocks deployment over it. Reads SDK_VERSION (this CLI's own
+      // package.json) rather than a second hardcoded literal, so it can't drift from what's
+      // actually published to npm.
+      '@aivin-labs/sdk': SDK_VERSION,
     },
     devDependencies: {
       '@types/node': '^24.0.0',
@@ -893,6 +924,7 @@ program
   .option('--debug-json', 'Same live per-call logging as --debug, but one JSON object per line on stdout - for a script/coding agent to parse instead of a human')
   .option('--no-watch', 'Disable hot-reload - restart manually (Ctrl+C + `aivin start` again) after editing src/ instead')
   .action((options) => {
+    checkNodeVersion();
     const serverPath = path.join(__dirname, 'server.mjs');
     const debugEnv = options.debugJson ? { SDK_DEBUG: 'json' } : options.debug ? { SDK_DEBUG: 'true' } : {};
     const watchEnv = options.watch === false ? { AIVIN_START_WATCH: 'false' } : {};
@@ -4391,7 +4423,7 @@ function openBrowserViewer(serverUrl, apiKey, tenantClient) {
  * working across multiple HIL rounds since it just reacts to whatever `browser:cast-start` fires
  * next on this tenant's room.
  */
-function streamBrowserMissionLog(serverUrl, apiKey, threadId, tenantClient, { idleTimeoutMs = 120_000 } = {}) {
+function streamBrowserMissionLog(serverUrl, apiKey, threadId, tenantClient, { idleTimeoutMs = 120_000, openViewerOnHIL = true } = {}) {
   return new Promise((resolve) => {
     const socket = io(serverUrl, { auth: { token: apiKey || 'dev-token' }, transports: ['websocket'], reconnection: true });
 
@@ -4435,18 +4467,66 @@ function streamBrowserMissionLog(serverUrl, apiKey, threadId, tenantClient, { id
 
         if (payload.event_key === 'ai_browser.hil_required' && !viewerOpened) {
           viewerOpened = true;
-          console.log(chalk.magenta('\n👤 Mission cần bạn tương tác trực tiếp (captcha/đăng nhập/xác nhận) - đang mở trình duyệt...'));
-          openBrowserViewer(serverUrl, apiKey, tenantClient).catch((e) =>
-            console.log(chalk.yellow(`⚠️  Không mở được viewer tự động: ${e.message} - thử lại bằng \`aivin browser --view ${tenantClient}\`.`)),
-          );
+          // Most important moment for a notification: a mission can run for minutes with the
+          // terminal/browser out of focus, and this is the one point where it's actually STUCK until
+          // the user comes back - not just a progress update they can catch up on later.
+          sendOSNotification('AI Browser cần bạn hỗ trợ', payload.message || 'Mission đang chờ bạn tương tác');
+          if (openViewerOnHIL) {
+            console.log(chalk.magenta('\n👤 Mission cần bạn tương tác trực tiếp (captcha/đăng nhập/xác nhận) - đang mở trình duyệt...'));
+            openBrowserViewer(serverUrl, apiKey, tenantClient).catch((e) =>
+              console.log(chalk.yellow(`⚠️  Không mở được viewer tự động: ${e.message} - thử lại bằng \`aivin browser --view ${tenantClient}\`.`)),
+            );
+          } else {
+            // Local mode: no separate viewer needed at all - the message + a "Xong" button are
+            // injected directly onto the real tab the user is already looking at (AIBrowserService's
+            // showOnPageHILBanner). A screencast-based viewer here would just be a second, redundant,
+            // lower-fidelity copy of a page already fully visible natively.
+            console.log(chalk.magenta(`\n👤 ${payload.message || 'Mission cần bạn hỗ trợ'} - kiểm tra cửa sổ trình duyệt (có banner xanh ở đầu trang), bấm "Xong" ở đó khi hoàn tất.`));
+          }
         }
         // `execute-interactive` calls triggerMission directly (not the multi-step `flow.*` runner
         // aivin do's missions go through), so its real terminal signal is ai_browser.success/failed,
         // not anything in MISSION_DONE_EVENT_KEYS - checked in addition to (not instead of) that set
         // since this function is also reused as a fallback for --remote missions triggered elsewhere.
-        if (payload.event_key === 'ai_browser.success' || payload.event_key === 'ai_browser.failed' || MISSION_DONE_EVENT_KEYS.has(payload.event_key)) stop();
+        if (payload.event_key === 'ai_browser.success' || payload.event_key === 'ai_browser.failed' || MISSION_DONE_EVENT_KEYS.has(payload.event_key)) {
+          const ok = payload.event_key !== 'ai_browser.failed' && payload.status !== 'error';
+          sendOSNotification(ok ? '✅ AI Browser hoàn tất' : '❌ AI Browser thất bại', payload.message || '');
+          stop();
+        }
       });
     }
+
+    // 🔍 Step-by-step agentic detail (perceive/plan/execute/audit/recover) - a SEPARATE Socket.IO
+    // room-broadcast event from the chat-log-shaped ones above (AIBrowserService.emitAgentStep,
+    // room `client:<tenant>`, joined automatically on auth per SocketIO.ts). Was previously never
+    // listened to here at all - the terminal only ever showed the bookend start/success/failed lines
+    // even though the backend was emitting a full trace the whole time. `detail` (when present)
+    // carries the LLM's actual per-action reasoning (AIBrowserActionItem.reason), not just the
+    // truncated one-line summary meant for a chat bubble.
+    const STEP_ICON = { perceiving: '👁', executing: '▶', blocked: '🛡', recovering: '↺', auditing: '🔎', done: '✅', failed: '❌' };
+    socket.on('browser:agent-step', (payload) => {
+      if (!payload) return;
+      bumpIdleTimer();
+      const time = new Date().toLocaleTimeString();
+      const icon = STEP_ICON[payload.type] || '·';
+      console.log(`${chalk.gray(`[${time}]`)} ${icon} ${chalk.cyan(`step ${payload.step}`)} ${chalk.gray(payload.type)} ${payload.summary || ''}`.trimEnd());
+      if (payload.url) console.log(chalk.gray(`         url: ${payload.url}`));
+      const detail = payload.detail;
+      if (Array.isArray(detail)) {
+        // 'executing' - one or more planned actions, each with its own reasoning
+        for (const a of detail) {
+          console.log(chalk.gray(`         - ${a.type}${a.detail ? ` (${a.detail})` : ''}`));
+          if (a.reason) console.log(chalk.dim(`           reason: ${a.reason}`));
+        }
+      } else if (detail && typeof detail === 'object') {
+        // 'recovering' - { reason, revisedActions } from the audit/replan phase
+        if (detail.reason) console.log(chalk.dim(`         reason: ${detail.reason}`));
+        for (const a of detail.revisedActions || []) {
+          console.log(chalk.gray(`         - ${a.type}${a.detail ? ` (${a.detail})` : ''}`));
+          if (a.reason) console.log(chalk.dim(`           reason: ${a.reason}`));
+        }
+      }
+    });
 
     console.log(chalk.gray(`📡 Watching live progress for ${threadId}... (Ctrl+C to stop watching - the run keeps going either way)\n`));
     bumpIdleTimer();
@@ -4463,6 +4543,234 @@ function streamBrowserMissionLog(serverUrl, apiKey, threadId, tenantClient, { id
 // only ever pipes opaque frames, never inspects them.
 
 const BROWSER_CLI_AGENT_CACHE_PATH = path.join(os.homedir(), '.aivin', 'browser-cli-agents.json');
+// A separate Chrome/Edge profile dedicated to `aivin browser`, NOT the user's real daily-driver
+// profile. Reasoning (confirmed the hard way): `--remote-debugging-port` can only be set at process
+// launch, never toggled on an already-running instance, AND Chromium's single-instance-per-profile
+// lock means launching a second process against the SAME profile the user is already using just
+// silently forwards to the existing (non-debuggable) instance instead of actually starting a new,
+// debuggable one - so reusing the daily-driver profile meant demanding the user close every window
+// first, every single time. A dedicated profile sidesteps all of that: it can launch/stay running
+// fully independently of whatever the user's main browser is doing, at the cost of a one-time login
+// (Facebook etc.) the first time it's used - after that, cookies persist here just like any profile.
+const AIVIN_BROWSER_PROFILE_DIR = path.join(os.homedir(), '.aivin', 'browser-profile');
+
+// Without a `start_url`, the mission's first step lands on a totally blank page - confirmed while
+// testing this to cost real time (a full perceive+plan cycle wasted on a page with nothing to look
+// at) AND to be a correctness risk: with nothing to navigate to, the planner reaches for the `search`
+// action to find the target site itself, which does a REAL web search and goes wherever the top
+// (reranked) result is - watched it once land on an unrelated w3schools tutorial page instead of
+// facebook.com. A `start_url` sidesteps both: the mission opens directly on the real site via a plain
+// `page.goto` before the agentic loop even starts, no guessing involved. Best-effort keyword match
+// only (not NLU) - covers the common case from a mission mentioning a well-known site by name; falls
+// back to no start_url (today's behavior) when nothing matches, and --url always wins outright.
+const KNOWN_SITE_HINTS = [
+  { re: /facebook|\bfb\b/i, url: 'https://www.facebook.com' },
+  { re: /instagram|\big\b/i, url: 'https://www.instagram.com' },
+  { re: /\btiktok\b/i, url: 'https://www.tiktok.com' },
+  { re: /\byoutube\b/i, url: 'https://www.youtube.com' },
+  { re: /\b(twitter|x\.com)\b/i, url: 'https://x.com' },
+  { re: /linkedin/i, url: 'https://www.linkedin.com' },
+  { re: /\bzalo\b/i, url: 'https://chat.zalo.me' },
+  { re: /\bgmail\b/i, url: 'https://mail.google.com' },
+  { re: /\boutlook\b/i, url: 'https://outlook.live.com' },
+  // Vietnamese e-commerce/social - the realistic mission targets for this CLI's actual audience,
+  // not just the generic global-site list above.
+  { re: /\bshopee\b/i, url: 'https://shopee.vn' },
+  { re: /\btiki\b/i, url: 'https://tiki.vn' },
+  { re: /\blazada\b/i, url: 'https://www.lazada.vn' },
+  { re: /\bsendo\b/i, url: 'https://www.sendo.vn' },
+  { re: /\bvnexpress\b/i, url: 'https://vnexpress.net' },
+  { re: /\bamazon\b/i, url: 'https://www.amazon.com' },
+  { re: /\bgithub\b/i, url: 'https://github.com' },
+  { re: /\breddit\b/i, url: 'https://www.reddit.com' },
+  { re: /\bpinterest\b/i, url: 'https://www.pinterest.com' },
+  { re: /\bthreads\b/i, url: 'https://www.threads.net' },
+  { re: /\bwhatsapp\b/i, url: 'https://web.whatsapp.com' },
+  { re: /\btelegram\b/i, url: 'https://web.telegram.org' },
+  { re: /\bdiscord\b/i, url: 'https://discord.com' },
+  { re: /\bspotify\b/i, url: 'https://open.spotify.com' },
+  { re: /\bnetflix\b/i, url: 'https://www.netflix.com' },
+];
+
+// Fallback for a site NOT in the (necessarily always-incomplete) list above: if the mission text
+// itself contains something that looks like an actual domain (e.g. "đăng nhập vào crm.mycompany.vn"),
+// use that directly rather than leaving start_url unset - a hand-picked static list can never cover
+// every real target, especially a mission naming an internal/niche/foreign site nobody thought to
+// hardcode. Deliberately conservative: requires a real-looking TLD, not just any two words with a
+// dot between them (avoids matching version numbers, decimals, "v1.2" etc.).
+const DOMAIN_IN_TEXT_RE = /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|co|vn|dev|app|shop|store|biz|info|edu|gov|xyz)(?:\.[a-z]{2,3})?)\b/i;
+function guessStartUrl(mission) {
+  const known = KNOWN_SITE_HINTS.find((h) => h.re.test(mission))?.url;
+  if (known) return known;
+  const domainMatch = DOMAIN_IN_TEXT_RE.exec(mission);
+  return domainMatch ? `https://${domainMatch[1]}` : undefined;
+}
+
+// ── Windows toast identity: shows "AI Browser" + the real aivin icon instead of a bare, borrowed
+// "File Explorer" notification ────────────────────────────────────────────────────────────────
+//
+// Confirmed by hand while building this: a plain AppUserModelId registry entry (DisplayName +
+// IconUri, no shortcut) gets the NAME right but Windows silently ignores the IconUri for an
+// unpackaged (non-MSIX) app - a known platform gap, not a bug in this setup. The icon only actually
+// shows once a Start Menu shortcut exists whose System.AppUserModel.ID property (via IPropertyStore)
+// matches the AUMID used in CreateToastNotifier - that requires COM interop (IShellLinkW +
+// IPropertyStore), which plain PowerShell cmdlets don't expose, hence the embedded C# below compiled
+// on demand via Add-Type. This whole block only ever runs ONCE per machine (skipped immediately if
+// the shortcut already exists) - the compile is real but not a per-notification cost.
+const AIVIN_NOTIF_AUMID = 'AivinBrowser.CLI';
+const AIVIN_ICON_SOURCE_PNG = path.join(__dirname, 'assets', 'aivin-icon.png');
+const AIVIN_ICON_ICO = path.join(os.homedir(), '.aivin', 'notification-icon.ico');
+
+function windowsNotificationShortcutPath() {
+  // %APPDATA%\Microsoft\Windows\Start Menu\Programs - same folder Start Menu search indexes,
+  // matches what a real installer would use (this entry never needs to be launched by the user,
+  // it exists purely to carry the AUMID + icon association).
+  return path.join(os.homedir(), 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'AI Browser.lnk');
+}
+
+/** One-time (per machine), best-effort setup - PNG→ICO conversion + registry DisplayName + a Start
+ *  Menu shortcut carrying the AUMID via COM IPropertyStore. Every step independently best-effort:
+ *  a failure partway (e.g. propsys.dll COM call blocked by policy) just means the toast falls back
+ *  to a plain/unbranded appearance later, never something worth failing a mission over. Synchronous
+ *  (blocks briefly on first-ever notification only) - acceptable since it's a one-time cost in the
+ *  context of a multi-minute mission, and notifications aren't on any latency-sensitive path. */
+function ensureWindowsNotificationIdentity() {
+  const shortcutPath = windowsNotificationShortcutPath();
+  if (fs.existsSync(shortcutPath)) return; // already set up on this machine
+  try {
+    fs.mkdirSync(path.dirname(AIVIN_ICON_ICO), { recursive: true });
+    const csharpSource = `
+using System;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+public static class AivinShortcutAumid {
+    [ComImport, Guid("00021401-0000-0000-C000-000000000046")] internal class ShellLink { }
+    [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214F9-0000-0000-C000-000000000046")]
+    internal interface IShellLinkW {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszFile, int cchMaxPath, IntPtr pfd, uint fFlags);
+        void GetIDList(out IntPtr ppidl); void SetIDList(IntPtr pidl);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszName, int cchMaxName);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszDir, int cchMaxPath);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszArgs, int cchMaxPath);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+        void GetHotkey(out short pwHotkey); void SetHotkey(short wHotkey);
+        void GetShowCmd(out int piShowCmd); void SetShowCmd(int iShowCmd);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszIconPath, int cchIconPath, out int piIcon);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+        void Resolve(IntPtr hwnd, uint fFlags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+    }
+    [StructLayout(LayoutKind.Sequential)] internal struct PROPERTYKEY { public Guid fmtid; public int pid; }
+    [StructLayout(LayoutKind.Sequential)] internal struct PROPVARIANT { public ushort vt; public ushort r1, r2, r3; public IntPtr p; public int p2; }
+    [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IPropertyStore {
+        void GetCount(out uint cProps); void GetAt(uint iProp, out PROPERTYKEY pkey);
+        void GetValue(ref PROPERTYKEY key, out PROPVARIANT pv); void SetValue(ref PROPERTYKEY key, ref PROPVARIANT pv);
+        void Commit();
+    }
+    [DllImport("propsys.dll")] static extern int PSPropertyKeyFromString([MarshalAs(UnmanagedType.LPWStr)] string s, out PROPERTYKEY pkey);
+    [DllImport("ole32.dll")] static extern int PropVariantClear(ref PROPVARIANT pvar);
+    public static void CreateWithAumid(string shortcutPath, string targetPath, string iconPath, string aumid) {
+        var link = (IShellLinkW)new ShellLink();
+        link.SetPath(targetPath);
+        link.SetIconLocation(iconPath, 0);
+        link.SetShowCmd(7);
+        PROPERTYKEY pkey;
+        if (PSPropertyKeyFromString("{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3} 5", out pkey) != 0) throw new Exception("PSPropertyKeyFromString failed");
+        var pv = new PROPVARIANT();
+        pv.vt = 31; // VT_LPWSTR
+        pv.p = Marshal.StringToCoTaskMemUni(aumid);
+        ((IPropertyStore)link).SetValue(ref pkey, ref pv);
+        ((IPropertyStore)link).Commit();
+        PropVariantClear(ref pv);
+        ((IPersistFile)link).Save(shortcutPath, true);
+    }
+}`;
+    const setupScript = [
+      'Add-Type -AssemblyName System.Drawing',
+      `if (-not (Test-Path $env:AIVIN_ICO_PATH)) {`,
+      '  $png = [System.Drawing.Image]::FromFile($env:AIVIN_PNG_PATH)',
+      '  $bmp = New-Object System.Drawing.Bitmap($png, 256, 256)',
+      '  $ico = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())',
+      '  $fs = New-Object System.IO.FileStream($env:AIVIN_ICO_PATH, [System.IO.FileMode]::Create)',
+      '  $ico.Save($fs); $fs.Close(); $png.Dispose()',
+      '}',
+      `New-Item -Path "HKCU:\\Software\\Classes\\AppUserModelId\\${AIVIN_NOTIF_AUMID}" -Force | Out-Null`,
+      `Set-ItemProperty -Path "HKCU:\\Software\\Classes\\AppUserModelId\\${AIVIN_NOTIF_AUMID}" -Name DisplayName -Value "AI Browser"`,
+      `Add-Type -TypeDefinition @'\n${csharpSource}\n'@ -Language CSharp`,
+      `[AivinShortcutAumid]::CreateWithAumid($env:AIVIN_SHORTCUT_PATH, "$env:WINDIR\\System32\\cmd.exe", $env:AIVIN_ICO_PATH, "${AIVIN_NOTIF_AUMID}")`,
+    ].join('\n');
+    execSync(`powershell.exe -NoProfile -NonInteractive -Command -`, {
+      input: setupScript,
+      env: {
+        ...process.env,
+        AIVIN_PNG_PATH: AIVIN_ICON_SOURCE_PNG,
+        AIVIN_ICO_PATH: AIVIN_ICON_ICO,
+        AIVIN_SHORTCUT_PATH: shortcutPath,
+      },
+      stdio: ['pipe', 'ignore', 'ignore'],
+      timeout: 15_000,
+    });
+  } catch {
+    // best-effort only - toast still works via the Explorer-borrowed AppID fallback below,
+    // just without aivin's own name/icon.
+  }
+}
+
+/** Best-effort native OS notification - `aivin browser` (local mode) can run for minutes at a time
+ *  with the user's attention elsewhere, and a HIL request in particular needs them to actually come
+ *  back and look. Native per-OS command, no extra npm dependency (matches this file's existing
+ *  pattern - registry reads, plutil, xdg-settings are all done the same way). Title/message passed
+ *  via env vars (not string-interpolated into the script) specifically to avoid any shell/PowerShell/
+ *  AppleScript quoting/injection concern - mission text and error messages both end up here and
+ *  neither is trusted input. Never throws, never blocks - a failed notification is not worth
+ *  interrupting a mission over. */
+function sendOSNotification(title, message) {
+  try {
+    if (process.platform === 'win32') {
+      ensureWindowsNotificationIdentity();
+      // Windows 10/11 toast via the WinRT API directly - no extra module (BurntToast etc.) needed.
+      // Uses the dedicated AUMID set up above once a shortcut backs it (falls back to Explorer's
+      // borrowed identity harmlessly if that setup didn't succeed - CreateToastNotifier doesn't
+      // validate the AUMID actually resolves to anything, it just shows less polished either way).
+      const script = [
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
+        "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null",
+        "$t = [System.Security.SecurityElement]::Escape($env:AIVIN_NOTIF_TITLE)",
+        "$m = [System.Security.SecurityElement]::Escape($env:AIVIN_NOTIF_MSG)",
+        "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument",
+        "$xml.LoadXml(\"<toast><visual><binding template='ToastGeneric'><text>$t</text><text>$m</text></binding></visual></toast>\")",
+        "$toast = New-Object Windows.UI.Notifications.ToastNotification($xml)",
+        `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('${AIVIN_NOTIF_AUMID}').Show($toast)`,
+      ].join('; ');
+      spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        env: { ...process.env, AIVIN_NOTIF_TITLE: title, AIVIN_NOTIF_MSG: message },
+        stdio: 'ignore', detached: true,
+      }).unref();
+    } else if (process.platform === 'darwin') {
+      // `system attribute` reads the env var directly in AppleScript - sidesteps needing to escape
+      // title/message into the script string at all.
+      spawn('osascript', ['-e', 'display notification (system attribute "AIVIN_NOTIF_MSG") with title (system attribute "AIVIN_NOTIF_TITLE")'], {
+        env: { ...process.env, AIVIN_NOTIF_TITLE: title, AIVIN_NOTIF_MSG: message },
+        stdio: 'ignore', detached: true,
+      }).unref();
+    } else {
+      // notify-send (freedesktop.org standard, most desktop distros ship it) - args array, not a
+      // shell string, so no quoting concern here either.
+      spawn('notify-send', [title, message], { stdio: 'ignore', detached: true }).unref();
+    }
+  } catch {
+    // best-effort only
+  }
+}
+// 9222 is Chrome/Edge's conventional remote-debugging port, but it's not reserved to them - anything
+// can be listening there (found the hard way: this project's own local docker-compose stack publishes
+// its headless Lightpanda container on host port 9222 too, for the unrelated `--remote` server-side
+// browser pool). `probeLocalChromeDebugger` below verifies the `Browser` field before trusting a hit
+// here, and `--debug-port` lets a real conflict just be sidestepped instead of fought.
 const CHROME_DEBUG_PORT = 9222;
 
 function loadBrowserCliAgentCache() {
@@ -4555,23 +4863,32 @@ async function resolveOrCreateBrowserAgent(serverUrl, authHeaders, workspace) {
 
 /** Chrome's own remote-debugging discovery endpoint - reachable only if the user already relaunched
  *  Chrome with `--remote-debugging-port`. Returns the CDP WebSocket URL for the whole browser, or
- *  null if nothing's listening there. */
-async function probeLocalChromeDebugger() {
+ *  null if nothing's listening there (or something else entirely is - see below). */
+async function probeLocalChromeDebugger(port = CHROME_DEBUG_PORT) {
   try {
-    const res = await axios.get(`http://127.0.0.1:${CHROME_DEBUG_PORT}/json/version`, { timeout: 2000 });
-    return res.data?.webSocketDebuggerUrl || null;
+    const res = await axios.get(`http://127.0.0.1:${port}/json/version`, { timeout: 2000 });
+    // Something answered - but NOT necessarily Chrome/Edge. Confirmed hitting this for real: this
+    // port is also where this project's own local dev stack publishes a headless Lightpanda
+    // container (no UI at all), which happily speaks CDP and would otherwise look identical to a
+    // real browser here - "mission ran but no window ever appeared" was the resulting symptom.
+    // Real Chrome/Edge both report a `Browser` field like "Chrome/123.0..." / "Edg/123.0...".
+    const product = String(res.data?.Browser || '');
+    if (!/^(Chrome|Edg)\//.test(product)) {
+      return { wsUrl: null, conflict: product || 'unknown service', browserId: null };
+    }
+    const browserId = /^Edg\//.test(product) ? 'edge' : 'chrome';
+    return { wsUrl: res.data?.webSocketDebuggerUrl || null, conflict: null, browserId };
   } catch {
-    return null;
+    return { wsUrl: null, conflict: null, browserId: null };
   }
 }
 
-// Any Chromium-based browser works identically here (same --remote-debugging-port / CDP protocol)
-// - Edge listed FIRST since it's the actual OS default on a stock Windows install (and what this
-// was tested against), Chrome as the common alternative. `findLocalBrowser()` returns the first
-// one actually installed, in this order - not a guess at which the user "prefers", just which
-// exists to try launching.
+// Any Chromium-based browser works identically here (same --remote-debugging-port / CDP protocol).
+// Order here is only a last-resort tiebreaker (see findLocalBrowser) - actual selection prefers the
+// user's real OS default browser via detectDefaultBrowserId(), or an explicit --browser flag.
 const LOCAL_BROWSERS = [
   {
+    id: 'edge',
     name: 'Microsoft Edge',
     win32: ['C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'],
     darwin: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
@@ -4581,6 +4898,7 @@ const LOCAL_BROWSERS = [
     profileDirLinux: ['.config', 'microsoft-edge'],
   },
   {
+    id: 'chrome',
     name: 'Google Chrome',
     win32: ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'],
     darwin: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -4591,66 +4909,167 @@ const LOCAL_BROWSERS = [
   },
 ];
 
-/** First installed browser from LOCAL_BROWSERS, with its executable path and default profile dir
- *  resolved for the current OS - or null if neither is found at any of the usual install paths. */
-function findLocalBrowser() {
+function resolveBrowserInstall(browser) {
   const home = os.homedir();
-  for (const browser of LOCAL_BROWSERS) {
-    let exe = null;
-    let profileSegments;
-    if (process.platform === 'win32') {
-      exe = browser.win32.find((p) => fs.existsSync(p)) || null;
-      profileSegments = browser.profileDirWin32;
-    } else if (process.platform === 'darwin') {
-      exe = fs.existsSync(browser.darwin) ? browser.darwin : null;
-      profileSegments = browser.profileDirDarwin;
-    } else {
-      exe = browser.linux; // assumed on PATH on Linux - no reliable single default install path there
-      profileSegments = browser.profileDirLinux;
-    }
-    if (exe) return { name: browser.name, exe, profileDir: path.join(home, ...profileSegments) };
+  let exe = null;
+  let profileSegments;
+  if (process.platform === 'win32') {
+    exe = browser.win32.find((p) => fs.existsSync(p)) || null;
+    profileSegments = browser.profileDirWin32;
+  } else if (process.platform === 'darwin') {
+    exe = fs.existsSync(browser.darwin) ? browser.darwin : null;
+    profileSegments = browser.profileDirDarwin;
+  } else {
+    exe = browser.linux; // assumed on PATH on Linux - no reliable single default install path there
+    profileSegments = browser.profileDirLinux;
   }
-  return null;
+  if (!exe) return null;
+  return { id: browser.id, name: browser.name, exe, profileDir: path.join(home, ...profileSegments) };
 }
 
-function launchCommandHint(browser) {
+/** Best-effort read of the OS's actual "default browser" setting, mapped to one of LOCAL_BROWSERS'
+ *  `id`s - or null if it can't be determined (unsupported platform, unknown browser, command
+ *  missing/failed) or if the default is a non-Chromium browser (Firefox/Safari - no CDP support, so
+ *  there's nothing to tunnel into). Never throws - this is a "nice to have" signal, `findLocalBrowser`
+ *  falls back to install-order when it's unavailable. */
+function detectDefaultBrowserId() {
+  try {
+    if (process.platform === 'win32') {
+      // The per-user UserChoice hash-protected key (what Settings > Default apps itself writes) is
+      // awkward to read reliably across Windows versions and, confirmed while testing this, is often
+      // just absent (no explicit override ever made). `Software\Classes\http\shell\open\command` is
+      // what Windows actually resolves to at launch time regardless of how it got set - HKCU holds a
+      // per-user override if one exists, HKLM is the system-wide fallback otherwise. Reading the
+      // command line's exe name directly sidesteps needing to decode a ProgId at all.
+      const readCommand = (hive) => {
+        try {
+          return execSync(`reg query "${hive}\\Software\\Classes\\http\\shell\\open\\command"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        } catch {
+          return '';
+        }
+      };
+      const out = readCommand('HKCU') || readCommand('HKLM');
+      if (/msedge\.exe/i.test(out)) return 'edge';
+      if (/chrome\.exe/i.test(out)) return 'chrome';
+      return null; // Firefox, or something unrecognized
+    }
+    if (process.platform === 'darwin') {
+      // No single stock CLI for this on macOS - LaunchServices' own plist is the source of truth
+      // Settings > Desktop & Dock reads from, `plutil` (stock, ships with macOS) can dump it as JSON.
+      const plistPath = path.join(
+        os.homedir(), 'Library', 'Preferences', 'com.apple.LaunchServices',
+        'com.apple.launchservices.secure.plist',
+      );
+      if (!fs.existsSync(plistPath)) return null;
+      const json = execSync(`plutil -convert json -o - "${plistPath}"`, { encoding: 'utf8' });
+      const handlers = JSON.parse(json)?.LSHandlers || [];
+      const httpHandler = handlers.find((h) => h.LSHandlerURLScheme === 'http');
+      const bundleId = String(httpHandler?.LSHandlerRoleAll || '').toLowerCase();
+      if (bundleId.includes('edge')) return 'edge';
+      if (bundleId.includes('chrome')) return 'chrome';
+      return null; // Safari, Firefox, or undetermined
+    }
+    // Linux: xdg-settings is the freedesktop.org standard way, present on most desktop distros.
+    const out = execSync('xdg-settings get default-web-browser', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (/edge/i.test(out)) return 'edge';
+    if (/chrome/i.test(out)) return 'chrome';
+    return null;
+  } catch {
+    return null; // command missing, key absent, parse failure - all fine to just not know
+  }
+}
+
+/**
+ * Picks which installed browser to drive, in priority order:
+ *  1. `preferredId` (from `--browser edge|chrome`) - explicit always wins, errors clearly if that
+ *     browser isn't actually installed rather than silently falling through to another one.
+ *  2. The OS's actual default browser, IF it's Chromium-based and installed - this is what makes
+ *     "drives your own logged-in browser" true; guessing wrong here would tunnel into a browser
+ *     profile the user doesn't actually use, with none of the cookies/logins they expect.
+ *  3. Whatever's installed from LOCAL_BROWSERS, in list order - last resort when the real default
+ *     couldn't be determined or isn't Chromium (Firefox/Safari have no CDP to tunnel into).
+ * Always logs which one it picked and why when there was more than one candidate, so step 3 in
+ * particular is never a silent surprise.
+ */
+function findLocalBrowser(preferredId) {
+  const installed = LOCAL_BROWSERS.map(resolveBrowserInstall).filter(Boolean);
+  if (installed.length === 0) return null;
+
+  if (preferredId) {
+    const match = installed.find((b) => b.id === preferredId);
+    if (match) return match;
+    throw new Error(`--browser ${preferredId} was requested, but it isn't installed at any of the usual locations. Installed: ${installed.map((b) => b.id).join(', ') || 'none'}.`);
+  }
+
+  if (installed.length > 1) {
+    const defaultId = detectDefaultBrowserId();
+    const byDefault = defaultId && installed.find((b) => b.id === defaultId);
+    if (byDefault) return byDefault;
+    console.log(chalk.gray(
+      `   (multiple browsers installed (${installed.map((b) => b.name).join(', ')}) and couldn't confirm your OS default - ` +
+      `using ${installed[0].name}. Pass --browser ${installed.map((b) => b.id).join('|')} to pick.)`,
+    ));
+  }
+
+  return installed[0];
+}
+
+function launchCommandHint(browser, port = CHROME_DEBUG_PORT) {
   const label = browser ? browser.name : 'Chrome or Edge';
   const exe = browser ? `"${browser.exe}"` : '<your browser>';
-  if (process.platform === 'win32') return `& ${exe} --remote-debugging-port=${CHROME_DEBUG_PORT}  (${label})`;
-  if (process.platform === 'darwin') return `open -a "${label}" --args --remote-debugging-port=${CHROME_DEBUG_PORT}`;
-  return `${browser ? browser.exe : 'google-chrome'} --remote-debugging-port=${CHROME_DEBUG_PORT}`;
+  if (process.platform === 'win32') return `& ${exe} --remote-debugging-port=${port}  (${label})`;
+  if (process.platform === 'darwin') return `open -a "${label}" --args --remote-debugging-port=${port}`;
+  return `${browser ? browser.exe : 'google-chrome'} --remote-debugging-port=${port}`;
 }
 
-function printChromeLaunchHelp() {
-  const browser = findLocalBrowser();
-  console.log(chalk.yellow('\n⚠️  No local Chrome/Edge found with remote debugging enabled.'));
-  console.log(chalk.gray("   `aivin browser` (default, local mode) drives YOUR OWN already-open browser - real cookies/logins, no server-side browser."));
-  console.log(chalk.gray('   Close it, then relaunch with remote debugging on:\n'));
-  console.log(`   ${chalk.cyan(launchCommandHint(browser))}\n`);
-  console.log(chalk.gray('   ...then run this command again. Or pass --launch-chrome to have aivin do that for you, or --remote for a server-side browser instead (no local browser needed).'));
+function printChromeLaunchHelp(port = CHROME_DEBUG_PORT, preferredId) {
+  const browser = findLocalBrowser(preferredId);
+  console.log(chalk.yellow('\n⚠️  Could not start a local browser for AI Browser.'));
+  console.log(`   ${chalk.cyan(launchCommandHint(browser, port))}\n`);
+  console.log(chalk.gray('   ...or pass --remote for a server-side browser instead (no local browser needed).'));
 }
 
-/** `--launch-chrome`: best-effort auto-launch using the user's REAL default profile (so it carries
- *  their actual cookies/logins) - refuses instead of silently failing if that profile is already
- *  locked by a running instance (SingletonLock), since launching a second process against a locked
- *  profile just errors confusingly rather than opening anything. */
-async function launchLocalChromeWithDebugging() {
-  const browser = findLocalBrowser();
+/** Launches a browser window dedicated to `aivin browser`, on ITS OWN profile
+ *  (AIVIN_BROWSER_PROFILE_DIR) - never the user's real daily-driver one. This is what makes local
+ *  mode zero-friction after the first run: because it's a separate profile, it never collides with
+ *  whatever the user's main browser is already doing (no "close all your windows first"), and once
+ *  running it just stays up - a later mission finds it already listening and reuses it, opening a
+ *  new tab in the SAME window rather than launching anything again. The one real cost: the first
+ *  time any given site is used (Facebook, etc.), the user logs in once here, same as any fresh
+ *  profile - after that it persists exactly like their main browser's cookies do. */
+async function launchLocalChromeWithDebugging(port = CHROME_DEBUG_PORT, preferredId) {
+  const browser = findLocalBrowser(preferredId);
   if (!browser) {
-    throw new Error(`Could not find a local Chrome/Edge install automatically - relaunch one manually with: ${launchCommandHint(null)}`);
+    throw new Error(`Could not find a local Chrome/Edge install automatically - relaunch one manually with: ${launchCommandHint(null, port)}`);
   }
-  if (fs.existsSync(path.join(browser.profileDir, 'SingletonLock'))) {
-    throw new Error(
-      `${browser.name} is already running with your default profile (${browser.profileDir}) - close all its windows first, then retry, or relaunch it manually with: ${launchCommandHint(browser)}`,
-    );
+  const firstRun = !fs.existsSync(AIVIN_BROWSER_PROFILE_DIR);
+  fs.mkdirSync(AIVIN_BROWSER_PROFILE_DIR, { recursive: true });
+  // No pre-flight SingletonLock check here on purpose (an earlier version of this had one, copied
+  // from the old "don't touch the user's real profile" logic where it made sense): by the time we
+  // get here, probeLocalChromeDebugger() has ALREADY confirmed nothing is answering on `port`, so a
+  // present lock file can only be stale (left behind by an unclean shutdown/crash) - Chromium itself
+  // already detects and clears stale locks on startup (checks whether the owning PID is still
+  // alive), more reliably than re-implementing that check here. A pre-check could only ever produce
+  // a false positive: a confusing "already open, go close it" error pointing at a window that isn't
+  // actually running anywhere.
+  if (firstRun) {
+    console.log(chalk.gray(`   First run: opening a NEW, separate ${browser.name} window just for AI Browser (your regular ${browser.name} is untouched).`));
+    console.log(chalk.gray(`   You'll need to log into any site the mission needs (Facebook, etc.) once in THIS window - it'll stay logged in from then on.`));
+  } else {
+    console.log(chalk.gray(`   Opening your dedicated AI Browser window...`));
   }
-  console.log(chalk.gray(`   Launching your local ${browser.name} with remote debugging...`));
-  const child = spawn(browser.exe, [`--remote-debugging-port=${CHROME_DEBUG_PORT}`], { detached: true, stdio: 'ignore' });
+  const child = spawn(browser.exe, [`--remote-debugging-port=${port}`, `--user-data-dir=${AIVIN_BROWSER_PROFILE_DIR}`, '--no-first-run', '--start-maximized'], { detached: true, stdio: 'ignore' });
   child.unref();
   for (let i = 0; i < 20; i++) {
     await new Promise((resolve) => setTimeout(resolve, 500));
-    const wsUrl = await probeLocalChromeDebugger();
+    const { wsUrl, conflict } = await probeLocalChromeDebugger(port);
     if (wsUrl) return wsUrl;
+    if (conflict) {
+      throw new Error(
+        `Port ${port} is already in use by something else (reported itself as "${conflict}", not Chrome/Edge) - ` +
+        `${browser.name} can't bind its debug port there. Free that port, or rerun with --debug-port <other-port>.`,
+      );
+    }
   }
   throw new Error(`${browser.name} launched but its debug port never came up in time.`);
 }
@@ -4709,13 +5128,55 @@ async function runBrowserMissionLocal(mission, options) {
   const authHeaders = missionAuthHeaders();
   const tenantClient = parseApiKeyClient(apiKey || '') || 'unknown';
 
-  let chromeWsUrl = await probeLocalChromeDebugger();
+  const preferredId = options.browser ? String(options.browser).toLowerCase() : undefined;
+  if (preferredId && preferredId !== 'edge' && preferredId !== 'chrome') {
+    throw new Error(`--browser must be "edge" or "chrome", got "${options.browser}".`);
+  }
+
+  // --debug-port pins an exact port (strict - errors immediately if it's taken by something else).
+  // Without it, try the conventional 9222 first, then a few neighbors - confirmed needed for real:
+  // this project's OWN local dev stack publishes an unrelated container on 9222 (see
+  // probeLocalChromeDebugger's comment), so erroring out on the very first conflict there would make
+  // `aivin browser` unusable out of the box for anyone running that stack, every single time.
+  const explicitPort = options.debugPort !== undefined;
+  const candidatePorts = explicitPort ? [Number(options.debugPort)] : [CHROME_DEBUG_PORT, 9223, 9224, 9225];
+
+  let debugPort;
+  let chromeWsUrl;
+  const triedConflicts = [];
+  for (const port of candidatePorts) {
+    const probed = await probeLocalChromeDebugger(port);
+    if (probed.wsUrl && preferredId && probed.browserId !== preferredId) {
+      // Something's already listening, but it's the OTHER browser than what --browser asked for -
+      // using it silently would drive the wrong profile (wrong cookies/logins), so this has to be a
+      // hard error rather than a best-effort fallback, even mid auto-retry.
+      throw new Error(
+        `--browser ${preferredId} was requested, but the browser already listening on port ${port} is ${probed.browserId} instead. ` +
+        `Close it and relaunch ${preferredId} with --remote-debugging-port=${port}, or use --debug-port to point at a different port.`,
+      );
+    }
+    if (probed.wsUrl) { debugPort = port; chromeWsUrl = probed.wsUrl; break; }
+    if (probed.conflict) { triedConflicts.push(`${port} (${probed.conflict})`); continue; }
+    debugPort = port; // free port, nothing answering at all - safe to launch here
+    break;
+  }
+  if (debugPort === undefined) {
+    throw new Error(
+      `${explicitPort ? 'Requested' : 'All of the usual'} debug port${candidatePorts.length > 1 ? 's are' : ' is'} already in use by something else, not Chrome/Edge: ${triedConflicts.join(', ')}. ` +
+      `Free one of them, or pass --debug-port <port> to use a specific one.`,
+    );
+  }
+
   if (!chromeWsUrl) {
-    if (options.launchChrome) {
-      chromeWsUrl = await launchLocalChromeWithDebugging();
-    } else {
-      printChromeLaunchHelp();
-      throw new Error('No local Chrome with remote debugging found (see instructions above).');
+    // Safe to always auto-launch now (unlike an earlier version of this): this opens AIVIN_BROWSER_
+    // PROFILE_DIR, a profile dedicated to `aivin browser` that's never the user's real daily-driver
+    // browser, so there's no risk of colliding with (or having to close) whatever they're already
+    // running elsewhere.
+    try {
+      chromeWsUrl = await launchLocalChromeWithDebugging(debugPort, preferredId);
+    } catch (error) {
+      printChromeLaunchHelp(debugPort, preferredId);
+      throw error;
     }
   }
 
@@ -4765,11 +5226,13 @@ async function runBrowserMissionLocal(mission, options) {
       workspace_id: workspace.id || workspace._id,
       agent_id: agentId,
       session_id: sessionId,
-      data: { __local_tunnel_id: tunnel.tunnelId },
+      data: { __local_tunnel_id: tunnel.tunnelId, start_url: options.url || guessStartUrl(mission) },
     },
     authHeaders,
   );
-  const watchPromise = options.watch !== false ? streamBrowserMissionLog(serverUrl, apiKey, sessionId, tenantClient) : Promise.resolve();
+  const watchPromise = options.watch !== false
+    ? streamBrowserMissionLog(serverUrl, apiKey, sessionId, tenantClient, { openViewerOnHIL: false })
+    : Promise.resolve();
 
   try {
     // execute-interactive responds immediately (fire-and-forget - see AIBrowserController.ts's
@@ -5234,9 +5697,11 @@ async function deleteProjectCmd(projectId, options) {
 
 program
   .command('browser [mission]')
-  .description('Run an AI Browser mission - by default drives YOUR OWN local browser (real cookies/logins) with live progress; --remote uses a server-side browser instead')
-  .option('--remote', 'Use a server-side pooled browser instead of your own local one (no local Chrome needed, no real cookies/logins carried over)')
-  .option('--launch-chrome', "Local mode only: if no Chrome with remote debugging is found, launch the user's default Chrome install with it automatically")
+  .description("Run an AI Browser mission - by default opens/reuses a local browser window dedicated to AI Browser (own profile, own cookies - log in once, watch missions run live from then on); --remote uses a server-side browser instead")
+  .option('--remote', 'Use a server-side pooled browser instead of your own local one (no local browser needed, no cookies/logins carried over)')
+  .option('--debug-port <port>', 'Local mode only: port to look for/launch your browser\'s remote debugging on (default: 9222, auto-tries a few nearby ports if that one is taken by something else) - pass this to pin an exact port instead')
+  .option('--browser <edge|chrome>', "Local mode only: which browser to drive - default: auto-detects your OS's actual default browser, falling back to whichever of Edge/Chrome is installed if that can't be determined")
+  .option('--url <url>', "Local mode only: open this URL before the mission starts, instead of a blank page - skips a wasted first analysis step and avoids the AI having to search the web to find the target site itself (auto-guessed for a few well-known sites mentioned by name in the mission if omitted)")
   .option('--workspace <id>', 'Workspace id to run in (default: your personal workspace)')
   .option('--project <id>', 'Project id within the workspace (--remote only)')
   .option('--agent <id>', "Agent id to run as (default: an auto-created/cached agent for local mode, or the workspace's default agent for --remote) - AI Browser is triggered as a tool this agent uses, real HIL suspend/resume requires an agent context")

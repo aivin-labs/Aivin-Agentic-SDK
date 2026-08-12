@@ -98,6 +98,61 @@ export interface AutomationJob {
   created_date?: string;
 }
 
+/**
+ * The `{ nodes, edges }` graph format the platform's Workflow Editor (WorkflowSkillEditor on the
+ * FE) saves into a plugin manifest's `workflow_data` - the SAME shape `agent.runFlow` accepts so a
+ * flow built visually can be exported/pasted into plugin code and run directly, no "Upgrade to
+ * Plugin" step required. Loosely typed (`Record<string, any>` node/edge data) - the backend
+ * (`WorkflowPluginService.buildStages`) owns the real schema and throws a clear error on a
+ * malformed node/edge before anything runs.
+ */
+export interface WorkflowGraph {
+  nodes: Array<{ id: string; type: string; data: Record<string, any> }>;
+  edges: Array<{ id: string; source: string; target: string; sourceHandle?: string; targetHandle?: string }>;
+}
+
+/**
+ * A single already-built flow step (the backend's internal `StagePlan` shape - CONDITION/ROUTER/
+ * PARALLEL/RETRY/WAIT/LOOP/ACTION). Left as a loose structural type rather than mirroring every
+ * per-type config (`router_config`/`parallel_config`/...): the backend validates/guards each at
+ * runtime (an unrecognized or malformed stage is skipped with a warning, not a hard crash), and
+ * hand-building one is an advanced/rare path compared to passing a `WorkflowGraph` exported from
+ * the Workflow Editor.
+ */
+export interface FlowStage {
+  id: string;
+  type: 'action' | 'condition' | 'router' | 'parallel' | 'retry' | 'wait' | 'loop';
+  name?: string;
+  [key: string]: any;
+}
+
+/** Result of one executed step from `agent.runFlow` - mirrors the backend's real `FlowStepResult`. */
+export interface FlowStepResult {
+  stepIndex: number;
+  action_intent: string;
+  mission: string;
+  result: { status: string; message?: string; data?: any; [key: string]: any };
+}
+
+/**
+ * Explicit identity `agent.runFlow` runs the flow as - build one with `ContextBuilder(...)` rather
+ * than a bare object literal. Nothing here is inferred from the flow's own live session:
+ * `agent.runFlow`'s underlying `RuntimeContext` never carries the caller's live `runtime_context`
+ * bag across the sandbox boundary (same boundary `PluginBridge.secureRuntimeContext` enforces
+ * everywhere else), so every override needed must be stated here. Anything omitted falls back to
+ * the calling invocation's own agent/workspace.
+ */
+export interface RunFlowContext {
+  agent_id?: string;
+  workspace_id?: string;
+  /** Reuses an existing session/thread (flow runs as part of that live conversation) instead of
+   *  spinning up a new, invisible one - same pattern the platform uses for agent-to-agent consults
+   *  within one chat. */
+  session_id?: string;
+  project_id?: string;
+  attachments?: any[];
+}
+
 export interface LLMPromptOptions {
   instructions?: string;
   schema?: Record<string, any>;
