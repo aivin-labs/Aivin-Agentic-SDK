@@ -153,6 +153,26 @@ export interface RunFlowContext {
   attachments?: any[];
 }
 
+/**
+ * One live progress event from `runFlow`/`promptAgentic`/`promptAction`/`promptAssistant`/`prompt`'s
+ * `onEvent` callback - mirrors the backend's internal `clientLog(...)` log line shape exactly (the
+ * SAME event the platform's own chat UI renders as a live log line), delivered over the same gRPC
+ * server-streaming RPC `ai.promptStream` uses. `event_key` is the raw, unresolved i18n key (e.g.
+ * `"flow.step_progress"`, `"agent.tool_complete"`) if you want to branch on it programmatically
+ * instead of parsing `message`'s human-readable (and locale-dependent) text.
+ */
+export interface ClientLogEvent {
+  id: string;
+  session_id: string;
+  thread_id: string;
+  channel: string;
+  message: string;
+  status: 'process' | 'success' | 'error' | 'debug';
+  timestamp: number;
+  event_key?: string;
+  meta?: Record<string, any>;
+}
+
 export interface LLMPromptOptions {
   instructions?: string;
   schema?: Record<string, any>;

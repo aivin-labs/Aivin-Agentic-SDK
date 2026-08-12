@@ -108,6 +108,8 @@ Full reference: [sdk/workspace.md](./sdk/workspace.md), [sdk/agent.md](./sdk/age
 | `agent.resolveHil({ session_id, reply_id, payload? })`     | Resolve a PAUSED human-in-the-loop checkpoint to resume a workflow.            |
 | `agent.runFlow(flow, opts?)`                                | Run a flow (`WorkflowGraph` from the Workflow Editor, or a `FlowStage[]`) directly - no NLU/planning step first. `opts.context` (build with `ContextBuilder`) sets which agent/session it runs as. See [sdk/agent.md](./sdk/agent.md#runflow). |
 | `agent.promptAgentic(prompt, opts?)` / `agent.promptAction(prompt, opts?)` / `agent.promptAssistant(prompt, opts?)` | Force one of the 3 modes `agent.processMessage`'s NLU step would otherwise pick between, skipping that classification. See [sdk/agent.md](./sdk/agent.md#forcing-a-mode-promptagentic--promptaction--promptassistant). |
+| `agent.prompt(prompt, opts?)` | Lightweight auto-routing counterpart of `processMessage` - same NLU classification, plain string in instead of a full message object. See [sdk/agent.md](./sdk/agent.md#prompt-lightweight-auto-routing). |
+| `opts.onEvent` on any of the 5 above | Live progress log events (`ClientLogEvent`) as the call runs, over a gRPC streaming connection - omit for a plain unary call. See [sdk/agent.md](./sdk/agent.md#realtime-progress-onevent). |
 | `user(id)`                                        | Public profile for a user in the current tenant.                               |
 | `getCachedUser(id)`                               | Redis-cached variant of `user(id)` - for high-traffic channels.                |
 

@@ -20,6 +20,19 @@ that already know which mode a given turn needs. Each keeps its own backend fall
 (agentic→assistant, action→assistant/agentic) — only the initial mode choice is forced. See
 [`docs/sdk/agent.md#forcing-a-mode`](./sdk/agent.md#forcing-a-mode-promptagentic--promptaction--promptassistant).
 
+Also added `agent.prompt()` — the lightweight auto-routing counterpart of `processMessage` (same NLU
+classification, plain string instead of a full message object; the backend now also persists this
+turn via `saveMessage()` first, same as every other production caller of `processMessage`, so it
+shows up in the session's history like a normal chat turn) — and `opts.onEvent` on all five of
+`runFlow`/`promptAgentic`/`promptAction`/`promptAssistant`/`prompt` — an optional callback that
+receives live progress log events (`ClientLogEvent`) as the call runs, over the same gRPC
+server-streaming RPC `ai.promptStream` uses. Omitting `onEvent` keeps the plain unary call path with
+no added cost; the backend's log-stream registry supports multiple overlapping calls sharing one
+session correctly (stacked, not one-slot-per-session). All five also now default to a 5-minute
+timeout instead of the SDK's general 30s (`opts.timeoutMs` to override further) - a flow/agentic
+plan routinely runs longer than that. See
+[`docs/sdk/agent.md#realtime-progress`](./sdk/agent.md#realtime-progress-onevent).
+
 ### 🐛 Fixed — `notification.push()` silently delivered nothing and dropped message text
 
 Verified field-by-field against the real backend handler chain

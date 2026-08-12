@@ -253,7 +253,7 @@ Every namespace below is importable on its own — `import { ai, store } from '@
 | `task` | Create, update, list, and delete tasks | [docs/sdk/task.md](docs/sdk/task.md) |
 | `project` | Read-only project lookup | [docs/sdk/project.md](docs/sdk/project.md) |
 | `workspace` | Workspace details, members, permissions, per-workspace plugin config | [docs/sdk/workspace.md](docs/sdk/workspace.md) |
-| `agent` | Look up an AI Staff agent, delegate work to it, or reply/push text into the current chat | [docs/sdk/agent.md](docs/sdk/agent.md) |
+| `agent` | Look up/delegate to an AI Staff agent, reply/push text into chat, run a flow or force a specific processing mode directly, with optional realtime progress events | [docs/sdk/agent.md](docs/sdk/agent.md) |
 | `message` | Save, list, search, and update chat messages | [docs/sdk/message.md](docs/sdk/message.md) |
 | `session` | Chat/automation session management | [docs/sdk/session.md](docs/sdk/session.md) |
 | `realtime` | Publish a live event to the workspace or a specific user | [docs/sdk/realtime.md](docs/sdk/realtime.md) |

@@ -24,10 +24,16 @@ import { agent } from '@aivin-labs/sdk';
 | `tell` | `text: string` | `Promise<{ success: boolean }>` | Push text **you already have** into the chat bubble with a typing animation, persisted like any other message — **no LLM call**. `success: false` (not a throw) when there's no live chat session to stream into. |
 | `processMessage` | `message: Record<string, any>, storageContext?: Record<string, any>` | `Promise<any>` | Runs a full message-processing pass through the agent (NLU → agentic/action/assistant routing) as if `message` had arrived on the invoking user's session. Identity is always taken from `ctx.user`, never `message`. |
 | `resolveHil` | `params: { session_id: string; reply_id: string; payload?: any }` | `Promise<{ success: boolean; reply_id: string; error?: string }>` | Resolves a PAUSED human-in-the-loop checkpoint (e.g. a visitor's selection/form reply arriving over a transport other than the SDK's own `agent.hil()` wait) to resume the paused workflow. |
-| `runFlow` | `flow: WorkflowGraph \| FlowStage[], opts?: { flowName?: string; context?: RunFlowContext }` | `Promise<FlowStepResult[]>` | Runs a flow (CONDITION/ROUTER/PARALLEL/RETRY/WAIT/LOOP/ACTION steps) directly, no NLU/planning step first — see [`runFlow`](#runflow) below. |
-| `promptAgentic` | `prompt: string, opts?: { args?: Record<string, any>; context?: RunFlowContext }` | `Promise<any>` | Forces the full multi-step planner (plan/audit/replan), skipping NLU mode classification — see [Forcing a mode](#forcing-a-mode-promptagentic--promptaction--promptassistant) below. |
-| `promptAction` | `prompt: string, opts?: { context?: RunFlowContext }` | `Promise<any>` | Forces single-plugin direct execution (no planning), skipping NLU mode classification. |
-| `promptAssistant` | `prompt: string, opts?: { context?: RunFlowContext }` | `Promise<any>` | Forces plain conversational (RAG, no tool use) mode, skipping NLU mode classification. |
+| `runFlow` | `flow: WorkflowGraph \| FlowStage[], opts?: { flowName?: string; context?: RunFlowContext; onEvent?: (e: ClientLogEvent) => void }` | `Promise<FlowStepResult[]>` | Runs a flow (CONDITION/ROUTER/PARALLEL/RETRY/WAIT/LOOP/ACTION steps) directly, no NLU/planning step first — see [`runFlow`](#runflow) below. |
+| `promptAgentic` | `prompt: string, opts?: { args?: Record<string, any>; context?: RunFlowContext; onEvent?: (e: ClientLogEvent) => void }` | `Promise<any>` | Forces the full multi-step planner (plan/audit/replan), skipping NLU mode classification — see [Forcing a mode](#forcing-a-mode-promptagentic--promptaction--promptassistant) below. |
+| `promptAction` | `prompt: string, opts?: { context?: RunFlowContext; onEvent?: (e: ClientLogEvent) => void }` | `Promise<any>` | Forces single-plugin direct execution (no planning), skipping NLU mode classification. |
+| `promptAssistant` | `prompt: string, opts?: { context?: RunFlowContext; onEvent?: (e: ClientLogEvent) => void }` | `Promise<any>` | Forces plain conversational (RAG, no tool use) mode, skipping NLU mode classification. |
+| `prompt` | `prompt: string, opts?: { context?: RunFlowContext; onEvent?: (e: ClientLogEvent) => void }` | `Promise<any>` | Auto-routes through the same NLU classification `processMessage` uses (agentic/action/assistant) — the lightweight counterpart to `processMessage`, taking a plain string instead of a full message object. See [`prompt`](#prompt-lightweight-auto-routing) below. |
+
+All five of `runFlow`/`promptAgentic`/`promptAction`/`promptAssistant`/`prompt` share the same
+`opts.context` (`RunFlowContext`, built with `ContextBuilder`) and `opts.onEvent` (live progress
+events) shape — see [`runFlow`](#runflow)'s `context` section and
+[Realtime progress](#realtime-progress-onevent) below; both apply identically to all five.
 
 `Agent` shape (from `SDKTypes.ts`):
 
@@ -296,6 +302,100 @@ export async function main(mission, input, ctx) {
   `runFlow`) — `promptAssistant`/`promptAgentic` resolve to a chat-message-shaped result,
   `promptAction` resolves to either that or the executed plugin's raw response, depending on the
   plugin's `feedbackable` flag. Treat the return value as `any` and read what you need from it.
+
+## `prompt`: lightweight auto-routing
+
+`agent.prompt` is the auto-routing counterpart of `promptAgentic`/`promptAction`/`promptAssistant` —
+instead of forcing one mode, it runs `prompt` through the **exact same NLU classification**
+`agent.processMessage` uses to pick agentic/action/assistant. The difference from `processMessage`
+is purely ergonomic: `processMessage` requires building a full message object (`session_id`,
+attachments, etc.) yourself because it's designed to receive a message that already arrived over a
+real transport (chat, widget, webhook); `prompt` takes a plain string, resolves/creates the session
+via `opts.context` the same way `runFlow`/`promptX` do, and calls `processMessage` under the hood —
+same production pipeline (quota checks, human-takeover check, NLU classification, all three modes'
+own fallback chains), just without the message-object boilerplate.
+
+```typescript
+import { agent } from '@aivin-labs/sdk';
+
+export async function main(mission, input, ctx) {
+  // Let the platform decide agentic vs action vs assistant for this turn.
+  const result = await agent.prompt(input.text, {
+    context: { session_id: ctx.session?.id },
+  });
+  return { status: 'success', data: result };
+}
+```
+
+Use `prompt` when you don't know (or don't want to hardcode) which mode a given turn needs; use
+`promptAgentic`/`promptAction`/`promptAssistant` when you already do — see
+[Forcing a mode](#forcing-a-mode-promptagentic--promptaction--promptassistant) above for that
+tradeoff in more detail.
+
+## Realtime progress: `onEvent`
+
+All five of `runFlow`/`promptAgentic`/`promptAction`/`promptAssistant`/`prompt` normally resolve
+once — you get the final result and nothing else. Pass `opts.onEvent` to additionally receive every
+progress log line **live, as it happens** — the same log lines the platform's own chat UI streams in
+real time (`flow.step_progress`, `agent.using_tool`, `agent.tool_complete`, `flow.loop_iteration`,
+...):
+
+```typescript
+import { agent } from '@aivin-labs/sdk';
+
+export async function main(mission, input, ctx) {
+  const results = await agent.runFlow(input.flow, {
+    onEvent: (event) => {
+      console.log(`[${event.status}] ${event.message}`); // e.g. "[process] Step 2/5: Send email"
+    },
+  });
+  return { status: 'success', data: results };
+}
+```
+
+```typescript
+interface ClientLogEvent {
+  id: string;
+  session_id: string;
+  thread_id: string;
+  channel: string;
+  message: string;               // human-readable, already localized
+  status: 'process' | 'success' | 'error' | 'debug';
+  timestamp: number;
+  event_key?: string;            // raw i18n key (e.g. "flow.step_progress") - branch on this, not `message`
+  meta?: Record<string, any>;
+}
+```
+
+- **Passing `onEvent` changes the call shape**: without it, the SDK makes a plain unary gRPC call
+  (`Invoke`) exactly like any other namespace. With it, the SDK opens a **server-streaming** gRPC
+  call (`InvokeStream` — the same RPC `ai.promptStream` uses) that stays open for the whole duration
+  of the run. Only pass it when you actually intend to consume progress events; omitting it costs
+  nothing extra.
+- Events arrive in the order they're logged server-side, but delivery itself is best-effort — a
+  transport hiccup can drop an event without failing the call; `onEvent` is for observability
+  (progress narration, custom logging/telemetry), not a source of truth to branch business logic on.
+  The awaited return value is always the complete, authoritative result regardless of which/how many
+  events arrived.
+- A malformed/non-JSON chunk is silently dropped rather than thrown — a broken observability
+  side-channel must never break the actual call.
+- These events are the same ones the platform streams to the chat UI via Socket.IO — `onEvent`
+  doesn't replace or redirect that, it's an *additional* channel; both fire for the same underlying
+  `clientLog(...)` calls happening server-side.
+- If the SAME `context.session_id` is reused by two overlapping calls (e.g. a flow step itself calls
+  `agent.promptAssistant` with `context.session_id` pointing back at the same session it's already
+  running in, both with their own `onEvent`), each call only receives its own events — the backend
+  keeps a separate sink per call, not one shared slot per session.
+
+### `timeoutMs`
+
+All five default to a **5-minute** client-side timeout, not the SDK's general 30s default — an
+agentic plan or a flow with LOOP/WAIT stages routinely runs longer than a typical call. Pass
+`opts.timeoutMs` to raise (or lower) it further for flows expected to take longer still:
+
+```typescript
+await agent.runFlow(input.flow, { timeoutMs: 15 * 60_000 }); // 15 minutes
+```
 
 ## Rich components and HIL
 

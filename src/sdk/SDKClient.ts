@@ -50,6 +50,7 @@ import type {
   Agent,
   AgentReplyOptions,
   AutomationJob,
+  ClientLogEvent,
   ConnectionInfo,
   FlowStage,
   FlowStepResult,
@@ -126,6 +127,11 @@ function logColorEligible(): boolean {
   );
 }
 
+/** Default timeout for `agent.runFlow`/`promptAgentic`/`promptAction`/`promptAssistant`/`prompt` -
+ *  see `SDKClient.callWithOptionalEvents`'s doc for why these need more than the general 30s
+ *  `defaultTimeoutMs`. Overridable per call via `opts.timeoutMs`. */
+const LONG_RUNNING_DEFAULT_TIMEOUT_MS = 5 * 60_000;
+
 /**
  * Client-side implementation of the platform's unified SDK surface.
  *
@@ -176,6 +182,48 @@ export class SDKClient {
       context: this.buildContext(),
       timeoutMs: timeoutMs ?? this.defaultTimeoutMs,
     });
+  }
+
+  /**
+   * Shared by `agent.runFlow`/`promptAgentic`/`promptAction`/`promptAssistant`/`prompt`: calls
+   * `namespace` as a plain unary request (`call()`) when no `onEvent` callback is given - identical
+   * cost/behavior to before this existed - or, when `onEvent` IS given, opens the same gRPC
+   * server-streaming RPC `ai.promptStream` uses (`invokeStream`), forwarding each incremental chunk
+   * (a JSON-encoded log event from the backend's `clientLog(...)` calls made while the request is
+   * still running) to `onEvent` as it arrives, and resolving to the same final value `call()` would
+   * have returned. A chunk that fails to parse as JSON is silently dropped rather than thrown -
+   * matches this SDK's general policy of never letting an observability side-channel break the
+   * actual call.
+   *
+   * `timeoutMs` defaults to `LONG_RUNNING_DEFAULT_TIMEOUT_MS` (5 min), not `this.defaultTimeoutMs`
+   * (30s) - all 5 callers of this can run a full agentic plan or a multi-stage flow (LOOP/WAIT
+   * stages included), which routinely takes far longer than a typical SDK call. Still fully
+   * overridable per call via `opts.timeoutMs` for flows expected to run even longer.
+   */
+  private callWithOptionalEvents<T = any>(
+    namespace: string,
+    params: any,
+    onEvent?: (event: ClientLogEvent) => void,
+    timeoutMs?: number,
+  ): Promise<T> {
+    const effectiveTimeoutMs = timeoutMs ?? LONG_RUNNING_DEFAULT_TIMEOUT_MS;
+    if (!onEvent) return this.call<T>(namespace, params, effectiveTimeoutMs);
+    const handle = this.invokeStream<T>({
+      namespace,
+      params,
+      context: this.buildContext(),
+      timeoutMs: effectiveTimeoutMs,
+    });
+    (async () => {
+      for await (const raw of handle.chunks) {
+        try {
+          onEvent(JSON.parse(raw) as ClientLogEvent);
+        } catch {
+          // Malformed/non-JSON chunk - drop it, never let this side-channel break the real call.
+        }
+      }
+    })().catch(() => {});
+    return handle.final;
   }
 
   close(): void {
@@ -668,17 +716,26 @@ export class SDKClient {
      * beyond a bare agent/workspace fallback - the sandbox boundary this call crosses does not carry
      * the caller's live runtime data across automatically, so anything the flow needs must be passed
      * explicitly via `context` or baked into the flow's own nodes.
+     *
+     * `opts.onEvent`, if given, receives every progress log line (step started, condition evaluated,
+     * stage failed, ...) live as the flow runs, instead of only the final `FlowStepResult[]` once
+     * everything finishes - see [Realtime progress](../../docs/sdk/agent.md#realtime-progress-onevent)
+     * for the call-shape/cost tradeoff (opens a streaming connection instead of a plain unary call).
+     *
+     * `opts.timeoutMs` defaults to 5 minutes (not the general 30s default) - a flow with LOOP/WAIT
+     * stages can legitimately run far longer; raise this further for flows expected to take longer
+     * still.
      */
     runFlow: (
       flow: WorkflowGraph | FlowStage[],
-      opts?: { flowName?: string; context?: RunFlowContext },
+      opts?: { flowName?: string; context?: RunFlowContext; onEvent?: (event: ClientLogEvent) => void; timeoutMs?: number },
     ): Promise<FlowStepResult[]> => {
       const params = validateParams(
         runFlowParamsSchema,
         { flow, flowName: opts?.flowName, context: opts?.context },
         'agent.runFlow',
       );
-      return this.call('agent.runFlow', params);
+      return this.callWithOptionalEvents('agent.runFlow', params, opts?.onEvent, opts?.timeoutMs);
     },
     /**
      * Forces the full agentic planner (`GoalPursuitService` - multi-step plan/audit/replan) for
@@ -687,27 +744,48 @@ export class SDKClient {
      * that always wants "plan and execute this," not a re-guess every run). Still falls back to
      * `promptAssistant` internally on failure (that fallback is baked into the backend method
      * itself, not something forcing the mode turns off) - only the initial mode CHOICE is forced,
-     * not the error-recovery path.
+     * not the error-recovery path. `opts.onEvent`/`opts.timeoutMs` - see `runFlow`'s doc above.
      */
     promptAgentic: (
       prompt: string,
-      opts?: { args?: Record<string, any>; context?: RunFlowContext },
-    ): Promise<any> => this.call('agent.promptAgentic', { prompt, args: opts?.args, context: opts?.context }),
+      opts?: { args?: Record<string, any>; context?: RunFlowContext; onEvent?: (event: ClientLogEvent) => void; timeoutMs?: number },
+    ): Promise<any> =>
+      this.callWithOptionalEvents('agent.promptAgentic', { prompt, args: opts?.args, context: opts?.context }, opts?.onEvent, opts?.timeoutMs),
     /**
      * Forces the single-plugin direct-execution mode (`promptAction` - select one plugin, run it, no
      * multi-step planning), skipping NLU classification. Falls back to `promptAssistant` internally
      * if no plugin matches, or to `promptAgentic` if the selected plugin's execution fails - same
-     * caveat as `promptAgentic` above: only the initial mode choice is forced.
+     * caveat as `promptAgentic` above: only the initial mode choice is forced. `opts.onEvent`/
+     * `opts.timeoutMs` - see `runFlow`'s doc above.
      */
-    promptAction: (prompt: string, opts?: { context?: RunFlowContext }): Promise<any> =>
-      this.call('agent.promptAction', { prompt, context: opts?.context }),
+    promptAction: (
+      prompt: string,
+      opts?: { context?: RunFlowContext; onEvent?: (event: ClientLogEvent) => void; timeoutMs?: number },
+    ): Promise<any> =>
+      this.callWithOptionalEvents('agent.promptAction', { prompt, context: opts?.context }, opts?.onEvent, opts?.timeoutMs),
     /**
      * Forces plain conversational (RAG-backed, no tool use, no planning) mode, skipping NLU
      * classification. Use when the caller already knows this turn is a question/answer, not an
-     * action request.
+     * action request. `opts.onEvent`/`opts.timeoutMs` - see `runFlow`'s doc above.
      */
-    promptAssistant: (prompt: string, opts?: { context?: RunFlowContext }): Promise<any> =>
-      this.call('agent.promptAssistant', { prompt, context: opts?.context }),
+    promptAssistant: (
+      prompt: string,
+      opts?: { context?: RunFlowContext; onEvent?: (event: ClientLogEvent) => void; timeoutMs?: number },
+    ): Promise<any> =>
+      this.callWithOptionalEvents('agent.promptAssistant', { prompt, context: opts?.context }, opts?.onEvent, opts?.timeoutMs),
+    /**
+     * Auto-routes `prompt` through the exact same NLU classification `agent.processMessage` runs
+     * (agentic/action/assistant) - the lightweight counterpart to `processMessage`, which requires
+     * building a full message object yourself. Use this when you have a plain prompt string and want
+     * the platform to decide the mode; use `promptAgentic`/`promptAction`/`promptAssistant` instead
+     * when the caller already knows which mode this turn needs. `opts.onEvent`/`opts.timeoutMs` - see
+     * `runFlow`'s doc above.
+     */
+    prompt: (
+      prompt: string,
+      opts?: { context?: RunFlowContext; onEvent?: (event: ClientLogEvent) => void; timeoutMs?: number },
+    ): Promise<any> =>
+      this.callWithOptionalEvents('agent.prompt', { prompt, context: opts?.context }, opts?.onEvent, opts?.timeoutMs),
   };
 
   readonly browser = {
