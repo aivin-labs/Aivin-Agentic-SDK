@@ -101,6 +101,7 @@ is. Everything else is handled for you:
 | **Package manager** | npm (or any Node package manager) |
 | **Docker** | Not required locally — the platform builds and runs your container remotely on `aivin deploy` |
 | **Account** | An Aivin account, for `aivin login` / `aivin deploy` / `aivin test` |
+| **CLI** | [`@aivin-labs/cli`](https://www.npmjs.com/package/@aivin-labs/cli) (`npm install -g @aivin-labs/cli`) — the `aivin` command used throughout this doc. This package (`@aivin-labs/sdk`) is the runtime library your plugin code imports; it no longer ships a CLI itself. |
 
 ## Getting Started
 
@@ -110,7 +111,7 @@ workspace can already discover and call.
 ### 1. Initialize
 
 ```bash
-npm install -g @aivin-labs/sdk
+npm install -g @aivin-labs/cli
 
 aivin init my-plugin
 cd my-plugin && npm install
@@ -140,13 +141,16 @@ aivin plugin convert
 ### 3. Run it locally
 
 ```bash
-npm test         # unit tests - no server, no network (see docs/SDK.md#testing)
-npm start        # real gRPC server + a curl-friendly HTTP test shim on :4001
-npm start -- --debug  # same, plus logs every sdk.* call live as it happens
+npm test              # unit tests - no server, no network (see docs/SDK.md#testing)
+aivin start           # real gRPC server + a curl-friendly HTTP test shim on :4001
+aivin start --debug   # same, plus logs every sdk.* call live as it happens
 
 curl -X POST http://localhost:4001/invoke -H 'content-type: application/json' \
   -d '{"input":{"text":"Aivin plugins are easy to write."}}'
 ```
+
+(`npm start` also works and boots the same server — it's what a deployed container runs too — but
+only `aivin start`, from `@aivin-labs/cli`, understands flags like `--debug`.)
 
 ### 4. Deploy
 
@@ -406,9 +410,11 @@ had in mind while building it — can find and call your plugin from then on.
 
 ## CLI reference
 
-`aivin` is built on [Commander](https://github.com/tj/commander.js) — `aivin --help` and
+`aivin` ships from the separate [`@aivin-labs/cli`](https://www.npmjs.com/package/@aivin-labs/cli)
+package (`npm install -g @aivin-labs/cli`) — this repo (`@aivin-labs/sdk`) is the runtime library
+only. It's built on [Commander](https://github.com/tj/commander.js) — `aivin --help` and
 `aivin <command> --help` are always available. Full reference with every flag and environment
-variable: [docs/CLI.md](docs/CLI.md).
+variable lives in that package's own `docs/CLI.md`.
 
 | Command | Description |
 | --- | --- |
@@ -430,7 +436,8 @@ variable: [docs/CLI.md](docs/CLI.md).
 `aivin` is also how you drive your Aivin workspace directly, not just build plugins —
 `aivin do`/`task`/`agent`/`project`/`workspace`/`browser`/`key` run agents, manage tasks/projects,
 and automate a real browser from the terminal. Out of scope for a plugin-building doc; see
-`aivin --help` or [docs/CLI.md](docs/CLI.md) for the full surface.
+`aivin --help` or `@aivin-labs/cli`'s
+[CLI.md](https://github.com/aivin-labs/cli/blob/main/docs/CLI.md) for the full surface.
 
 ## Environment variables
 
@@ -444,7 +451,7 @@ machine — there's no per-project credential to manage.
 | `AIVIN_WEB_URL` | Platform web app URL, used by `aivin login`'s browser flow | `https://brain.aivin.cloud` |
 | `LOCAL_TEST_PORT` | Port for the local HTTP test shim (`POST /invoke`) | `4001` |
 
-That's it — everything else is zero-config. Full list: [docs/CLI.md#environment-variables](docs/CLI.md#environment-variables).
+That's it — everything else is zero-config. Full list: [`@aivin-labs/cli`'s CLI.md#environment-variables](https://github.com/aivin-labs/cli/blob/main/docs/CLI.md#environment-variables).
 
 ## How it works
 
@@ -529,14 +536,17 @@ Full reference, including the `sse` transport for remote MCP servers:
 - 🧰 **[SDK Reference](docs/SDK.md)** — every namespace: AI, vector/knowledge, tasks, storage, realtime, and more
 - 📋 **[Manifest Reference](docs/MANIFEST.md)** — every `manifest.json` field, including MCP proxy plugins
 - 🪪 **[Plugin Context](docs/CONTEXT.md)** — every field of `ctx`, the runtime identity your handler receives
-- 🖥️ **[CLI Reference](docs/CLI.md)** — every command, flag, and environment variable
-- 📖 **[Plugin Development Guide](docs/PLUGIN_DEVELOPMENT_GUIDE.md)** — end-to-end walkthrough
+- 📖 **[Plugin Development Guide](docs/PLUGIN_DEVELOPMENT_GUIDE.md)** — writing/testing a handler, best practices
 - 🏗️ **[Architecture](docs/ARCHITECTURE.md)** — how the gRPC transport and container model work
 - 🔒 **[Security](docs/SECURITY.md)** — auth model (`cap`/`secret`), threat boundaries, `configureTransport`/`configureMtls`
 - 📚 **[Examples](docs/EXAMPLES.md)** — real, complete plugins across common use cases
 - 📊 **[Data Structures](docs/DATA_STRUCTURES.md)** — `User`, `Workspace`, `Task`, `PluginManifest`, and friends
 - 📝 **[Changelog](docs/CHANGELOG.md)** — release history
 - 🤝 **[Contributing](docs/CONTRIBUTING.md)**
+
+For the CLI (`aivin create`/`init`/`start`/`deploy`/...), see
+**[`@aivin-labs/cli`'s docs](https://github.com/aivin-labs/cli/blob/main/docs/GETTING_STARTED.md)**
+— this package (`@aivin-labs/sdk`) is runtime-only and doesn't ship it.
 
 For a quick, AI-agent-focused cheat sheet (the two files every plugin needs, in one page), see
 [AI-Plugin-Guide.md](docs/AI-Plugin-Guide.md).

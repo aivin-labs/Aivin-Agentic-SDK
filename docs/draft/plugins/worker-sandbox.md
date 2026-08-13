@@ -1,7 +1,7 @@
 # Design draft: worker-thread sandbox for plugin `main()`
 
 Status: **Phase 1 implemented**, behind `AIVIN_SANDBOX_WORKER=true` (default off - see
-`docs/CLI.md#environment-variables`). Written in response to the residual risk noted in
+[`@aivin-labs/cli`'s CLI.md#environment-variables](https://github.com/aivin-labs/cli/blob/main/docs/CLI.md#environment-variables)). Written in response to the residual risk noted in
 `docs/SECURITY.md`'s "Future direction: a credential-holding sidecar" section - this is one way to
 build that sidecar *inside* the same OS process (a `worker_threads.Worker`) instead of as a
 separate process, avoiding new process-supervision/IPC-transport work while still getting the two

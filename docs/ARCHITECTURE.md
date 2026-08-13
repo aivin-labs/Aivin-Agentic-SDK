@@ -102,8 +102,10 @@ calls still go to a real backend. See
 ```
 sdk/
 ├── bin/
-│   ├── cli.mjs             # `aivin` CLI: create / plugin make / validate / start / test / deploy / login
-│   └── server.mjs          # `aivin start` entry point — boots PluginServer (+ LocalTestServer in dev)
+│   └── server.mjs          # `aivin-server` bin entry — boots PluginServer (+ LocalTestServer in dev);
+│                           # this is the deployed container's real `npm start` entrypoint. The
+│                           # interactive `aivin` CLI (create/plugin make/deploy/login/...) lives in
+│                           # the separate @aivin-labs/cli package/repo, not here.
 ├── src/
 │   ├── index.ts            # Package entry point
 │   ├── PluginServer.ts     # gRPC server the host calls into to run main()

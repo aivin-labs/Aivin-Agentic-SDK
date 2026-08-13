@@ -1,6 +1,6 @@
 {
   "name": "@aivin-labs/sdk",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "Aivin Plugin SDK - gRPC client/server for building plugins that run inside the Aivin platform (agentic engine, vector search, workspace, tasks, and more)",
   "type": "commonjs",
   "main": "dist/index.js",
@@ -13,10 +13,11 @@
     "./types/*": {
       "types": "./dist/types/*.d.ts",
       "default": "./dist/types/*.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "bin": {
-    "aivin": "bin/cli.mjs"
+    "aivin-server": "bin/server.mjs"
   },
   "scripts": {
     "build": "tsc && npm run copy:proto",
@@ -25,7 +26,7 @@
     "clean": "rimraf dist",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test": "node --import tsx --test test/cli.validate.test.mjs test/pluginTypes.test.ts test/grpcInvoker.test.ts test/sdkClient.test.ts test/trace.test.ts test/testUtils.test.ts test/pluginServer.test.ts test/pluginWorkerHost.test.ts",
+    "test": "node --import tsx --test test/pluginTypes.test.ts test/grpcInvoker.test.ts test/sdkClient.test.ts test/trace.test.ts test/testUtils.test.ts test/pluginServer.test.ts test/pluginWorkerHost.test.ts",
     "check:contract": "node scripts/check-contract.mjs",
     "prepublishOnly": "npm run clean && npm run build"
   },
@@ -44,18 +45,11 @@
   "dependencies": {
     "@grpc/grpc-js": "^1.14.3",
     "@grpc/proto-loader": "^0.8.1",
-    "axios": "^1.18.1",
-    "chalk": "^5.6.2",
-    "commander": "^15.0.0",
     "dotenv": "^17.4.2",
-    "inquirer": "^14.0.2",
-    "socket.io-client": "^4.8.3",
-    "ws": "^8.18.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/inquirer": "^9.0.10",
     "@types/node": "^26.1.1",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",

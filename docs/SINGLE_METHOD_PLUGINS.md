@@ -139,17 +139,17 @@ export async function main(mission, input, ctx) {
 
 ## Local development workflow
 
+Scaffolding, running, and deploying a plugin is a CLI concern — see
+[`@aivin-labs/cli`'s Getting Started guide](https://github.com/aivin-labs/cli/blob/main/docs/GETTING_STARTED.md).
+The short version, for orientation:
+
 ```bash
-aivin create my-plugin
-cd my-plugin
+aivin create my-plugin && cd my-plugin && npm install
 
-# edit src/main.ts
+# edit src/main.ts, then:
 aivin start                                       # local gRPC server + HTTP test shim
-
-curl -X POST http://localhost:4001/invoke \
-  -H 'content-type: application/json' \
+curl -X POST http://localhost:4001/invoke -H 'content-type: application/json' \
   -d '{"input": {"action": "list"}}'
 
-aivin test                                        # deploy to a test instance
-aivin deploy                                      # ship it
+aivin test && aivin deploy                        # verify on a test instance, then ship
 ```

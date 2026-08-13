@@ -85,25 +85,14 @@ For anything without a dedicated import, use the generic escape hatch:
 
 `manual` | `schedule` | `event` | `webhook` | `api` | `chat` — omit `trigger_type` to allow all.
 
-## CLI workflow
+## Getting from zero to deployed
 
-```bash
-aivin init my-plugin                # asks what it should do, scaffolds + generates real code in one step
-cd my-plugin && npm install
-# writes src/service.ts (business logic, AI-generated) + src/main.ts (thin static wrapper)
-
-# alternative: scaffold with no AI step, write src/main.ts by hand
-aivin create my-plugin
-cd my-plugin
-aivin plugin make "<description>"   # or: let AI generate the logic from a description
-aivin plugin convert                # or: convert a project you already have into a plugin
-
-aivin plugin search "<query>"       # check if an existing plugin already does this, first
-aivin start                         # run locally: gRPC server + curl-able HTTP shim on :4001
-aivin test                          # deploy to a non-production test instance
-aivin deploy                        # ship to your org
-aivin plugin trigger "<mission>" '<input>'  # invoke it for real, like the platform's Playground
-```
+Scaffolding, running, and deploying is driven by the separate `@aivin-labs/cli` package (`npm
+install -g @aivin-labs/cli`), not this SDK directly — full walkthrough:
+[`@aivin-labs/cli`'s Getting Started guide](https://github.com/aivin-labs/cli/blob/main/docs/GETTING_STARTED.md).
+In short: `aivin init`/`aivin create` scaffold, `aivin plugin make`/`aivin plugin convert`
+(re)generate code, `aivin start` runs it locally with a curl-able HTTP shim on `:4001`, `aivin
+test`/`aivin deploy` ship it.
 
 ## Checklist before deploying
 
@@ -113,7 +102,7 @@ aivin plugin trigger "<mission>" '<input>'  # invoke it for real, like the platf
       (`{ status: PluginStatus.X, data?, message?, error_code? }`)
 - [ ] No hardcoded secrets — nothing to hardcode anyway, since `mongo`/`redis`/`store` never
       expose raw credentials
-- [ ] Tested via `aivin start` + the `/invoke` HTTP shim before `aivin deploy`
+- [ ] Tested against a real local run (`aivin start` + the `/invoke` HTTP shim) before deploying
 
 ## See also
 
@@ -121,3 +110,4 @@ aivin plugin trigger "<mission>" '<input>'  # invoke it for real, like the platf
 - [MANIFEST.md](./MANIFEST.md) — every manifest field
 - [SINGLE_METHOD_PLUGINS.md](./SINGLE_METHOD_PLUGINS.md) — handler pattern + more examples
 - [EXAMPLES.md](./EXAMPLES.md) — real plugins across common use cases
+- [`@aivin-labs/cli` Getting Started guide](https://github.com/aivin-labs/cli/blob/main/docs/GETTING_STARTED.md) — scaffolding, running, deploying

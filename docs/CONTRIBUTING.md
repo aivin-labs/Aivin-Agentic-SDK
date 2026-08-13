@@ -149,9 +149,12 @@ aivin deploy
 ### 1. **Thiết lập Môi trường Phát triển**
 
 ```bash
-# Cài đặt dependencies
-npm install -g @aivin-labs/sdk
+# Cài đặt CLI global để tiện dùng lệnh `aivin` (aivin create/init/deploy/...)
+npm install -g @aivin-labs/cli
 ```
+
+`@aivin-labs/sdk` (gói của repo này) chỉ là thư viện runtime mà code plugin của bạn import —
+lệnh `aivin` giờ sống trong gói `@aivin-labs/cli` riêng, không cần cài `sdk` global.
 
 ### 2. **Tạo Plugin đầu tiên của bạn**
 

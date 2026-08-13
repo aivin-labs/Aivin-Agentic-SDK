@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### 💥 Breaking — the `aivin` CLI moved to `@aivin-labs/cli`
+
+`@aivin-labs/sdk` is now runtime-only: the interactive tooling (`create`, `init`, `deploy`, `login`,
+`plugin`, `connector`, `mcp`, `browser`, `do`, `task`, `workspace`, `agent`, `project`, ...) lives in
+a new, separate package, **`@aivin-labs/cli`**. Install it globally (or as a devDependency) to get
+the `aivin` command back:
+
+```bash
+npm install -g @aivin-labs/cli
+```
+
+What changed in this package as a result:
+
+- **Removed** the `aivin` bin entry. `@aivin-labs/sdk` no longer ships a CLI at all.
+- **Added** a new `aivin-server` bin entry (`bin/server.mjs`, unchanged file/behavior — this is the
+  same process that has always been the deployed plugin container's real entrypoint via `npm start`,
+  see `DockerHelper.createDockerCompose` on the backend). A plugin project's `package.json` should
+  point its `"start"` script at `aivin-server` directly, **not** at `aivin start` anymore — deployed
+  containers only ever install `@aivin-labs/sdk`, never the CLI, so `"start": "aivin start"` will now
+  fail with `command not found` on redeploy. `aivin create`/`aivin init` (from the new CLI package)
+  already scaffold fresh projects with the correct `"start": "aivin-server"` — **existing** plugin
+  projects need this one-line `package.json` edit by hand before their next deploy.
+- **Removed** CLI-only dependencies no longer needed at runtime: `axios`, `chalk`, `commander`,
+  `inquirer`, `socket.io-client`, `ws`. Kept `dotenv` (still used directly by `bin/server.mjs`).
+  Every deployed plugin container's `npm ci` now installs meaningfully fewer packages.
+- **Added** an explicit `"./package.json"` export, so tooling (like the new CLI) can reliably resolve
+  an installed `@aivin-labs/sdk`'s own version via normal `require.resolve('@aivin-labs/sdk/package.json')`
+  module resolution instead of reading files outside the public `exports` map.
+
+Nothing about the SDK's own API (`import { ai, ... } from '@aivin-labs/sdk'`, `PluginServer`,
+`LocalTestServer`, `flattenManifestFile`, etc.) changed — this release is CLI/packaging-only.
+
 ### 🆕 Added — `agent.runFlow()` and `ContextBuilder`
 
 Plugins can now run a flow (CONDITION/ROUTER/PARALLEL/RETRY/WAIT/LOOP/ACTION steps) directly from
@@ -175,7 +207,7 @@ didn't scale to a large project (uploads everything up front) and could only eve
 - `--force` re-runs the whole loop against a project this command already converted before, instead
   of refusing outright because `src/main.ts` exists.
 
-See [CLI.md#aivin-plugin-convert-hint](./CLI.md#aivin-plugin-convert-hint) for the full walkthrough.
+See [CLI.md#aivin-plugin-convert-hint](https://github.com/aivin-labs/cli/blob/main/docs/CLI.md#aivin-plugin-convert-hint) for the full walkthrough.
 
 ### 🆕 Added — complexity-adaptive `aivin plugin make`/`aivin init`
 
@@ -234,7 +266,7 @@ Also added live per-call debugging: `SDK_DEBUG=json` (new, alongside the existin
 `SDK_DEBUG=true` human-readable mode) prints one JSON object per `sdk.*` call as it happens - for a
 script or coding agent reading the process's stdout to parse programmatically, instead of a
 post-hoc trace summary or pattern-matching free text. `aivin start --debug` / `--debug-json` are
-CLI sugar for the two modes. See [CLI.md#aivin-start](./CLI.md#aivin-start) and
+CLI sugar for the two modes. See [CLI.md#aivin-start](https://github.com/aivin-labs/cli/blob/main/docs/CLI.md#aivin-start) and
 [SDK.md#testing](./SDK.md#testing).
 
 ### 📝 Improved — `AGENTS.md` scaffold: testing + debugging sections
@@ -311,7 +343,7 @@ any change to `SDKClient.ts` or when the backend's `PluginBridge` registrations 
 The four persistence namespaces serve genuinely different purposes, not four ways to do the same
 thing — but the docs never said so in one place before, leaving "which one do I use" to be
 reverse-engineered from four separate pages. Added a real decision guide (README and
-[SDK.md](./SDK.md#persistent-storage--store-datastore-mongo-redis)): `datastore` for user-facing
+[SDK.md](./SDK.md#persistent-storage--store-table-mongo-redis)): `datastore` for user-facing
 tables the platform UI renders, `store` as the default for everything else, `mongo`/`redis` only
 for their specific niches (porting Mongo-shaped logic; ephemeral cache/counters).
 

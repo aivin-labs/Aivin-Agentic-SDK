@@ -240,10 +240,12 @@ const result = await withMockSDK(client, () => main('test', { text: 'x' }, ctx))
 
 ## Debugging & Tracing
 
-Two layers, for two different situations. See [CLI.md#aivin-start](./CLI.md#aivin-start) for the
-CLI-flag version (`aivin start --debug`/`--debug-json`, i.e. `SDK_DEBUG=true`/`SDK_DEBUG=json`) —
-this section covers the programmatic API underneath it, for when you're embedding the SDK's own
-runtime (a custom host process, not `aivin start`) and want the same per-call visibility.
+Two layers, for two different situations. See
+[`@aivin-labs/cli`'s CLI.md#aivin-start](https://github.com/aivin-labs/cli/blob/main/docs/CLI.md#aivin-start)
+for the CLI-flag version (`aivin start --debug`/`--debug-json`, i.e.
+`SDK_DEBUG=true`/`SDK_DEBUG=json`) — this section covers the programmatic API underneath it, for
+when you're embedding the SDK's own runtime (a custom host process, not `aivin start`) and want the
+same per-call visibility.
 
 | Export | What it does |
 | --- | --- |

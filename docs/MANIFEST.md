@@ -105,7 +105,7 @@ guessing needed. The one place local matching still applies is `aivin start` (no
 loop): a single-entry manifest always resolves straight to its one entry, whatever `mission` says;
 with several entries, pass `mission` matching an entry's `id` (or `func` directly) to pick which
 one runs, for manual `curl` testing across every function in one dev-mode process — see
-[`aivin start`](./CLI.md#aivin-start).
+[`aivin start`](https://github.com/aivin-labs/cli/blob/main/docs/CLI.md#aivin-start).
 
 ### Example
 
@@ -294,15 +294,9 @@ How the host reads `trigger_type`:
 
 A plugin can also just forward calls to an existing [MCP](https://modelcontextprotocol.io) server
 instead of running your own code — one of its tools, resources, or prompts becomes callable like
-any other plugin, with no `src/main.ts` at all:
-
-```bash
-aivin mcp create doc-search \
-  --url https://example.com/mcp --tool-name search_docs \
-  --description "Search external docs via MCP"
-```
-
-This writes a manifest-only plugin — just `manifest.json`, no `src/main.ts`/`package.json`:
+any other plugin, with no `src/main.ts` at all. Created via `aivin mcp create <name>` (see
+[`@aivin-labs/cli`'s docs](https://github.com/aivin-labs/cli/blob/main/docs/CLI.md#aivin-mcp-create-name)
+for the command itself) — this section documents the resulting `proxy_config` shape:
 
 ```json
 {
@@ -336,9 +330,6 @@ code is uploaded or scanned.
 | `mcp_resource_uri` / `mcp_resource_mime_type` | `mcp_kind: "resource"`   | URI (and optional MIME type) of the resource.                                                       |
 | `mcp_prompt_name`                        | `mcp_kind: "prompt"`          | The real prompt name per the MCP protocol.                                                          |
 | `auth_secret_key`                        | server requires auth          | Name of a secret already stored in your workspace's credential store, used as the Bearer token — never the raw secret itself. |
-
-Run `aivin mcp create <name>` without any options for an interactive prompt instead, or pass
-`--json`-style flags (see `aivin mcp create --help`) to script it.
 
 The platform also supports other proxy types server-side (REST, n8n, Coze, Dify, ...) — those are
 configured through the dashboard, not through this SDK.

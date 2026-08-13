@@ -95,8 +95,8 @@ Locally there is no host to mint a real identity, so `ctx.user`/`ctx.workspace`/
 whatever your test request supplies (usually absent) — write your handler to tolerate that.
 SDK calls still work if `SDK_ENDPOINT`/`SDK_SECRET` point at a real backend (they
 default to production `api.aivin.cloud` — see
-[PLUGIN_DEVELOPMENT_GUIDE.md](./PLUGIN_DEVELOPMENT_GUIDE.md#4-test-locally)); otherwise any
-SDK call throws a clear "not set" error.
+[PLUGIN_DEVELOPMENT_GUIDE.md#local-runtime-behavior](./PLUGIN_DEVELOPMENT_GUIDE.md#local-runtime-behavior));
+otherwise any SDK call throws a clear "not set" error.
 
 ## Related
 
@@ -105,5 +105,6 @@ SDK call throws a clear "not set" error.
   `ConnectionInfo` shapes
 - **[Manifest Reference](./MANIFEST.md)** — `connection_id`, `initable`/`initial`, and the other
   fields that shape what arrives in `ctx`
-- **[Plugin Development Guide](./PLUGIN_DEVELOPMENT_GUIDE.md)** — `ctx` in the context of a full
-  walkthrough
+- **[Plugin Development Guide](./PLUGIN_DEVELOPMENT_GUIDE.md)** — `ctx` in the context of writing
+  and testing a handler
+- **[`@aivin-labs/cli` Getting Started guide](https://github.com/aivin-labs/cli/blob/main/docs/GETTING_STARTED.md)** — scaffolding, running locally, deploying
