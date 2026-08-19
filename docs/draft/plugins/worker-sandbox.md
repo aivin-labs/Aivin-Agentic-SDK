@@ -2,10 +2,10 @@
 
 Status: **Phase 1 implemented**, behind `AIVIN_SANDBOX_WORKER=true` (default off - see
 [`@aivin-labs/cli`'s CLI.md#environment-variables](https://github.com/aivin-labs/cli/blob/main/docs/CLI.md#environment-variables)). Written in response to the residual risk noted in
-`docs/SECURITY.md`'s "Future direction: a credential-holding sidecar" section - this is one way to
+the platform's internal auth design notes on a "credential-holding sidecar" - this is one way to
 build that sidecar *inside* the same OS process (a `worker_threads.Worker`) instead of as a
 separate process, avoiding new process-supervision/IPC-transport work while still getting the two
-concrete properties that section asks for.
+concrete properties that idea asks for.
 
 ## Implementation notes (Phase 1, as actually shipped)
 
@@ -48,7 +48,7 @@ rollout gating).
 Today, `PluginServer.loadPlugin()` `import()`s a plugin's `src/main.ts` directly into the same
 V8 context as the SDK client, on the main thread. The plugin's own code therefore has full Node.js
 capability - `fs`, `child_process`, arbitrary network, all of `process.env` - for the lifetime of
-the container. `docs/SECURITY.md` already documents this as accepted (cap-scoping, not secrecy, is
+the container. This is already accepted as a known tradeoff (cap-scoping, not secrecy, is
 the real tenant-isolation boundary) but two things are still worth closing, independent of that:
 
 1. The raw `secret` (proves "a real container the host spawned") sits one `resolveSdkSecret()` call
@@ -70,7 +70,7 @@ the real tenant-isolation boundary) but two things are still worth closing, inde
 
 **Non-goals**
 - Not defending against a plugin exfiltrating data it's legitimately allowed to see via its own
-  `cap` - that was never in scope for `cap`/`secret` either, see `docs/SECURITY.md`.
+  `cap` - that was never in scope for `cap`/`secret` either.
 - Not restricting network egress - Node's Permission Model has no `--allow-net` as of the versions
   this SDK targets. A plugin can still make arbitrary outbound HTTP calls; that's inherent to what
   a plugin is *for*.
@@ -148,7 +148,7 @@ Container OS process
   instead of pushing into a local trace array - the trace object itself now lives host-side.
 - `cap` (the short-TTL, tenant-scoped bearer) is still handed to the worker as part of the initial
   `invoke` message, unchanged from today - `cap` was never the thing this design protects the
-  plugin from having (see `docs/SECURITY.md`: `cap`'s job is confining the plugin even assuming it
+  plugin from having (`cap`'s job is confining the plugin even assuming it
   has the value, not hiding it). Only `secret` moves host-only.
 
 ### `src/worker/protocol.ts` (shared message types, imported by both sides)
@@ -221,7 +221,7 @@ benchmarking) to avoid an extra copy - a zero-copy ownership transfer instead of
 1. **Phase 1** — build `PluginWorkerHost`/`PluginWorkerRuntime`/protocol behind
    `AIVIN_SANDBOX_WORKER=true` (default off). Fully additive: `PluginServer.loadPlugin()` /
    `handleInvoke()` keep working exactly as today when unset.
-2. **Phase 2** — dogfood against `test-sdk`'s existing harness (the same ~140-call sweep already in
+2. **Phase 2** — dogfood against the existing QA test harness (the same ~140-call sweep already in
    `.test/report.md` today) run through the worker path; diff the pass/skip/fail profile against the
    non-sandboxed run - it should be identical.
 3. **Phase 3** — benchmark per-call overhead (message round-trip vs direct call) and worker
@@ -254,7 +254,7 @@ runaway plugin's memory instead of the container OOM-killing the whole process (
 included). This is an *availability* control, not a confidentiality one - worth tracking as a
 follow-up, not blocking this design.
 
-## Residual risks (stated plainly, same spirit as `docs/SECURITY.md`)
+## Residual risks (stated plainly)
 
 - Doesn't stop a plugin from exfiltrating data it's legitimately allowed to see via its own `cap` -
   never in scope; `cap` is the actual tenant-isolation boundary regardless of this design.

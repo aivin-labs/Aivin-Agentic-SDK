@@ -26,7 +26,7 @@ Both methods validate `params` locally (zod) before the call goes out — passin
 isn't one of the three accepted shapes, or an empty `url` to `remove`, throws immediately with a
 clear `[resource.X] invalid params - ...` message instead of failing obscurely on the host.
 
-`ResourceMeta` shape (from `SDKTypes.ts`, verified against the backend's real `FSIO.ts`):
+`ResourceMeta` shape (from `SDKTypes.ts`, verified against the backend's real implementation):
 
 ```typescript
 interface ResourceMeta {
@@ -77,8 +77,8 @@ export async function main(mission, input, ctx) {
 
 ## Notes & caveats
 
-- `file` accepts exactly three shapes, verified against the backend's real `toBuffer()` normalizer
-  in `ResourceSDK.ts`: a base64-encoded string, a `{type:'Buffer',data:number[]}` object (this is
+- `file` accepts exactly three shapes, verified against the backend's real normalizer:
+  a base64-encoded string, a `{type:'Buffer',data:number[]}` object (this is
   what `JSON.stringify(someBuffer)` itself produces — `Buffer` has a custom `toJSON()`), or a plain
   `number[]` array of byte values. **A raw `Buffer` instance passed directly will NOT arrive
   correctly** — the call travels as JSON over gRPC, and a `Buffer` only survives that round-trip in

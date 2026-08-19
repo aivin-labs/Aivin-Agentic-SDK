@@ -1,6 +1,6 @@
 {
   "name": "@aivin-labs/sdk",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "description": "Aivin Plugin SDK - gRPC client/server for building plugins that run inside the Aivin platform (agentic engine, vector search, workspace, tasks, and more)",
   "type": "commonjs",
   "main": "dist/index.js",
@@ -26,7 +26,7 @@
     "clean": "rimraf dist",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test": "node --import tsx --test test/pluginTypes.test.ts test/grpcInvoker.test.ts test/sdkClient.test.ts test/trace.test.ts test/testUtils.test.ts test/pluginServer.test.ts test/pluginWorkerHost.test.ts",
+    "test": "node --import tsx --test test/pluginTypes.test.ts test/grpcInvoker.test.ts test/grpcInvokerStream.test.ts test/sdkClient.test.ts test/trace.test.ts test/testUtils.test.ts test/pluginServer.test.ts test/pluginWorkerHost.test.ts test/standalone.test.ts",
     "check:contract": "node scripts/check-contract.mjs",
     "prepublishOnly": "npm run clean && npm run build"
   },

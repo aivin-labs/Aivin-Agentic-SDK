@@ -81,7 +81,7 @@ export async function main(mission, input, ctx) {
 ## Notes & caveats
 
 - **`save` reads `text`, not `content`.** This was a real fix against the backend's actual
-  `saveMessage` handler (`src/base/SDK.ts`'s `get message()`) — the field name in the SDK's
+  `saveMessage` handler — the field name in the SDK's
   TypeScript signature (`text`) must be used verbatim; there is no `content` alias.
 - `getList`, `search`, and `update` all accept an index signature (`[key: string]: any`) alongside
   their named fields — the named fields are the confirmed-required/common ones, but the backend

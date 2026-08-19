@@ -202,9 +202,30 @@ export class PluginWorkerHost {
     if (!worker) return;
     try {
       const handle = this.invokeStream(request);
-      for await (const delta of handle.chunks) {
-        worker.postMessage({ type: 'sdk.stream.chunk', requestId, delta } satisfies HostToWorkerMessage);
-      }
+      // `chunks`/`lines`/`rawLines`/`reasoning` are four independent generators over the same
+      // underlying stream (see `StreamHandle`'s doc comments in `GrpcInvoker.ts`) - drained
+      // concurrently here so none of them is gated behind fully relaying another first.
+      const relayChunks = (async () => {
+        for await (const delta of handle.chunks) {
+          worker.postMessage({ type: 'sdk.stream.chunk', requestId, delta } satisfies HostToWorkerMessage);
+        }
+      })();
+      const relayLines = (async () => {
+        for await (const parsed of handle.lines) {
+          worker.postMessage({ type: 'sdk.stream.parsedLine', requestId, parsed } satisfies HostToWorkerMessage);
+        }
+      })();
+      const relayRawLines = (async () => {
+        for await (const line of handle.rawLines) {
+          worker.postMessage({ type: 'sdk.stream.rawLine', requestId, line } satisfies HostToWorkerMessage);
+        }
+      })();
+      const relayReasoning = (async () => {
+        for await (const text of handle.reasoning) {
+          worker.postMessage({ type: 'sdk.stream.reasoning', requestId, text } satisfies HostToWorkerMessage);
+        }
+      })();
+      await Promise.all([relayChunks, relayLines, relayRawLines, relayReasoning]);
       const final = await handle.final;
       worker.postMessage({ type: 'sdk.stream.end', requestId, final } satisfies HostToWorkerMessage);
     } catch (err) {

@@ -54,7 +54,7 @@ export async function main(mission, input, ctx) {
 
 ## Notes & caveats
 
-- This matches the real `get causality()` in `src/base/SDK.ts` **exactly** — both `think` and
+- This matches the backend's own `get causality()` **exactly** — both `think` and
   `absorb` spread their `opts` directly into the call params (`this.call('think.deep', { query,
   ...opts })` / `this.call('think.absorb', { causalities, ...opts })`), rather than nesting them
   under a `mission`/`context` sub-key.

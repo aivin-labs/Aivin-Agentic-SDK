@@ -5,9 +5,8 @@ import * as protoLoader from '@grpc/proto-loader';
 
 /**
  * The single `Invoke` RPC is used in both directions on the real platform:
- * plugin -> host (outbound `sdk.call`) and host -> plugin (inbound trigger,
- * see PluginRunner.handleDockerRuntime on the backend). Both the client and
- * the server need the exact same generated service definition.
+ * plugin -> host (outbound `sdk.call`) and host -> plugin (inbound trigger).
+ * Both the client and the server need the exact same generated service definition.
  */
 export function resolveProtoPath(): string {
   const candidates = [

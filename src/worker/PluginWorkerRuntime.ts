@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto';
 import { parentPort, workerData } from 'worker_threads';
 import type { InvokeRequest, StreamHandle } from '../grpc/GrpcInvoker';
-import { emitTrace } from '../grpc/GrpcInvoker';
+import type { ParsedLine } from '../types/SDKTypes';
+import { createStreamQueue, emitTrace } from '../grpc/GrpcInvoker';
 import { SDKClient, type PluginIdentity } from '../sdk/SDKClient';
 import { invocationStorage } from '../sdk/currentInvocation';
 import { withTrace, formatTraceForConsole, type InvocationTrace } from '../sdk/trace';
@@ -42,7 +43,14 @@ let loadedPlugin: LoadedPlugin | null = null;
 const pendingCalls = new Map<string, { resolve: (data: any) => void; reject: (err: Error) => void; namespace: string; startedAt: number }>();
 const pendingStreams = new Map<
   string,
-  { onChunk: (delta: string) => void; onEnd: (final: any) => void; onError: (err: Error) => void }
+  {
+    onChunk: (delta: string) => void;
+    onParsedLine: (parsed: ParsedLine) => void;
+    onRawLine: (line: string) => void;
+    onReasoning: (text: string) => void;
+    onEnd: (final: any) => void;
+    onError: (err: Error) => void;
+  }
 >();
 
 /** `SDKClientOptions.invoke` override - posts the call to the host (the only thing holding the
@@ -56,14 +64,13 @@ function remoteInvoke<T = any>(request: InvokeRequest): Promise<T> {
   });
 }
 
-/** `SDKClientOptions.invokeStream` override - same buffered/waiters pattern `invokeHostStream`
- *  itself uses in `GrpcInvoker.ts`, just fed by `sdk.stream.*` messages from the host instead of
- *  real gRPC stream events. */
+/** `SDKClientOptions.invokeStream` override - reuses `GrpcInvoker.ts`'s own `createStreamQueue`
+ *  (same buffered-queue-plus-async-generator shape `invokeHostStream` builds `StreamHandle` out
+ *  of), just fed by `sdk.stream.*` messages relayed from the host instead of real gRPC stream
+ *  events. */
 function remoteInvokeStream<T = any>(request: InvokeRequest): StreamHandle<T> {
   const requestId = randomUUID();
   const startedAt = Date.now();
-  const buffered: string[] = [];
-  const waiters: Array<(result: IteratorResult<string, void>) => void> = [];
   let ended = false;
   let streamError: Error | undefined;
   let finalValue: T | undefined;
@@ -75,18 +82,26 @@ function remoteInvokeStream<T = any>(request: InvokeRequest): StreamHandle<T> {
   });
   final.catch(() => {});
 
+  const getError = () => streamError;
+  const isEnded = () => ended;
+  const chunkQueue = createStreamQueue<string>(getError, isEnded);
+  const lineQueue = createStreamQueue<ParsedLine>(getError, isEnded);
+  const rawLineQueue = createStreamQueue<string>(getError, isEnded);
+  const reasoningQueue = createStreamQueue<string>(getError, isEnded);
   const finish = () => {
     if (ended) return;
     ended = true;
-    while (waiters.length) waiters.shift()!({ value: undefined, done: true });
+    chunkQueue.finish();
+    lineQueue.finish();
+    rawLineQueue.finish();
+    reasoningQueue.finish();
   };
 
   pendingStreams.set(requestId, {
-    onChunk: (delta) => {
-      const waiter = waiters.shift();
-      if (waiter) waiter({ value: delta, done: false });
-      else buffered.push(delta);
-    },
+    onChunk: (delta) => chunkQueue.push(delta),
+    onParsedLine: (parsed) => lineQueue.push(parsed),
+    onRawLine: (line) => rawLineQueue.push(line),
+    onReasoning: (text) => reasoningQueue.push(text),
     onEnd: (finalData) => {
       finalValue = finalData as T;
       finish();
@@ -109,26 +124,13 @@ function remoteInvokeStream<T = any>(request: InvokeRequest): StreamHandle<T> {
 
   port.postMessage({ type: 'sdk.stream.start', requestId, request } satisfies WorkerToHostMessage);
 
-  async function* chunks(): AsyncGenerator<string, void, void> {
-    for (;;) {
-      if (buffered.length) {
-        yield buffered.shift()!;
-        continue;
-      }
-      if (ended) {
-        if (streamError) throw streamError;
-        return;
-      }
-      const result = await new Promise<IteratorResult<string, void>>((resolve) => waiters.push(resolve));
-      if (result.done) {
-        if (streamError) throw streamError;
-        return;
-      }
-      yield result.value as string;
-    }
-  }
-
-  return { chunks: chunks(), final };
+  return {
+    chunks: chunkQueue.iterator,
+    final,
+    lines: lineQueue.iterator,
+    rawLines: rawLineQueue.iterator,
+    reasoning: reasoningQueue.iterator,
+  };
 }
 
 /** Mirrors `PluginServer.reportTrace` (minus the `EventEmitter` emit, which has no equivalent
@@ -201,6 +203,15 @@ port.on('message', (msg: HostToWorkerMessage) => {
     }
     case 'sdk.stream.chunk':
       pendingStreams.get(msg.requestId)?.onChunk(msg.delta);
+      break;
+    case 'sdk.stream.parsedLine':
+      pendingStreams.get(msg.requestId)?.onParsedLine(msg.parsed);
+      break;
+    case 'sdk.stream.rawLine':
+      pendingStreams.get(msg.requestId)?.onRawLine(msg.line);
+      break;
+    case 'sdk.stream.reasoning':
+      pendingStreams.get(msg.requestId)?.onReasoning(msg.text);
       break;
     case 'sdk.stream.end': {
       const pending = pendingStreams.get(msg.requestId);

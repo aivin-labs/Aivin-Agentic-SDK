@@ -21,6 +21,7 @@ import { browser } from '@aivin-labs/sdk';
 | --- | --- | --- | --- |
 | `run` | `mission: string, opts?: { start_url?: string; success_criteria?: string[]; steps?: string[]; output_schema?: Record<string, any>; [key: string]: any }` | `Promise<any>` | Calls `browser.run` with `{ mission, data: opts }`. Runs a full self-correcting AI Browser mission described by `mission`, optionally seeded with a starting URL, explicit success criteria, suggested steps, and/or a schema the final output should conform to. |
 | `cancel` | `sessionId?: string` | `Promise<{ success: boolean; session_id: string }>` | Calls `browser.cancel` with `{ session_id: sessionId }` (or `{}` if omitted). Requests cancellation of a running mission — cooperative only, see caveats below. |
+| `runStream` | Same `mission`/`opts` as `run` | `{ steps: AsyncGenerator<string, void, void>; result: Promise<any> }` | Calls `browser.runStream`. Same mission as `run()`, but yields live per-step progress (`{ step, type, url, summary, detail? }`, JSON-stringified) as the mission runs, in addition to the final result. |
 
 ## `run` example
 
@@ -66,6 +67,24 @@ const started = await browser.run('Long-running research task', { start_url: '..
 await browser.cancel(started.data.session_id); // same effect as browser.cancel() with no args
 ```
 
+## `runStream` example
+
+```typescript
+import { browser } from '@aivin-labs/sdk';
+
+const { steps, result } = browser.runStream(
+  'Find the current listed price of the flagship laptop on this vendor site',
+  { start_url: 'https://example-vendor.com/laptops' },
+);
+
+for await (const raw of steps) {
+  const step = JSON.parse(raw); // { step, type, url, summary, detail? }
+  console.log(`[${step.type}] ${step.summary}`);
+}
+
+const final = await result; // same shape as run()'s resolved value
+```
+
 ## Notes & caveats
 
 - `browser.run()` is NOT a lightweight call — it drives a full multi-step, self-correcting agent
@@ -84,8 +103,8 @@ await browser.cancel(started.data.session_id); // same effect as browser.cancel(
 - The call is built as `{ mission, data: opts }` — i.e. everything you pass as the second argument
   is nested under `data` in the actual RPC payload, not sent flat alongside `mission`.
 - **HIL (human-in-the-loop) is not supported through `browser.run()`.** It calls straight into the
-  backend's `AIBrowserService.triggerMission`, bypassing the suspend/resume plumbing that chat/agent
-  triggers use (BullMQ-backed). If the mission hits a step that needs a human — captcha, login,
+  backend's mission-trigger path, bypassing the suspend/resume plumbing that chat/agent
+  triggers use. If the mission hits a step that needs a human — captcha, login,
   free-text confirmation — the promise resolves with `{ status: 'waiting', message: '...' }`
   instead of actually pausing and waiting. It does not hang until a human answers. If your mission
   might need HIL, trigger it through a chat/agent flow instead of calling `browser.run()` directly.
@@ -97,9 +116,15 @@ await browser.cancel(started.data.session_id); // same effect as browser.cancel(
   caller's tenant server-side and rejected on mismatch — it exists as a self-check convenience (so
   you can pass back exactly what `run()` gave you) and cannot be used to cancel a different tenant's
   running mission.
-- There is still no way to stream intermediate progress (step-by-step logs) back to the calling
-  plugin code — that data only reaches the chat UI's live screencast via a separate socket channel,
-  not through this SDK call. `run()` only resolves once, with the final result.
+- `run()` only resolves once, with the final result — use `runStream()` instead if you need live
+  step-by-step progress back in plugin code.
+- **`runStream()` only streams step *metadata* (`type`/`url`/`summary`/`detail`), not pixels.** The
+  actual live screencast (real screenshot frames pushed via Chrome DevTools Protocol, used by the
+  chat UI's cast/HIL panel for visual takeover) is pushed over a separate Socket.IO channel
+  (`aibrowser:{clientId}` room, `browser:screenshot`/`browser:tabs-update` events) that only the
+  platform's own chat UI joins — it is not exposed through this SDK at all, streamed or otherwise.
+- `runStream()` shares the same HIL caveat as `run()` (see above) — a step needing human input still
+  resolves the `result` promise with `{ status: 'waiting', ... }` rather than suspending.
 
 ## See also
 

@@ -121,23 +121,22 @@ export async function main(mission, input, ctx) {
 ## Notes & caveats
 
 - **`push()`'s `user_id`/`body` are remapped client-side to `receiver_id`/`message` before the call
-  leaves the SDK.** Those are the field names the real backend (`NotificationService.pushNotification`
-  and every notification engine) actually reads — a previous version of this SDK sent `user_id`/`body`
-  untranslated, which round-tripped without error but silently delivered to nobody (audience resolved
-  to an empty list) and dropped the message text (fell back to an AI-generated/generic default
-  instead). If you already pass `receiver_id`/`message` directly, those take precedence over a
-  derived `user_id`/`body`.
+  leaves the SDK.** Those are the field names the real backend actually reads — a previous version
+  of this SDK sent `user_id`/`body` untranslated, which round-tripped without error but silently
+  delivered to nobody (audience resolved to an empty list) and dropped the message text (fell back
+  to an AI-generated/generic default instead). If you already pass `receiver_id`/`message`
+  directly, those take precedence over a derived `user_id`/`body`.
 - `push()` requires at least one of `user_id`, `receiver_id`, `receiver_ids`, or `topic` — enforced
   locally, so a missing/mistyped audience fails immediately instead of vanishing silently.
-- `sendMail()`'s param shape was fixed against the real backend (`src/base/SDK.ts`'s `get
-  notification()`) — it takes a single `to` (not `to`/`user_ids` array) and a single `body` field
-  (not separate `content`/`html` fields), and the backend bridge does correctly read `body` (aliased
-  as `html`) here, unlike `push()`'s now-fixed mismatch.
+- `sendMail()`'s param shape was fixed against the real backend — it takes a single `to` (not
+  `to`/`user_ids` array) and a single `body` field (not separate `content`/`html` fields), and the
+  backend bridge does correctly read `body` (aliased as `html`) here, unlike `push()`'s now-fixed
+  mismatch.
 - **`sendMail()` does NOT support per-workspace SMTP override**, even though it accepts arbitrary
-  extra keys — the backend bridge destructures only `to`/`subject`/`html`/`body` and calls
-  `EmailEngine.sendMail()` directly, ignoring `workspace_id`/`cert`. If you need workspace-scoped
+  extra keys — the backend bridge destructures only `to`/`subject`/`html`/`body` and sends
+  directly, ignoring `workspace_id`/`cert`. If you need workspace-scoped
   SMTP, use `push()` with `channels: ['email']` and `priority: 'high'`/`'urgent'` instead — that path
-  does read `workspace_id` (via `EmailEngine.process()`).
+  does read `workspace_id`.
 - Both `push` and `sendMail` accept extra arbitrary keys beyond the documented ones, but only the
   fields listed above are guaranteed to be read by the handler; anything else is passed through
   best-effort.

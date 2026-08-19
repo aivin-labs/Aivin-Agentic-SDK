@@ -120,7 +120,7 @@ export const removeParamsSchema = z.object({
 });
 
 /**
- * `store.*` schemas - verified field-by-field against the real backend `StoreSDK.ts` (every
+ * `store.*` schemas - verified field-by-field against the real backend implementation (every
  * `params.X` read there matches what `SDKClient.ts` already sent before these schemas existed;
  * unlike `automation`, this namespace's shapes were already correct, so these schemas encode
  * confirmed-correct behavior rather than fixing a bug).
@@ -244,7 +244,7 @@ export const storeGetLinksParamsSchema = z.object({
 });
 
 /**
- * `table.*` schemas - verified field-by-field against the real backend `DatastoreSDK.ts`, same
+ * `table.*` schemas - verified field-by-field against the real backend implementation, same
  * "already correct, just adding the runtime guard" situation as `store.*` above.
  */
 export const ensureTableParamsSchema = z.object({
@@ -357,17 +357,16 @@ export const backfillColumnParamsSchema = z.object({
 });
 
 /**
- * `notification.push` - verified field-by-field against the real backend handler chain
- * (`be/src/notification/service/NotificationSDK.ts` -> `NotificationService.pushNotification` ->
- * `NotificationRequest` DTO -> each engine's `render()`/`process()`). Two real bugs this schema-plus-
- * remap combo fixes (see `push()` in SDKClient.ts for the remap, this schema only validates):
+ * `notification.push` - verified field-by-field against the real backend handler chain. Two real
+ * bugs this schema-plus-remap combo fixes (see `push()` in SDKClient.ts for the remap, this schema
+ * only validates):
  *   1. Audience: the backend resolves recipients from `user` (full object) / `receiver_id` /
  *      `receiver_ids` / `topic` - it NEVER reads `user_id`. A bare `{ user_id, title, body }` call
  *      round-tripped successfully (no thrown error) but silently delivered to nobody - the audience
- *      list came back empty and `pushNotification`'s try/catch swallows that outcome.
- *   2. Content: every engine (`DatabaseEngine`, `PushEngine`, `WebPushEngine`, `MessageEngine`,
- *      `EmailEngine`) reads `notiReq.message`, never `notiReq.body` - a bare `body` was silently
- *      dropped in favor of an AI-generated (`prompt`) or generic fallback instead of the caller's text.
+ *      list came back empty and the backend's own error handling swallows that outcome.
+ *   2. Content: every delivery channel reads `notiReq.message`, never `notiReq.body` - a bare
+ *      `body` was silently dropped in favor of an AI-generated (`prompt`) or generic fallback
+ *      instead of the caller's text.
  * `receiver_id`/`message` (what the backend reads) are accepted directly too, so callers who already
  * discovered the working field names aren't penalized.
  */
@@ -381,15 +380,15 @@ export const pushNotificationParamsSchema = z
     title: z.string().optional(),
     body: z.string().optional(),
     message: z.string().optional(),
-    /** Rendered into title/message via AI (`NotificationHelper`) when those aren't supplied directly. */
+    /** Rendered into title/message via AI when those aren't supplied directly. */
     prompt: z.string().optional(),
-    /** i18n key (config/i18n/default.json), rendered per-recipient's language - takes precedence
+    /** i18n key, rendered per-recipient's language - takes precedence
      *  over `title` when both are set. */
     title_key: z.string().optional(),
     message_key: z.string().optional(),
     /** {{var}} interpolation values for title_key/message_key. */
     vars: z.record(z.string(), z.any()).optional(),
-    /** Set when `body`/`message` is already fully-built HTML (e.g. an invoice) - EmailEngine sends
+    /** Set when `body`/`message` is already fully-built HTML (e.g. an invoice) - the backend sends
      *  it as-is instead of escaping/wrapping it in the shared template. */
     messageIsHtml: z.boolean().optional(),
     /** Determines which engines are even eligible before `channels` filters further: low -> push
@@ -399,7 +398,7 @@ export const pushNotificationParamsSchema = z
      *  eligible engines; does not substitute for priority (e.g. 'email' here still needs
      *  priority high/urgent, since low/normal never make EmailEngine eligible in the first place). */
     channels: z.array(z.enum(['database', 'push', 'message', 'email'])).optional(),
-    /** NotificationType enum value (be/src/base/enum/NotificationType.ts has 90+ members, e.g.
+    /** NotificationType enum value (the backend's own enum has 90+ members, e.g.
      *  'task_assigned', 'general') - influences the AI-generated fallback content and is used as the
      *  topic name when broadcasting without an explicit `topic`. Left as `string` here rather than a
      *  literal union since that enum is large and changes independently of this SDK. */

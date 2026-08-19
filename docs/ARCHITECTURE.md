@@ -114,7 +114,7 @@ sdk/
 │   │   ├── loadProto.ts    # Shared proto loader (client + server use the same generated service)
 │   │   └── GrpcInvoker.ts  # Outbound Invoke() call — what every SDK call uses under the hood
 │   ├── sdk/
-│   │   └── SDKClient.ts    # Full SDK client (mirrors the backend's CodeSDK.d.ts)
+│   │   └── SDKClient.ts    # Full SDK client (mirrors the backend's own plugin contract)
 │   ├── types/
 │   │   ├── PluginTypes.ts  # PluginManifest (mirrors backend DeveloperPluginManifest), TriggerType
 │   │   └── SDKTypes.ts     # User, Workspace, Task, Agent, PluginResponse, ...
@@ -146,8 +146,12 @@ The _same_ `Invoke` RPC is used both ways:
   container-internal address use TLS by default (override with `SDK_GRPC_TLS=true|false`).
 - **Host → plugin** (running your `main()`): `PluginServer` runs a gRPC server on `0.0.0.0:50051`
   inside your container. The host calls `Invoke` with `namespace` set to the human-readable
-  _purpose_ of the trigger (not a function name — the server always resolves to your single
-  `main` entry point, then a default export, then the first exported function, in that order).
+  _purpose_ of the trigger (not a function name). For the default `plugins[]` manifest shape
+  (including multi-function plugins), the host already knows which entry was triggered and sends
+  its `func` explicitly, so the server just calls `handler[func]`. Only the legacy flat-manifest
+  shape (no `func`) falls back to resolving `main`, then a default export, then the first exported
+  function — see [MANIFEST.md](./MANIFEST.md#multi-function-plugins) for the full resolution
+  rule.
 
 This symmetry means adding a new backend capability never requires a proto change — just a new
 `namespace` string registered on the host side.
@@ -166,9 +170,8 @@ that same token on every outbound SDK call your handler makes during that invoca
 host resolves your real identity from that token server-side — never from anything your process
 claims about itself.
 
-See [SECURITY.md](./SECURITY.md) for the full picture (why there are two separate credentials, what
-each does and doesn't protect against, and `configureTransport()`/`configureMtls()` for callers
-outside a real container).
+`configureTransport()`/`configureMtls()` exist for callers running outside a real container (see
+their own doc comments in `src/grpc/GrpcInvoker.ts` for details).
 
 ## Why erasable-only TypeScript in `src/main.ts`
 

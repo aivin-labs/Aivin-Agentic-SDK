@@ -188,7 +188,7 @@ from the input, since you can't rely on this invocation only ever happening once
 | --- | --- |
 | SDK calls seem to hit production unexpectedly | Expected if `SDK_ENDPOINT` isn't set in `.env` — it defaults to `api.aivin.cloud`. Set it to a local/dev backend if that's not what you want — see [Local runtime behavior](#local-runtime-behavior). |
 | A namespace method throws `[namespace.method] invalid params` immediately, no network call made | Zod-validated namespaces (`automation.*`, `resource.*`, `store.*`, `table.*`) reject a bad shape before ever calling the host — check the field named in the error against [SDK.md](./SDK.md) or the namespace's own `docs/sdk/*.md` page. |
-| A call's shape is right but the result looks wrong | Check the relevant `docs/sdk/*.md` page's "Notes & caveats" — several namespaces have real field names/behavior that differ from what `CodeSDK.d.ts` (or intuition) would suggest, e.g. `automation.createJob` takes `mission`/`schedule_condition`, not `name`/`schedule`. |
+| A call's shape is right but the result looks wrong | Check the relevant `docs/sdk/*.md` page's "Notes & caveats" — several namespaces have real field names/behavior that differ from what the SDK's own declared types (or intuition) would suggest, e.g. `automation.createJob` takes `mission`/`schedule_condition`, not `name`/`schedule`. |
 | Generated code from `aivin plugin make` doesn't compile/looks wrong | Review and edit — it's AI-generated, treat it like a first draft from a junior contributor. |
 
 CLI-side issues (`aivin start`/`deploy`/`login` failing, port conflicts, auth errors) belong in

@@ -13,8 +13,8 @@ import { automation } from '@aivin-labs/sdk';
 
 ## Methods
 
-Verified against the backend's real `JobRequest`/`JobListRequest`/`JobResponse` (`AutomationDTO.ts`,
-via `AutomationSDK.ts`'s PluginBridge handlers) — **not** the field names you might guess from a
+Verified against the backend's real `JobRequest`/`JobListRequest`/`JobResponse` shapes — **not**
+the field names you might guess from a
 generic "cron job" mental model. In particular: there is no `name` or `schedule` or `logic` field
 anywhere on the real backend; a job is defined by `mission`/`prompt` (what to do) and
 `schedule_condition` (when — natural language, not raw cron).

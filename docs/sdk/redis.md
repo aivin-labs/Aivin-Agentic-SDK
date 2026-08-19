@@ -103,9 +103,8 @@ export async function main(mission, input, ctx) {
 
 ## Notes & caveats
 
-- Namespace confirmed against `PluginStorageService.sdkMethods(this, 'storage', [...])` on the
-  backend — this is **not** a direct Redis connection. Docker-runtime plugins never receive raw
-  Redis/Mongo credentials (see `DockerHelper`'s `generateStackEnvOverrides` comment); every call
+- Namespace confirmed against the backend's real registration — this is **not** a direct Redis
+  connection. Docker-runtime plugins never receive raw Redis/Mongo credentials; every call
   goes through the host's `storage.redis*` handlers.
 - `del`/`exists`/`hdel` collapse to a single-key wire param when called with exactly one key/field
   (`key: keys[0]`), and to an array when called with more than one (`key: keys`) — purely an

@@ -100,8 +100,8 @@ const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
  * common case (`console.log(process.env)`, an error message that happens to include an auth
  * header, a stray API key in a debug line) but not a deliberately obfuscated/fragmented/encoded
  * copy of a credential - this is a safety net against accidental leaks, not a guarantee against a
- * plugin trying to exfiltrate its own secret on purpose (see docs/SECURITY.md's "What this does
- * not protect against").
+ * plugin trying to exfiltrate its own secret on purpose (that risk is inherent to running
+ * untrusted code in the same process, not something console redaction can close).
  */
 function redactSensitive(message: string): string {
   const secret = resolveSdkSecret();

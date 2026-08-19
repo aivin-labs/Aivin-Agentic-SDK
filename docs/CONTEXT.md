@@ -19,7 +19,7 @@ interface PluginContext {
 }
 ```
 
-It mirrors the backend's `PluginContext` (`CodeSDK.d.ts`), plus `cert`.
+It mirrors the backend's own `PluginContext`, plus `cert`.
 
 ## Fields
 

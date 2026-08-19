@@ -1,6 +1,6 @@
 import type { InvokeRequest } from '../grpc/GrpcInvoker';
 import type { PluginIdentity } from '../sdk/SDKClient';
-import type { PluginInput } from '../types/SDKTypes';
+import type { ParsedLine, PluginInput } from '../types/SDKTypes';
 
 /** Plain-object error shape that survives the `postMessage` structured-clone boundary in both
  *  directions, reconstructed into a real `Error` on the receiving side (see `reviveError` in
@@ -56,6 +56,33 @@ export interface SdkStreamChunkMessage {
   delta: string;
 }
 
+/** Host -> Worker: one `parsed_line` event of a relayed stream (see `StreamHandle.lines` in
+ *  `GrpcInvoker.ts`) - only sent for requests that set `opts.lineSchema`, interleaved with
+ *  `sdk.stream.chunk` messages on the same `requestId`. */
+export interface SdkStreamParsedLineMessage {
+  type: 'sdk.stream.parsedLine';
+  requestId: string;
+  parsed: ParsedLine;
+}
+
+/** Host -> Worker: one raw (unparsed) line of a relayed stream (see `StreamHandle.rawLines` in
+ *  `GrpcInvoker.ts`) - unconditional, does NOT need `opts.lineSchema` (unlike
+ *  `SdkStreamParsedLineMessage` above). */
+export interface SdkStreamRawLineMessage {
+  type: 'sdk.stream.rawLine';
+  requestId: string;
+  line: string;
+}
+
+/** Host -> Worker: one reasoning-model "thinking" text delta of a relayed stream (see
+ *  `StreamHandle.reasoning` in `GrpcInvoker.ts`) - separate from `SdkStreamChunkMessage`, which only
+ *  ever carries final-answer text. */
+export interface SdkStreamReasoningMessage {
+  type: 'sdk.stream.reasoning';
+  requestId: string;
+  text: string;
+}
+
 /** Host -> Worker: the stream finished cleanly - `final` is the same aggregated value a unary
  *  `invokeHost()` call would have returned. */
 export interface SdkStreamEndMessage {
@@ -84,6 +111,9 @@ export type HostToWorkerMessage =
   | InvokeMessage
   | SdkCallResultMessage
   | SdkStreamChunkMessage
+  | SdkStreamParsedLineMessage
+  | SdkStreamRawLineMessage
+  | SdkStreamReasoningMessage
   | SdkStreamEndMessage
   | SdkStreamErrorMessage;
 

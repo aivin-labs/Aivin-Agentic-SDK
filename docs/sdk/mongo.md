@@ -136,9 +136,9 @@ export async function main(mission, input, ctx) {
 
 ## Notes & caveats
 
-- Matches `CodeSDK.d.ts`'s `mongo: { model(name, schema) }` shape: `model(name)` returns a
+- Matches the backend's own `mongo: { model(name, schema) }` shape: `model(name)` returns a
   Mongoose-style handle bound to that collection name; every method on it calls one of the
-  `storage.mongo*` namespaces confirmed against `PluginStorageService` on the backend. This is
+  `storage.mongo*` namespaces confirmed against the backend's real registration. This is
   **not** a direct MongoDB connection — Docker-runtime plugins never receive raw database
   credentials.
 - The `schema` argument to `model(name, schema)` is accepted only for shape parity with Mongoose —

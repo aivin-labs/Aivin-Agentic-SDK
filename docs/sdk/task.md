@@ -105,12 +105,12 @@ export async function main(mission, input, ctx) {
 ## Notes & caveats
 
 - **`update`/`getById`/`delete` were fixed to send `task_id`** (matching the real backend's
-  `src/base/SDK.ts` `get task()`) — they previously sent `id`, which the real `task.updateTask`/
+  `get task()`) — they previously sent `id`, which the real `task.updateTask`/
   `task.getTaskById`/`task.deleteTask` handlers don't read. Calls using the old shape were silently
   broken (the request would go through but not touch the intended task). This SDK's current
   implementation is correct; the caveat is here so you understand why `taskId` is threaded through
   as `task_id` on the wire even though the client-facing method signature takes it positionally.
-- **`gen`, `addComment`, `requestSupport`** are confirmed against `TaskSDK.ts` on the backend.
+- **`gen`, `addComment`, `requestSupport`** are confirmed against the backend's real implementation.
 - `update`'s `data` only accepts `status`/`content` in the typed signature — for any other field the
   real `task.updateTask` handler might accept, use `call('task.updateTask', { task_id, ...data })`
   directly.

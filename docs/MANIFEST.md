@@ -1,8 +1,8 @@
 # 📋 Manifest File Documentation
 
 `manifest.json` describes your plugin to the platform — its identity, what it expects/returns, and
-how it's allowed to run. It mirrors the backend's `DeveloperPluginManifest`
-(`src/plugins/dto/PluginDTO.ts`) field-for-field; anything not listed here is assigned by the
+how it's allowed to run. It mirrors the backend's own `DeveloperPluginManifest`
+field-for-field; anything not listed here is assigned by the
 platform itself (`id`, `is_verified`, `is_official`, `store_status`, `verification_status`,
 `network_config`, `checksum`, `rate_limit`, ...) and shouldn't be set by hand.
 
@@ -289,6 +289,37 @@ How the host reads `trigger_type`:
 - Webhook invocations additionally require an API key whose scopes include `webhook` (keys created
   with the default `full_access` scope pass automatically; narrowly-scoped keys such as
   workspace-scoped MCP keys do not).
+
+### External exposure: the actual webhook URL
+
+Declaring `webhook` doesn't just change what the AI Staff planner can select — once deployed, your
+plugin becomes reachable from **outside the platform** over plain HTTP, at:
+
+```
+POST {AIVIN_BASE_URL}/plugins/webhook/{workspaceId}/{pluginId}
+```
+
+- `{workspaceId}` — the platform workspace your plugin is installed into (same id shown in the
+  dashboard's workspace settings).
+- `{pluginId}` — your `manifest.json`'s `id`.
+- **Auth**: `Authorization: Bearer <api_key>`, and the key's scopes must include `webhook` (see
+  above). The key's owner becomes `ctx.user` inside your `main()`.
+- **Payload**: the raw JSON request body is passed straight through as `input` — no wrapping, no
+  transformation. `mission` is set to `Webhook: {pluginId}`.
+- **Response**: the external caller gets `200 {"received": true}` back **immediately, before your
+  `main()` even starts running** — this call is fire-and-forget. Whatever your handler returns (or
+  throws) is never surfaced to that caller, only logged server-side. If the external system needs
+  to learn the outcome, have your handler call back out to it itself (e.g. its own callback URL, or
+  `notification.push` to a human) — don't rely on the webhook HTTP response for that.
+- **Signature verification is opt-in, not automatic.** Rotate a webhook signing secret (platform
+  dashboard) to have incoming requests HMAC-verified (`x-webhook-signature` header) before your
+  plugin runs. Without a rotated secret, the API key + its `webhook` scope is the only trust
+  boundary on this route.
+
+`api` also registers dynamic HTTP endpoints once declared (see the enforcement rule above), but its
+exact URL/payload/response contract isn't documented here yet — pending confirmation that it
+dispatches through the same containerized `main()` model as everything else in this SDK. If you
+need external HTTP access to your plugin today, `webhook` above is the confirmed, documented path.
 
 ## MCP proxy plugins
 

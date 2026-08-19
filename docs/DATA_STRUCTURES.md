@@ -1,7 +1,6 @@
 # 📊 Aivin SDK — Data Structures
 
-Every type below is exported from `@aivin-labs/sdk` and mirrors the backend's real data models
-(`src/plugins/sdk/CodeSDK.d.ts`).
+Every type below is exported from `@aivin-labs/sdk` and mirrors the backend's real data models.
 
 ```typescript
 // Type-only imports - erased at build time, just for editor/type-checking:
@@ -147,7 +146,7 @@ interface PluginResponse {
 }
 ```
 
-`status` is what the platform actually reads (`PluginExecutionService` checks `response.status !==
+`status` is what the platform actually reads (the backend checks `response.status !==
 PluginStatus.FAIL && response.status !== PluginStatus.ERROR` to decide success) - there's no
 special handling for a `success: boolean` field. Omitting `status` entirely still works (anything
 without an explicit `fail`/`error` status is treated as successful), but that's a fail-open default,

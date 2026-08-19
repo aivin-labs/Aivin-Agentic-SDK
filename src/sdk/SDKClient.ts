@@ -58,7 +58,9 @@ import type {
   MediaGenerationResult,
   MediaItem,
   MediaPromptOptions,
+  MessageListener,
   MessageSession,
+  ParsedLine,
   PluginContext,
   ResourceMeta,
   RunFlowContext,
@@ -135,13 +137,12 @@ const LONG_RUNNING_DEFAULT_TIMEOUT_MS = 5 * 60_000;
 /**
  * Client-side implementation of the platform's unified SDK surface.
  *
- * Mirrors `src/plugins/sdk/CodeSDK.d.ts` on the backend (the single source of truth for what a
+ * Mirrors the backend's own plugin-contract type declaration (the single source of truth for what a
  * plugin can call). Every method - generic `call()` and the typed sugar objects below - goes
  * through the same gRPC `Invoke` RPC (`namespace.method`, params, context), matching exactly how
- * `PluginBridge.call()` dispatches on the host. The `cap` token (see GrpcCapabilityStore on the
- * backend) is threaded into `context.metadata._cap` on every outbound call so the host can resolve
- * this invocation's real tenant/workspace/session identity instead of trusting anything this
- * process claims about itself.
+ * the host dispatches inbound calls. The `cap` token is threaded into `context.metadata._cap` on
+ * every outbound call so the host can resolve this invocation's real tenant/workspace/session
+ * identity instead of trusting anything this process claims about itself.
  */
 export class SDKClient {
   private readonly cap?: string;
@@ -174,13 +175,15 @@ export class SDKClient {
     };
   }
 
-  /** Generic escape hatch: call any host namespace directly. */
-  async call<T = any>(func: string, params?: any, timeoutMs?: number): Promise<T> {
+  /** Generic escape hatch: call any host namespace directly. `signal` cancels the underlying gRPC
+   *  call when aborted - see `InvokeRequest.signal`'s doc comment (`GrpcInvoker.ts`) for mechanics. */
+  async call<T = any>(func: string, params?: any, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
     return this.invoke<T>({
       namespace: func,
       params,
       context: this.buildContext(),
       timeoutMs: timeoutMs ?? this.defaultTimeoutMs,
+      signal,
     });
   }
 
@@ -227,7 +230,7 @@ export class SDKClient {
   }
 
   close(): void {
-    // No persistent connection to tear down per-call; kept for CodeSDK.d.ts parity.
+    // No persistent connection to tear down per-call; kept for backend contract parity.
   }
 
   // ── Shorthand helpers ─────────────────────────────────────────────────
@@ -250,7 +253,7 @@ export class SDKClient {
   }
 
   /**
-   * Mirrors the real `a2a()` in `src/base/SDK.ts`: if `target` doesn't look like an agent ID
+   * Mirrors the backend's own `a2a()`: if `target` doesn't look like an agent ID
    * (contains a space, is long, or has non-hex characters), it's treated as a search query and
    * resolved via `workspace.searchAgents` first.
    */
@@ -312,8 +315,8 @@ export class SDKClient {
   }
 
   // Streaming drivers are only meaningful inside the host process (LITE/WASM/in-process runtimes);
-  // Docker-runtime plugins observe progress via `realtime.publish` instead. Kept for CodeSDK.d.ts
-  // shape parity but intentionally unimplemented here - throws so callers fail loudly, not silently.
+  // Docker-runtime plugins observe progress via `realtime.publish` instead. Kept for backend
+  // contract shape parity but intentionally unimplemented here - throws so callers fail loudly, not silently.
   readonly stream = {
     message: (): never => {
       throw new Error(
@@ -332,39 +335,187 @@ export class SDKClient {
     },
   };
 
-  // ── Namespace sugar objects (mirrors CodeSDK.d.ts) ────────────────────
+  // ── Namespace sugar objects (mirrors the backend's own plugin contract) ─
 
   /**
-   * Param shapes verified against the backend's real `src/base/SDK.ts` (`get ai()`), not just
-   * `CodeSDK.d.ts` (which diverges from the actual implementation in several places - e.g. it
+   * Param shapes verified against the backend's real implementation, not just its declared type
+   * contract (which diverges from the actual implementation in several places - e.g. it
    * declares `getEmbeddings({texts, opts})` and `rerank({query, docs, ...opts})`, but the real
    * code takes `getEmbeddings(texts, opts)` and nests rerank's options under `opts`).
-   * `tts`/`stt`/`getModels`/`calculateTokens` confirmed against `AISDK.ts`'s `register(...)` calls.
+   * `tts`/`stt`/`getModels`/`calculateTokens` confirmed against the backend's own registration calls.
    */
   readonly ai = {
-    prompt: (quest: string | any[], opts?: LLMPromptOptions): Promise<any> =>
-      this.call('ai.prompt', { quest, opts }),
     /**
-     * Streaming counterpart of `prompt()` - text deltas arrive as they're generated instead of
-     * waiting for the whole response, same shape as Vercel AI SDK's `streamText()`:
+     * Same call, same interface as the backend's own prompt function - what
+     * the 3rd param IS decides the mode, no separate streaming method to remember:
+     * - **Omitted** - plain unary call (unchanged from before this existed): waits for the whole
+     *   response, resolves once. Zero added cost - never opens the streaming RPC.
+     *   ```ts
+     *   const full = await ctx.sdk.ai.prompt("write a haiku");
+     *   ```
+     * - **A `Writable`** (anything with `.write()`/`.end()` - a Node stream, an HTTP response, a
+     *   `PassThrough` you pipe elsewhere yourself) - text deltas are written into it as they're
+     *   generated, `.end()` when the response completes, `.destroy(err)` on failure. Lets you hand
+     *   the model's output straight to whatever already consumes a stream, no manual bridging:
+     *   ```ts
+     *   await ctx.sdk.ai.prompt("write a haiku", undefined, res); // res: an HTTP ServerResponse
+     *   ```
+     * - **A `MessageListener`** - `onUpdate`/`onParsedLine`/`onCompleted`/`onError` (and more) fire
+     *   as data arrives - see `MessageListener`'s doc comment for exactly which callbacks are wired:
+     *   ```ts
+     *   await ctx.sdk.ai.prompt(quest, { lineSchema: "[from:string-id] -> [to:string-id]" }, {
+     *     onParsedLine: (line) => console.log(line?.fields.from, "->", line?.fields.to),
+     *   });
+     *   ```
+     * All 3 forms resolve to the same final aggregated value either way - callers that only want
+     * the finished result never need to touch the 3rd param at all. Falls back to a single "chunk"
+     * (the whole response, then done) if the model/provider resolved server-side doesn't support
+     * token-level streaming - behaves the same either way, just with coarser granularity.
+     */
+    prompt: (quest: string | any[], opts?: LLMPromptOptions, driver?: MessageListener | NodeJS.WritableStream): Promise<any> => {
+      // `signal` is a local transport-level knob (cancels the gRPC call itself), not wire data -
+      // stripped out of what actually gets sent as `opts` in both branches below (see
+      // `LLMPromptOptions.signal`'s doc comment for why sending it would be meaningless anyway).
+      // `request_id` DOES need to reach the host, just under its real field name - see
+      // `LLMPromptOptions.request_id`'s doc comment for why the public name differs from the wire one.
+      const { signal, request_id, ...restOpts } = opts ?? {};
+      const wireOpts = request_id ? { ...restOpts, unique_request_id: request_id } : restOpts;
+      if (!driver) return this.call('ai.prompt', { quest, opts: wireOpts }, undefined, signal);
+
+      // A caller's own listener callback throwing (a bug in THEIR code, not a transport failure)
+      // must not silently truncate the rest of the stream for them - wrap each invocation so one
+      // bad chunk/line doesn't stop delivery of every chunk/line after it, and surface it somewhere
+      // visible instead of vanishing into an unawaited rejection.
+      // `await`ed by every call site below (not fire-and-forget) - a callback MAY return a Promise
+      // (declared `void` in `MessageListener` for caller convenience, same TS leniency the backend's
+      // own `MessageListener` callbacks rely on - see BaseDTO.ts) specifically so real backpressure
+      // (the Writable adapter's `'drain'` wait below, or a caller's own slow async `onUpdate`) can
+      // pause this stream's drain loop for real, not just visually "await" something already settled.
+      const safeInvoke = async <A extends any[]>(fn: ((...args: A) => void | Promise<void>) | undefined, ...args: A): Promise<void> => {
+        if (!fn) return;
+        try {
+          await fn(...args);
+        } catch (err) {
+          console.error('[@aivin-labs/sdk] ai.prompt() listener callback threw:', err);
+        }
+      };
+
+      // A `Writable`-shaped 3rd arg (duck-typed on `.write`/`.end` - covers Node's `Writable`,
+      // `Duplex`/`PassThrough`, and an HTTP `ServerResponse` alike) gets adapted into a plain
+      // `MessageListener` right here, so everything below this point only ever deals with one
+      // shape. `.write()`'s return value IS consulted for real backpressure, same contract
+      // `readable.pipe(writable)` itself honors: `false` means the writable's internal buffer is
+      // full, so `onUpdate` returns a Promise that only resolves on `'drain'` - `safeInvoke` above
+      // awaits it, pausing `drainChunks` below until the writable can actually accept more. Without
+      // this, a downstream consumer slower than the model (a slow disk write, a throttled HTTP
+      // response) would have its OWN internal buffer grow unbounded, exactly the failure mode a real
+      // `.pipe()` call prevents.
+      const isWritable = typeof (driver as any).write === 'function' && typeof (driver as any).end === 'function';
+      const listener: MessageListener = isWritable
+        ? {
+            onUpdate: (chunk: string) => {
+              const writable = driver as NodeJS.WritableStream;
+              if (writable.write(chunk)) return;
+              return new Promise<void>((resolve) => writable.once('drain', resolve));
+            },
+            onCompleted: () => { (driver as NodeJS.WritableStream).end(); },
+            onError: (err: any) => {
+              const stream = driver as NodeJS.WritableStream & { destroy?: (error?: Error) => void };
+              stream.destroy?.(err instanceof Error ? err : new Error(String(err)));
+            },
+          }
+        : (driver as MessageListener);
+
+      const handle = this.invokeStream<any>({
+        namespace: 'ai.promptStream',
+        // `wantsRawLine`/`wantsReasoning` are wire-negotiation flags, NOT part of `opts` (kept out
+        // of `LLMPromptOptions` on purpose - they're an implementation detail of this method, not
+        // something a caller would ever set directly). The host only attaches `onLine`/
+        // `onReasoning` to its listener when asked - otherwise every `ai.prompt()` call
+        // with ANY listener would pay for host-side line-buffering/reasoning-forwarding whether or
+        // not the caller's own listener even declares those callbacks. `onParsedLine` doesn't need
+        // an equivalent flag - `opts.lineSchema` already gates it unambiguously.
+        params: { quest, opts: wireOpts, wantsRawLine: !!listener.onLine, wantsReasoning: !!listener.onReasoning },
+        context: this.buildContext(),
+        timeoutMs: this.defaultTimeoutMs,
+        signal,
+      });
+
+      // `chunks`/`lines`/`rawLines`/`reasoning` are four independent generators over the SAME
+      // underlying stream (see `StreamHandle`'s doc comments in `GrpcInvoker.ts`) - drained
+      // concurrently so no one callback is gated behind fully exhausting another. A REAL transport
+      // error breaks all four loops together (same underlying `streamError`).
+      const drainChunks = (async () => {
+        for await (const delta of handle.chunks) await safeInvoke(listener.onUpdate, delta, 'text');
+      })();
+      const drainLines = (async () => {
+        let index = 0;
+        for await (const parsed of handle.lines) await safeInvoke(listener.onParsedLine, parsed, index++);
+      })();
+      const drainRawLines = (async () => {
+        for await (const line of handle.rawLines) await safeInvoke(listener.onLine, line);
+      })();
+      const drainReasoning = (async () => {
+        for await (const text of handle.reasoning) await safeInvoke(listener.onReasoning, text);
+      })();
+
+      // `handle.final` resolving does NOT by itself mean every buffered chunk/line/reasoning value
+      // has already been popped off its queue and handed to the caller's listener - `final` and the
+      // 4 drain loops above are independent async chains unblocked by the same underlying stream
+      // ending, not causally ordered against each other. Without this, `onCompleted`/the returned
+      // Promise could resolve while a trailing `onUpdate`/`onParsedLine` call for already-buffered
+      // data is still pending, dispatched to the caller *after* they thought the call was done.
+      // Each `.catch(() => {})` here is safe - a drain loop only ever throws the SAME `streamError`
+      // `handle.final` itself rejects with (see `StreamHandle`'s doc comments), so `handle.final`
+      // below remains the one authoritative source for success/failure and the `err` passed to
+      // `onError`.
+      const drained = Promise.all([
+        drainChunks.catch(() => {}),
+        drainLines.catch(() => {}),
+        drainRawLines.catch(() => {}),
+        drainReasoning.catch(() => {}),
+      ]);
+
+      return drained.then(() => handle.final).then(
+        async (result) => { await safeInvoke(listener.onCompleted); return result; },
+        async (err) => { await safeInvoke(listener.onError, err); throw err; },
+      );
+    },
+    /**
+     * Pull-based counterpart of `prompt()` - same streaming transport, `AsyncIterable`s instead of
+     * a `Writable`/`MessageListener` 3rd arg. Reach for this over `prompt(quest, opts, aWritable)`
+     * when you want to `for await` the result yourself, or compose it with other iterable-based
+     * tooling (`Readable.from(result.textStream)`, async generator pipelines, etc.) rather than
+     * push into an existing stream object:
      * ```ts
-     * const result = ctx.sdk.ai.promptStream("write a haiku");
+     * const result = ai.promptStream("write a haiku");
      * for await (const delta of result.textStream) process.stdout.write(delta);
      * const full = await result.text; // full text, resolves once the stream ends
      * ```
-     * Falls back to a single "chunk" (the whole response, then done) if the model/provider
-     * resolved server-side doesn't support token-level streaming - `textStream` and `text` behave
-     * the same either way, just with coarser granularity.
      */
-    promptStream: (quest: string | any[], opts?: LLMPromptOptions): { textStream: AsyncIterable<string>; text: Promise<string> } => {
+    promptStream: (quest: string | any[], opts?: LLMPromptOptions): { textStream: AsyncIterable<string>; text: Promise<string>; lines: AsyncIterable<ParsedLine> } => {
+      const { signal, request_id, ...restOpts } = opts ?? {};
+      const wireOpts = request_id ? { ...restOpts, unique_request_id: request_id } : restOpts;
       const handle = this.invokeStream<string>({
         namespace: 'ai.promptStream',
-        params: { quest, opts },
+        params: { quest, opts: wireOpts },
         context: this.buildContext(),
         timeoutMs: this.defaultTimeoutMs,
+        signal,
       });
-      return { textStream: handle.chunks, text: handle.final };
+      return { textStream: handle.chunks, text: handle.final, lines: handle.lines };
     },
+    /**
+     * Cancels an in-flight `ai.prompt()`/`ai.promptStream()` call started with the same
+     * `opts.request_id` - from anywhere, not just the invocation that started it (a different
+     * request/plugin instance entirely - see `LLMPromptOptions.request_id`'s doc comment). Under the
+     * hood this is a pubsub broadcast to every backend node, not a polled flag -
+     * whichever node is actually running that request aborts it immediately. Resolves once the
+     * cancel request itself completes - not a guarantee the target call has fully unwound yet (it
+     * rejects with an aborted error on its own end shortly after).
+     */
+    cancel: (requestId: string): Promise<{ cancelled_locally: boolean }> =>
+      this.call('ai.cancel', { unique_request_id: requestId }),
     getEmbedding: (
       text: string | string[],
       opts?: LLMPromptOptions,
@@ -398,8 +549,8 @@ export class SDKClient {
   };
 
   /**
-   * `search`/`reinforce` confirmed against `BrainSDK.ts`'s `registerKnowledgeHandlers()`.
-   * `get`/`del` now confirmed real too (same file, `knowledge.batchGetKnowledge`/
+   * `search`/`reinforce` confirmed against the backend's real registration handlers.
+   * `get`/`del` now confirmed real too (`knowledge.batchGetKnowledge`/
    * `knowledge.batchDeleteKnowledge` handlers) - previously undocumented here, reachable only via
    * the untyped `call()` escape hatch.
    */
@@ -419,17 +570,16 @@ export class SDKClient {
   /**
    * `plugin.*` — catalog read/write for the plugin marketplace (named `plugin`, not
    * `pluginStore`, purely for a shorter call site — this is NOT the same thing as a plugin's own
-   * runtime `ctx`/ordinary SDK calls, don't confuse the two). Gated server-side to aivin-service's
-   * own caller identity (`MARKETPLACE_CALLER_ID`, see BE's `PluginStoreSDK.ts::assertMarketplaceCaller`)
-   * — a regular plugin calling this gets rejected by the server, so it has no business appearing in
-   * a plugin author's Monaco autocomplete. `@internal` (stripped from the published `.d.ts` via
-   * `stripInternal` — still callable at runtime by `AivinBackend.ts`, which compiles against this
-   * same source, just invisible to `.d.ts` consumers).
+   * runtime `ctx`/ordinary SDK calls, don't confuse the two). Gated server-side to a privileged
+   * internal caller identity — a regular plugin calling this gets rejected by the server, so it has
+   * no business appearing in a plugin author's Monaco autocomplete. `@internal` (stripped from the
+   * published `.d.ts` — still callable at runtime by the internal service that compiles against
+   * this same source, just invisible to `.d.ts` consumers).
    * Only `findDocsBySourceRepo`/`patchByIds` are given typed sugar here (the two actually consumed
-   * in production, by aivin-service's `McpDiscoveryService.ts` via `AivinBackend.ts`) — the
-   * namespace has ~14 more registrations (`getPlugin`, `searchPlugins`, `upsertPlugins`, ...) still
-   * only reachable through the untyped `call()` escape hatch; add sugar here if/when something
-   * besides aivin-service starts reaching for them, rather than speculatively wrapping all of them.
+   * in production) — the namespace has ~14 more registrations (`getPlugin`, `searchPlugins`,
+   * `upsertPlugins`, ...) still only reachable through the untyped `call()` escape hatch; add sugar
+   * here if/when something else starts reaching for them, rather than speculatively wrapping all of
+   * them.
    *
    * @internal
    */
@@ -441,23 +591,22 @@ export class SDKClient {
   };
 
   /**
-   * `search`/`index` confirmed against `BrainSDK.ts`'s `registerVectorHandlers()`.
+   * `search`/`index` confirmed against the backend's real registration handlers.
    * `searchBatch`/`get`/`delete`/`matchBatch` are newer additions to that same registrar - server
    * always re-derives `workspace_id` from ctx for `get`/`delete` (plugin-supplied ids are filtered
    * down to what actually belongs to the caller's workspace before returning/deleting).
    * `similarity`/`normalize` are PURE LOCAL MATH (no `call()`, no network round-trip) - safe to use
    * on embeddings you already hold (e.g. from `ai.getEmbedding`) without hitting the server.
    *
-   * All read/write methods take an optional `collection` (a label, not a raw Milvus name) to target
-   * a DEDICATED collection instead of the shared default one - see `requestCollection`/
-   * `getCollectionStatus`. The label only resolves once its request has been admin-approved
-   * (`VectorCollectionRequestService` + `AdminVectorCollectionController`); passing an
-   * unrecognized/still-pending label throws rather than silently falling back to the shared
-   * collection - self-serve collection *creation* is deliberately not exposed here (provisioning a
-   * new physical Milvus collection is resource-affecting, so it goes through human approval). The
-   * same is true in reverse: there is no plugin-facing "delete my collection" - an admin archives
-   * (physically drops) it via `AdminVectorCollectionController`'s `:id/archive` route once a
-   * request is approved; after that, the label stops resolving and further calls with it throw.
+   * All read/write methods take an optional `collection` (a label, not a raw internal name) to
+   * target a DEDICATED collection instead of the shared default one - see `requestCollection`/
+   * `getCollectionStatus`. The label only resolves once its request has been admin-approved;
+   * passing an unrecognized/still-pending label throws rather than silently falling back to the
+   * shared collection - self-serve collection *creation* is deliberately not exposed here
+   * (provisioning a new physical collection is resource-affecting, so it goes through human
+   * approval). The same is true in reverse: there is no plugin-facing "delete my collection" - an
+   * admin archives (physically drops) it once a request is approved; after that, the label stops
+   * resolving and further calls with it throw.
    */
   readonly vector = {
     search: (params: {
@@ -518,14 +667,13 @@ export class SDKClient {
       return out;
     },
     /**
-     * Requests a dedicated Milvus collection (physically isolated from the shared default one).
+     * Requests a dedicated collection (physically isolated from the shared default one).
      * Only creates a 'pending' request - does NOT provision anything yet; an admin must approve it
-     * via `AdminVectorCollectionController` (`/brain/admin/vector-collections/:id/approve`) before
-     * `collection: label` resolves anywhere else in this namespace. Idempotent: calling again with
-     * the same `label` while pending/approved returns the existing request instead of duplicating.
-     * `dimension`, if given, must equal the platform's current default embedding dimension - custom
-     * collections get physical isolation, not a different vector dimension (see
-     * `VectorCollectionRequestService`'s class doc for why).
+     * out-of-band before `collection: label` resolves anywhere else in this namespace. Idempotent:
+     * calling again with the same `label` while pending/approved returns the existing request
+     * instead of duplicating. `dimension`, if given, must equal the platform's current default
+     * embedding dimension - custom collections get physical isolation, not a different vector
+     * dimension.
      */
     requestCollection: (params: {
       label: string;
@@ -558,10 +706,10 @@ export class SDKClient {
   };
 
   /**
-   * Matches the real `get causality()` in `src/base/SDK.ts` exactly (`think`/`absorb`, params
+   * Matches the backend's own `get causality()` exactly (`think`/`absorb`, params
    * spread directly into the call, not nested under `mission`/`context`). There is no separate
-   * `think` namespace with `deep`/`search` on the real SDK - that was invented from CodeSDK.d.ts's
-   * declared-but-unimplemented `think.*` overloads.
+   * `think` namespace with `deep`/`search` on the real SDK - that was invented from the declared-but-
+   * unimplemented `think.*` overloads in the backend's type contract.
    */
   readonly causality = {
     think: (query: string, opts?: Record<string, any>): Promise<any> =>
@@ -639,7 +787,7 @@ export class SDKClient {
   };
 
   /**
-   * `ask`/`hil` are NOT on the real `get agent()` in `src/base/SDK.ts` - only standalone
+   * `ask`/`hil` are NOT on the backend's real `get agent()` - only standalone
    * `sdk.ask()`/`sdk.hil()` exist. Removed here to avoid implying a namespaced variant that isn't
    * real; use the top-level methods instead. `delegate` reuses `a2a()`'s search-resolution logic
    * for consistency (the real `get agent()` doesn't define `delegate` itself either - only the
@@ -738,7 +886,7 @@ export class SDKClient {
       return this.callWithOptionalEvents('agent.runFlow', params, opts?.onEvent, opts?.timeoutMs);
     },
     /**
-     * Forces the full agentic planner (`GoalPursuitService` - multi-step plan/audit/replan) for
+     * Forces the full agentic planner (multi-step plan/audit/replan) for
      * `prompt`, skipping the NLU classification step `agent.processMessage` would normally run
      * first. Use when the caller already knows this needs multi-step planning (e.g. a workflow node
      * that always wants "plan and execute this," not a re-guess every run). Still falls back to
@@ -800,7 +948,7 @@ export class SDKClient {
      * tenant or the call is rejected), NOT a way to cancel another tenant's mission.
      *
      * HIL (human-in-the-loop) is NOT supported through this call: it goes straight to
-     * `AIBrowserService.triggerMission` on the backend, bypassing the suspend/resume plumbing that
+     * the backend's mission-trigger path, bypassing the suspend/resume plumbing that
      * chat/agent triggers use. If the mission hits a step that needs user confirmation, the promise
      * resolves with `{ status: 'waiting', message: '...' }` instead of actually suspending - it does
      * NOT wait for a human. Route missions that may need HIL through chat/agent triggers instead.
@@ -879,14 +1027,14 @@ export class SDKClient {
   };
 
   /**
-   * `updateRow`/`deleteRow`/`smartQuery`/`batchUpdateByAI` fixed to match the real, simpler
-   * signatures in `src/base/SDK.ts`'s `get table()` (no `workspace_id`/`project_id`/`ctx` -
+   * `updateRow`/`deleteRow`/`smartQuery`/`batchUpdateByAI` fixed to match the backend's real,
+   * simpler `get table()` signatures (no `workspace_id`/`project_id`/`ctx` -
    * those are resolved server-side from the caller's identity, not passed by the client). Added
    * `ensureTable`/`getRow`, both confirmed there but missing here before.
    *
    * Every method validates `params` against a zod schema (`validation.ts`) before the call goes
-   * out - verified field-by-field against the real `DatastoreSDK.ts` (all correct already; this
-   * adds the runtime guard against future drift, not a shape fix).
+   * out - verified field-by-field against the backend's real implementation (all correct already;
+   * this adds the runtime guard against future drift, not a shape fix).
    */
   readonly table = {
     ensureTable: (params: {
@@ -1018,10 +1166,10 @@ export class SDKClient {
   };
 
   /**
-   * `update`/`getById`/`delete` fixed to send `task_id` (matching `src/base/SDK.ts`'s real
+   * `update`/`getById`/`delete` fixed to send `task_id` (matching the backend's real
    * `get task()`) - they previously sent `id`, which the real `task.updateTask`/`getTaskById`/
    * `deleteTask` handlers don't read, so those calls were silently broken. `gen`/`addComment`/
-   * `requestSupport` confirmed against `TaskSDK.ts`.
+   * `requestSupport` confirmed against the backend's real implementation.
    */
   readonly task = {
     create: (params: {
@@ -1056,7 +1204,7 @@ export class SDKClient {
   };
 
   readonly message = {
-    /** Real `saveMessage` reads `text`, not `content` (fixed - see `src/base/SDK.ts`'s `get message()`). */
+    /** Real `saveMessage` reads `text`, not `content` (fixed - see the backend's real `get message()`). */
     save: (params: {
       text: string;
       role?: 'user' | 'assistant' | 'system';
@@ -1090,7 +1238,7 @@ export class SDKClient {
   readonly notification = {
     /**
      * Multi-channel notification dispatch (in-app push, DB/Notification Center, internal message,
-     * email) via the backend's `NotificationService.pushNotification` pipeline.
+     * email) via the backend's own notification pipeline.
      *
      * `user_id`/`body` here are remapped to the fields the backend actually reads (`receiver_id`/
      * `message`) before the call leaves the client - see `pushNotificationParamsSchema` in
@@ -1131,12 +1279,11 @@ export class SDKClient {
       });
     },
     /**
-     * NOTE: unlike `push()`, this does NOT support a per-workspace SMTP override - the backend
-     * bridge (`NotificationSDK.ts`'s `notification.sendMail` handler) destructures only
-     * `to`/`subject`/`html`/`body` and calls `EmailEngine.sendMail()` directly, ignoring any other
-     * field (including `workspace_id`/`cert`) passed here. If you need workspace-scoped SMTP,
-     * use `push()` with `channels: ['email']` and `priority: 'high'`/`'urgent'` instead - that path
-     * does read `workspace_id` (via `EmailEngine.process()`).
+     * NOTE: unlike `push()`, this does NOT support a per-workspace SMTP override - the backend's
+     * `notification.sendMail` handler destructures only `to`/`subject`/`html`/`body` and sends
+     * directly, ignoring any other field (including `workspace_id`/`cert`) passed here. If you need
+     * workspace-scoped SMTP, use `push()` with `channels: ['email']` and `priority: 'high'`/`'urgent'`
+     * instead - that path does read `workspace_id`.
      */
     sendMail: (params: {
       to: string;
@@ -1174,9 +1321,8 @@ export class SDKClient {
   };
 
   /**
-   * Verified against the real `JobRequest`/`JobListRequest`/`JobResponse` in the backend's
-   * `AutomationDTO.ts` (via `AutomationSDK.ts`'s PluginBridge handlers) - a previous pass of this
-   * SDK had guessed at `{ name, schedule, logic }`, none of which are real field names on the
+   * Verified against the real `JobRequest`/`JobListRequest`/`JobResponse` shapes on the backend -
+   * a previous pass of this SDK had guessed at `{ name, schedule, logic }`, none of which are real field names on the
    * backend (the real fields are `mission`/`schedule_condition`; there is no `logic` field at all -
    * a job's executable content is `prompt`/`workflow`, not a code string).
    *
@@ -1247,7 +1393,7 @@ export class SDKClient {
 
   /**
    * `file`'s accepted shapes and the `ResourceMeta` return type verified against the backend's real
-   * `ResourceSDK.ts`/`FSIO.ts` - previously typed `file: any` and `Promise<any>` with no confirmed
+   * implementation - previously typed `file: any` and `Promise<any>` with no confirmed
    * shape for either. `upload`'s zod schema is what actually enforces the 3-shapes-only rule on
    * `file` at the call site (see `validation.ts`) - a 4th shape (e.g. a raw `Buffer`) is rejected
    * immediately with a clear message instead of failing obscurely on the host.
@@ -1329,11 +1475,11 @@ export class SDKClient {
 
   /**
    * Relational key-value store with graph edges + semantic/keyword/hybrid search.
-   * Data is scoped to this plugin + tenant on the host side - see CodeSDK.d.ts `store`.
+   * Data is scoped to this plugin + tenant on the host side.
    *
    * Every method validates the outbound request against a zod schema (`validation.ts`) before the
-   * call goes out - verified field-by-field against the real `StoreSDK.ts` (all correct already;
-   * this adds the runtime guard against future drift, not a shape fix).
+   * call goes out - verified field-by-field against the backend's real implementation (all correct
+   * already; this adds the runtime guard against future drift, not a shape fix).
    */
   readonly store = {
     set: (
@@ -1425,7 +1571,7 @@ export class SDKClient {
         'store.cursor',
         validateParams(storeCursorParamsSchema, { table_id: table, filter, ...options }, 'store.cursor'),
       ),
-    /** Each operation gets a `table_id` alias of `table` added (matching `src/base/SDK.ts` exactly)
+    /** Each operation gets a `table_id` alias of `table` added (matching the backend's real shape)
      * - the real handler reads `table_id`, so omitting it silently dropped every operation. */
     transaction: (
       operations: Array<
@@ -1545,9 +1691,8 @@ export class SDKClient {
 
   /**
    * Isolated key-value storage backed by Redis on the host, scoped to this plugin + tenant.
-   * Namespace confirmed against `PluginStorageService.sdkMethods(this, 'storage', [...])` on
-   * the backend - NOT a direct Redis connection (Docker-runtime plugins never receive raw
-   * Redis/Mongo credentials, see DockerHelper's `generateStackEnvOverrides` comment).
+   * Namespace confirmed against the backend's real registration - NOT a direct Redis connection
+   * (Docker-runtime plugins never receive raw Redis/Mongo credentials).
    */
   readonly redis = {
     get: (key: string): Promise<string | null> => this.call('storage.redisGet', { key }),
@@ -1571,7 +1716,7 @@ export class SDKClient {
     incr: (key: string): Promise<number> => this.call('storage.redisIncr', { key }).then((r: { value: number }) => r?.value),
     incrby: (key: string, increment: number): Promise<number> =>
       this.call('storage.redisIncr', { key, amount: increment }).then((r: { value: number }) => r?.value),
-    /** Confirmed against `PluginStorageService.redisDecr` - previously reachable only via `call()`. */
+    /** Confirmed against the backend's real `redisDecr` handler - previously reachable only via `call()`. */
     decr: (key: string): Promise<number> => this.call('storage.redisDecr', { key }).then((r: { value: number }) => r?.value),
     decrby: (key: string, decrement: number): Promise<number> =>
       this.call('storage.redisDecr', { key, amount: decrement }).then((r: { value: number }) => r?.value),
@@ -1592,9 +1737,9 @@ export class SDKClient {
 
   /**
    * Isolated document storage backed by MongoDB on the host, scoped to this plugin + tenant.
-   * Matches CodeSDK.d.ts's `mongo: { model(name, schema) }` shape - `model(name)` returns a
+   * Matches the backend's own `mongo: { model(name, schema) }` shape - `model(name)` returns a
    * Mongoose-style handle bound to that collection name; every method on it calls one of the
-   * `storage.mongo*` namespaces confirmed against `PluginStorageService` on the backend.
+   * `storage.mongo*` namespaces confirmed against the backend's real registration.
    */
   readonly mongo = {
     model: (name: string, _schema?: any) => {

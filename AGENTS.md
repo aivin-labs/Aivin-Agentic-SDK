@@ -30,20 +30,20 @@ the `aivin-server` bin entry), the process a deployed plugin container actually 
   handler argument; `docs/DATA_STRUCTURES.md` covers the exported types mirroring the backend's real
   data models; `docs/EXAMPLES.md` is real plugins across common use cases;
   `docs/PLUGIN_DEVELOPMENT_GUIDE.md` is the end-to-end empty-folder-to-deployed walkthrough;
-  `docs/SINGLE_METHOD_PLUGINS.md` covers the handler pattern; `docs/ARCHITECTURE.md` and
-  `docs/SECURITY.md` are internals documentation for people working on the SDK itself (or the
-  backend it talks to) - not needed to just write a plugin; `docs/draft/` holds in-progress design
-  docs not yet finalized (e.g. the worker-sandbox and container-hardening designs); `docs/CONTRIBUTING.md`,
+  `docs/SINGLE_METHOD_PLUGINS.md` covers the handler pattern; `docs/ARCHITECTURE.md` is internals
+  documentation for people working on the SDK itself - not needed to just write a plugin
+  (auth/infra internals live outside this public repo); `docs/draft/` holds in-progress design
+  docs not yet finalized (e.g. the worker-sandbox design); `docs/CONTRIBUTING.md`,
   `docs/CHANGELOG.md`, and `docs/COMPETITIVE_LANDSCAPE.md` are project-facing, not SDK-usage reference.
 - `test/` - `node:test`, run via `npm test`. No mocking framework - fakes are passed in directly
   (see `SDKClientOptions.invoke`/`invokeStream` and `GrpcInvoker.emitTraceForTest`).
 
 ## Conventions specific to this repo
 
-- Param shapes in `SDKClient.ts` are verified against the backend's real implementation
-  (`src/base/SDK.ts` in the separate backend repo), **not** `CodeSDK.d.ts` - that declared type
+- Param shapes in `SDKClient.ts` are verified against the backend's real implementation in the
+  separate backend repo, **not** the backend's own declared type contract - that declared type
   file has drifted from the real backend in several places. Doc comments on individual methods flag
-  where a shape differs from what `CodeSDK.d.ts` would suggest.
+  where a shape differs from what that declared contract would suggest.
 - The `@aivin-labs/cli` repo's scaffold generator (`createPackageJson`) pins a fresh plugin's
   `@aivin-labs/sdk` dependency to an **exact version** (not `latest`/a range - the platform's own
   deploy-time security scan flags non-exact pins as a supply-chain risk), resolved automatically

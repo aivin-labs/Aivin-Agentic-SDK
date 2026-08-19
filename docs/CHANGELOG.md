@@ -2,6 +2,109 @@
 
 ## Unreleased
 
+### 🆕 Added — `connectStandalone()` lets a third-party app call the SDK directly, no plugin container
+
+```typescript
+import { connectStandalone, ai } from '@aivin-labs/sdk';
+
+await connectStandalone(async () => {
+  const summary = await ai.prompt('Summarize this for me');
+}, { workspaceId: 'ws_123' });
+```
+
+For applications using Aivin's infrastructure that aren't a plugin running inside a host-spawned
+container at all. Authenticates via `AIVIN_APIKEY` (priority) or the same `~/.aivin/credentials`
+`aivin login` already writes (fallback) - see
+[docs/SDK.md#standalone-use-third-party-applications](SDK.md#standalone-use-third-party-applications).
+
+Backend: new `POST /plugins/sdk/session` route - the production,
+rate-limited sibling of the test-only mint-cap endpoint QA tooling already used, exchanging
+a `full_access` API key for a real `cap`+`secret` pair scoped to the key's own tenant.
+
+### 🆕 Added — `ai.cancel(id)` cancels an `ai.prompt()` call from a completely different invocation
+
+```typescript
+const id = crypto.randomUUID();
+await ai.prompt(quest, { request_id: id }, listener); // started in invocation A...
+// ...cancelled later from invocation B, no shared AbortController needed:
+await ai.cancel(id);
+```
+
+Complements `opts.signal` (previous entry) rather than replacing it: `signal` only works within the
+same invocation still holding the `AbortController`; `request_id`/`ai.cancel()` work across
+invocations/processes entirely, for cases like a "Stop" button/webhook handled by a separate request
+than the one that started generating.
+
+Backend: new cancel-by-id route on the `ai` namespace. Broadcasts over
+pubsub to every backend node (same pattern used elsewhere for background
+jobs) - whichever node actually has that request running aborts it via a real `AbortController`
+immediately, not a polled flag with multi-second lag. Scoped by tenant so one tenant can't cancel
+another tenant's request even if they learn/guess its id - a mismatch is treated as "not found,"
+indistinguishable from a request that already finished. SDK's `opts.request_id` is sent over the
+wire as `unique_request_id` - the backend's pre-existing tracking/audit field, reused rather than
+introducing a new wire field, just exposed under a shorter public name.
+
+### 🆕 Added — `opts.signal` cancels an in-flight `ai.prompt()`/`ai.promptStream()` call for real
+
+```typescript
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 5000); // give up after 5s
+await ai.prompt(quest, { signal: controller.signal });
+```
+
+Aborting cancels the underlying gRPC call, which the host was already listening for on both the
+unary and streaming RPCs - it's been wiring an `AbortController` into its own prompt handling since
+before this change - but the SDK had no way to actually trigger from the client side until now - the
+model generation genuinely stops running/being billed server-side, not just "the client stops
+listening" while it keeps going regardless. No backend changes needed - this closes a gap purely on
+the SDK side. `signal` is local-only (transport-level, like `timeoutMs`) - it's stripped out before
+`opts` is sent over the wire.
+
+### 🆕 Added — `ai.prompt()` takes a 3rd param: a `MessageListener`, or a `Writable` to pipe into
+
+`ai.prompt(quest, opts, driver)` now takes an optional 3rd parameter — same interface as the
+backend's own prompt function. What `driver` **is** decides the mode, no
+separate method to remember:
+
+- **Omitted** — plain unary call, unchanged from before this existed. Never opens a stream.
+- **A `Writable`** (anything with `.write()`/`.end()` — a Node stream, an HTTP response, a
+  `PassThrough`) — text deltas are written into it as they're generated, `.end()`/`.destroy(err)`
+  called for you. Hand the model's output straight to whatever already consumes a stream:
+  ```typescript
+  await ai.prompt("write a haiku", undefined, res); // res: an HTTP ServerResponse
+  ```
+- **A `MessageListener`** — `onUpdate`/`onReasoning`/`onLine`/`onParsedLine`/`onCompleted`/`onError`
+  fire as data arrives:
+  ```typescript
+  let text = '';
+  await ai.prompt("write a haiku", undefined, { onUpdate: (delta) => { text += delta; } });
+  ```
+
+All 3 forms resolve to the same final aggregated value.
+
+Also new: `opts.lineSchema` — declares the expected shape of each line as the response streams in,
+so `listener.onParsedLine` fires per-line already parsed (no manual buffer-and-split-on-`'\n'`):
+
+```typescript
+await ai.prompt(quest, { lineSchema: "[from:string-id] -> [to:string-id]" }, {
+  onParsedLine: (line) => console.log(line?.fields.from, "->", line?.fields.to),
+});
+```
+
+`promptStream()` is unaffected and NOT deprecated — it's the pull-based (`AsyncIterable`)
+counterpart for callers who want to `for await` the result themselves or compose it with other
+iterable-based tooling, rather than push into an existing stream object or register callbacks. It
+also gained a third field, `lines: AsyncIterable<ParsedLine>`, mirroring `onParsedLine`.
+
+The full streaming path properly backpressures end-to-end: a slow `onUpdate`/`onLine`/
+`onParsedLine`/`onReasoning` handler genuinely slows the model generation down (propagated all the
+way back to the provider's own SSE read loop via gRPC `'drain'`), rather than letting chunks pile up
+in an unbounded buffer somewhere in between. A callback that throws is caught and logged instead of
+silently truncating the rest of the stream for you.
+
+See [docs/sdk/ai.md](sdk/ai.md#streaming-and-piping-with-prompts-3rd-param) for the full
+`MessageListener`/`ParsedLine` reference and more examples.
+
 ### 💥 Breaking — the `aivin` CLI moved to `@aivin-labs/cli`
 
 `@aivin-labs/sdk` is now runtime-only: the interactive tooling (`create`, `init`, `deploy`, `login`,
@@ -17,13 +120,13 @@ What changed in this package as a result:
 
 - **Removed** the `aivin` bin entry. `@aivin-labs/sdk` no longer ships a CLI at all.
 - **Added** a new `aivin-server` bin entry (`bin/server.mjs`, unchanged file/behavior — this is the
-  same process that has always been the deployed plugin container's real entrypoint via `npm start`,
-  see `DockerHelper.createDockerCompose` on the backend). A plugin project's `package.json` should
-  point its `"start"` script at `aivin-server` directly, **not** at `aivin start` anymore — deployed
-  containers only ever install `@aivin-labs/sdk`, never the CLI, so `"start": "aivin start"` will now
-  fail with `command not found` on redeploy. `aivin create`/`aivin init` (from the new CLI package)
-  already scaffold fresh projects with the correct `"start": "aivin-server"` — **existing** plugin
-  projects need this one-line `package.json` edit by hand before their next deploy.
+  same process that has always been the deployed plugin container's real entrypoint via `npm start`).
+  A plugin project's `package.json` should point its `"start"` script at `aivin-server` directly,
+  **not** at `aivin start` anymore — deployed containers only ever install `@aivin-labs/sdk`, never
+  the CLI, so `"start": "aivin start"` will now fail with `command not found` on redeploy. `aivin
+  create`/`aivin init` (from the new CLI package) already scaffold fresh projects with the correct
+  `"start": "aivin-server"` — **existing** plugin projects need this one-line `package.json` edit by
+  hand before their next deploy.
 - **Removed** CLI-only dependencies no longer needed at runtime: `axios`, `chalk`, `commander`,
   `inquirer`, `socket.io-client`, `ws`. Kept `dotenv` (still used directly by `bin/server.mjs`).
   Every deployed plugin container's `npm ci` now installs meaningfully fewer packages.
@@ -38,12 +141,11 @@ Nothing about the SDK's own API (`import { ai, ... } from '@aivin-labs/sdk'`, `P
 
 Plugins can now run a flow (CONDITION/ROUTER/PARALLEL/RETRY/WAIT/LOOP/ACTION steps) directly from
 code — the same engine a published `workflow`-type plugin and `automation.createJob`'s `workflow`
-field already run on (`FlowService.runFlow` + `WorkflowPluginService.buildStages`, backend), now
-reachable without first publishing/scheduling anything. `flow` accepts either a `WorkflowGraph`
-(`{ nodes, edges }`, the exact JSON the platform's Workflow Editor exports) or an already-built
-`FlowStage[]`. New `ContextBuilder(...)` helper (top-level export) builds the flow's explicit
-identity — which agent/workspace it runs as, and optionally an existing `session_id` to attach to
-instead of a new hidden session. See [`docs/sdk/agent.md#runflow`](./sdk/agent.md#runflow).
+field already run on, now reachable without first publishing/scheduling anything. `flow` accepts
+either a `WorkflowGraph` (`{ nodes, edges }`, the exact JSON the platform's Workflow Editor exports)
+or an already-built `FlowStage[]`. New `ContextBuilder(...)` helper (top-level export) builds the
+flow's explicit identity — which agent/workspace it runs as, and optionally an existing `session_id`
+to attach to instead of a new hidden session. See [`docs/sdk/agent.md#runflow`](./sdk/agent.md#runflow).
 
 Also added `agent.promptAgentic()`/`agent.promptAction()`/`agent.promptAssistant()` — force one of
 the 3 modes `agent.processMessage`'s NLU classification step would otherwise pick between
@@ -54,10 +156,10 @@ that already know which mode a given turn needs. Each keeps its own backend fall
 
 Also added `agent.prompt()` — the lightweight auto-routing counterpart of `processMessage` (same NLU
 classification, plain string instead of a full message object; the backend now also persists this
-turn via `saveMessage()` first, same as every other production caller of `processMessage`, so it
+turn first, same as every other production caller of `processMessage`, so it
 shows up in the session's history like a normal chat turn) — and `opts.onEvent` on all five of
 `runFlow`/`promptAgentic`/`promptAction`/`promptAssistant`/`prompt` — an optional callback that
-receives live progress log events (`ClientLogEvent`) as the call runs, over the same gRPC
+receives live progress log events as the call runs, over the same gRPC
 server-streaming RPC `ai.promptStream` uses. Omitting `onEvent` keeps the plain unary call path with
 no added cost; the backend's log-stream registry supports multiple overlapping calls sharing one
 session correctly (stacked, not one-slot-per-session). All five also now default to a 5-minute
@@ -67,16 +169,15 @@ plan routinely runs longer than that. See
 
 ### 🐛 Fixed — `notification.push()` silently delivered nothing and dropped message text
 
-Verified field-by-field against the real backend handler chain
-(`NotificationSDK.ts` → `NotificationService.pushNotification` → `NotificationRequest` DTO → each
-engine's `render()`/`process()`) and found two field-name mismatches that both round-tripped without
-throwing, so neither was ever caught by a test that only checks "did the call succeed":
+Verified field-by-field against the real backend handler chain and found two field-name mismatches
+that both round-tripped without throwing, so neither was ever caught by a test that only checks "did
+the call succeed":
 
 1. **Audience**: the backend resolves recipients from `user` (full object) / `receiver_id` /
    `receiver_ids` / `topic` — it never reads `user_id`. A bare `{ user_id, title, body }` call
-   resolved to an empty audience and `pushNotification`'s try/catch swallowed the resulting no-op.
-2. **Content**: every engine reads `notiReq.message`, never `notiReq.body` — a bare `body` was
-   silently dropped in favor of an AI-generated (`prompt`) or generic fallback message instead of
+   resolved to an empty audience and the backend's own error handling swallowed the resulting no-op.
+2. **Content**: every delivery channel reads `notiReq.message`, never `notiReq.body` — a bare `body`
+   was silently dropped in favor of an AI-generated (`prompt`) or generic fallback message instead of
    the caller's text.
 
 `push()` still accepts `user_id`/`body` (kept for API familiarity) but now remaps them to
@@ -87,7 +188,7 @@ vanishing silently.
 
 ### 🆕 Added — typed `channels`/`priority`/`receiver_ids`/`topic`/`prompt`/`title_key`/`message_key`/`vars`/`messageIsHtml` on `notification.push()`
 
-The backend's `NotificationService.pushNotification` pipeline already supported multi-channel
+The backend's notification pipeline already supported multi-channel
 dispatch, priority-based engine routing, batch/topic-broadcast audience resolution, i18n rendering,
 and AI-generated content from a `prompt` — none of it was typed or documented on the SDK side, only
 reachable through the untyped `[key: string]: any` escape hatch. See
@@ -97,14 +198,13 @@ reachable through the untyped `[key: string]: any` escape hatch. See
 
 ### 🔧 Changed — `datastore` renamed to `table`; `pluginStore` renamed to `plugin`
 
-`export const datastore = bindNamespace('datastore')` (`globalSdk.ts`) never matched the real wire
-namespace the backend registers under (`PluginBridge.sdkFunction('table.*', ...)` in
-`DatastoreSDK.ts`, and the legacy `ctx.sdk` facade's own `get table()` in BE's `src/base/SDK.ts`) -
-`SDKClient.readonly datastore` and every `validateParams(..., 'datastore.X')` call site are now
-`table`/`'table.X'` to match. `import { datastore } from '@aivin-labs/sdk'` no longer resolves to
+`export const datastore = bindNamespace('datastore')` never matched the real wire
+namespace the backend registers under - `SDKClient.readonly datastore` and every
+`validateParams(..., 'datastore.X')` call site are now `table`/`'table.X'` to match.
+`import { datastore } from '@aivin-labs/sdk'` no longer resolves to
 anything - use `import { table } from '@aivin-labs/sdk'`. Same rename for the internal
-`@internal`-only `pluginStore` → `plugin` (aivin-service's marketplace catalog access, stripped
-from the published `.d.ts`; not part of the public plugin-author surface).
+`@internal`-only `pluginStore` → `plugin` (an internal consumer's marketplace catalog access,
+stripped from the published `.d.ts`; not part of the public plugin-author surface).
 
 ### 📝 Fixed — docs/CLI-prompt catching up to the `table` rename
 
@@ -112,7 +212,7 @@ The rename above landed in code but not in the docs that shipped in the same rel
 namespace table, `docs/SDK.md`'s "Persistent storage" section, and the dedicated
 `docs/sdk/datastore.md` page (renamed to [`docs/sdk/table.md`](./sdk/table.md)) all still said
 `datastore`; `docs/sdk/project.md` still cross-referenced it by the old name. Most consequential:
-`bin/cli.mjs`'s AI-codegen system prompt (what `aivin create`/`aivin init` feed the LLM to write new
+the CLI's AI-codegen system prompt (what `aivin create`/`aivin init` feed the LLM to write new
 plugins) listed `datastore` as an available namespace - any generated plugin calling it would have
 hit an `undefined` import at runtime. That same namespace list was also missing `project` and
 `code` entirely (both real, existing namespaces) - added.
@@ -121,25 +221,25 @@ hit an `undefined` import at runtime. That same namespace list was also missing 
 
 ### 🆕 Added — typed sugar for `pluginStore.findDocsBySourceRepo`/`pluginStore.patchByIds`
 
-`check-contract.mjs --be-path` flagged the new `pluginStore.*` namespace (BE's plugin-marketplace
+The contract checker flagged the new `pluginStore.*` namespace (an internal plugin-marketplace
 catalog, added same day) as 18 registrations reachable only via the untyped `call()` escape hatch.
-Added sugar for the 2 actually consumed in production right now — `aivin-service`'s `AivinBackend.ts`
-(the *sole* way that repo's `MarketplaceBackend` implementation reads/writes BE's catalog, now that
-its old direct-OpenAI/Anthropic "standalone" path has been removed entirely). The other ~14
+Added sugar for the 2 actually consumed in production right now — the sole way an internal consumer
+service reads/writes the backend's catalog, now that its old direct-OpenAI/Anthropic "standalone"
+path has been removed entirely. The other ~14
 `pluginStore.*` registrations (`getPlugin`, `searchPlugins`, `upsertPlugins`, ...) stay
 escape-hatch-only — no current caller reaches for them, so no sugar added speculatively.
 
 Marked `pluginStore` `@internal` + enabled `stripInternal` in `tsconfig.json` — it's rejected
-server-side for any caller besides aivin-service (`PluginStoreSDK.ts::assertMarketplaceCaller`), so
+server-side for any caller besides that one internal consumer, so
 it had no business appearing in a plugin author's Monaco autocomplete. Confirmed the published
-`.d.ts` now omits it entirely while the compiled runtime JS still has it (aivin-service compiles
-against this same source, unaffected).
+`.d.ts` now omits it entirely while the compiled runtime JS still has it (that internal consumer
+compiles against this same source, unaffected).
 
 ### 🐛 Fixed — `withTrace` was never re-exported from the top-level package entry
 
 `export { getCurrentTrace, formatTraceForConsole } from './sdk/trace'` (`src/index.ts`) always
-skipped `withTrace` itself — the function BE's own `bootstrapper.js` (native/PROMOTED_CODE plugin
-runtime) needs to give that runtime the same per-call `sdk.*` trace visibility Docker-runtime
+skipped `withTrace` itself — the function the backend's own native plugin runtime
+needs to give that runtime the same per-call `sdk.*` trace visibility Docker-runtime
 plugins already get for free via `PluginServer.ts`'s own `withTrace` usage. `require('@aivin-labs/sdk').withTrace`
 silently resolved to `undefined` (destructuring doesn't throw) — the crash only happened later, at
 the point `withTrace(...)` was actually *called*, past where any `try/catch` around the `require`
@@ -160,11 +260,11 @@ set the right env var. Old names no longer read — update your `.env`/deploymen
 
 ### 🆕 Added — typed sugar for the last 3 backend routes only reachable via `call()`
 
-`check-contract.mjs` flagged 3 real backend registrations with no `SDKClient.ts` wrapper. Added
-`knowledge.get(knowledgeIds)`/`knowledge.del(ids)` (confirmed against `BrainSDK.ts`'s
+The contract checker flagged 3 real backend registrations with no `SDKClient.ts` wrapper. Added
+`knowledge.get(knowledgeIds)`/`knowledge.del(ids)` (confirmed against the backend's real
 `knowledge.batchGetKnowledge`/`knowledge.batchDeleteKnowledge` handlers - previously documented as
 "no confirmed real implementation", which was stale) and `redis.decr`/`redis.decrby` (mirrors
-`incr`/`incrby`, confirmed against `PluginStorageService.redisDecr`). `check-contract.mjs` now
+`incr`/`incrby`, confirmed against the backend's real implementation). The contract checker now
 reports 0 dead calls and 0 missing-sugar entries against the real backend.
 
 > ⚠️ **Note added retroactively**: the `[1.1.0]` and `[1.2.0]` sections below were written when
@@ -176,16 +276,15 @@ reports 0 dead calls and 0 missing-sugar entries against the real backend.
 
 ### 🆕 Reworked — `aivin plugin convert` into an agentic, tool-relay-based conversion pipeline
 
-Previously a single `/code/generate` call with the whole project dumped in as `workspace_files` -
+Previously a single AI-generation call with the whole project dumped in as `workspace_files` -
 didn't scale to a large project (uploads everything up front) and could only ever write one
-`src/main.ts`. Now a real multi-step loop, orchestrated server-side and driven by a new
-`POST /code/convert-project` endpoint:
+`src/main.ts`. Now a real multi-step loop, orchestrated server-side and driven by a new backend
+endpoint:
 
 - **Scan on demand, not upload up front**: the CLI sends only the directory tree (paths + byte
   sizes, never content); the server decides which files are actually worth reading and asks the CLI
-  to read them back one at a time over the same socket connection `aivin plugin logs` already uses
-  (`code:tool_call`/`code:tool_result`, relayed through a new `CodeToolRelay` service). Bounded to 5
-  scan rounds, 4 files/round.
+  to read them back one at a time over the same socket connection `aivin plugin logs` already uses.
+  Bounded to 5 scan rounds, 4 files/round.
 - **Plans before generating**: detects the project's shape (plain script, MCP server, API backend,
   Claude-style skill) and decides single-file vs. a multi-file/multi-function plan, `create` vs.
   `update` per file - including a dedicated **cross-language port mode**: a non-TypeScript source
@@ -211,7 +310,7 @@ See [CLI.md#aivin-plugin-convert-hint](https://github.com/aivin-labs/cli/blob/ma
 
 ### 🆕 Added — complexity-adaptive `aivin plugin make`/`aivin init`
 
-`aivin plugin make` now calls a new `POST /code/generate-project` endpoint that classifies the
+`aivin plugin make` now calls a new backend endpoint that classifies the
 requirement first: simple/moderate requests still cost exactly one generation call and write exactly
 `src/main.ts`, unchanged from before; a genuinely complex requirement (several independent
 capabilities, or logic too large for one flat function) gets planned into a small multi-file project
@@ -233,9 +332,9 @@ extracted at all.
 
 ### 📝 Documented — `manifest.json`'s `avatar` field
 
-Real, working, already-persisted on every deploy (`PluginModel.ts`'s schema has had `avatar: String`
-all along, and `PluginStoreService.loadPlugin` spreads the whole manifest object into it) - but was
-typed on neither side (`PluginTypes.ts` here nor the backend's own `PluginDTO.ts`) and never
+Real, working, already-persisted on every deploy (the backend's own plugin schema has had
+`avatar: String` all along, and the backend spreads the whole manifest object into it) - but was
+typed on neither side (`PluginTypes.ts` here nor the backend's own equivalent) and never
 mentioned in `docs/MANIFEST.md`, so no plugin author had a way to discover it existed. Added
 `avatar?: string` to `PluginManifest` and a field-table row explaining it's a URL (host the image
 via `resource.upload` or elsewhere first, not raw bytes) with a fallback to the publishing user's
@@ -280,12 +379,12 @@ working autonomously in the directory, not just a human skimming a README once.
 
 New chat-streaming primitives on `agent`, not `ai`: previously the only way to stream text into the
 current chat as a real, persisted message was internal to the platform's own agent orchestration
-code (`AIEngine.prompt(quest, opts, { ctx, listener })` built from `MessageService`) — not reachable
-from plugin code at all. `agent.reply` exposes that mechanism directly (LLM call + stream into
-chat); `agent.tell` is its no-LLM sibling for text you already have (pure passthrough, animated with
-the same word-by-word typing effect). Both fall back gracefully (`agent.reply` to a plain
-non-streamed `ai.prompt`; `agent.tell` to `{ success: false }`) when the invocation has no live chat
-session (automation/webhook/API context) — safe to call unconditionally.
+code — not reachable from plugin code at all. `agent.reply` exposes that mechanism directly (LLM
+call + stream into chat); `agent.tell` is its no-LLM sibling for text you already have (pure
+passthrough, animated with the same word-by-word typing effect). Both fall back gracefully
+(`agent.reply` to a plain non-streamed `ai.prompt`; `agent.tell` to `{ success: false }`) when the
+invocation has no live chat session (automation/webhook/API context) — safe to call
+unconditionally.
 
 `agent.reply`'s `opts.rich_content: true` unlocks the model rendering *passive* rich components
 (table/chart/mermaid/media/cardview/webview/citation) — deliberately never selection/form/action,
@@ -293,9 +392,9 @@ since those need `agent.hil()`'s suspend+lock+routing plumbing to receive a resp
 enabling them via `reply`/`tell` would render a button that looks interactive but silently does
 nothing. See [sdk/agent.md](./sdk/agent.md#rich-components-and-hil) for the full explanation.
 
-Both share a per-session rate limit (backend, default 20 pushes/60s, configurable via
-`sandbox.agent_chat_push_rate_limit`) — neither call has a cost gate that would otherwise stop a
-buggy/looping plugin from flooding a user's chat with unlimited persisted messages.
+Both share a per-session rate limit (backend, default 20 pushes/60s, configurable server-side) —
+neither call has a cost gate that would otherwise stop a buggy/looping plugin from flooding a
+user's chat with unlimited persisted messages.
 
 ### 🐛 Fixed — `code` namespace unreachable via the documented top-level import
 
@@ -306,11 +405,11 @@ path worked. Added the missing `export const code = bindNamespace('code')`.
 ### 🆕 Added — local zod validation extended to `store.*` and `datastore.*`
 
 Same treatment as `automation`/`resource` below, extended to the two highest-traffic write
-namespaces. Both were verified field-by-field against the real `StoreSDK.ts`/`DatastoreSDK.ts`
+namespaces. Both were verified field-by-field against the real backend implementation
 first — unlike `automation`, these were already shape-correct, so this is a pure runtime-guard
-addition, not a bug fix. Also wired `scripts/check-contract.mjs` into CI (`.github/workflows/ci.yml`,
-`check-contract` job) — currently a documented no-op until `vars.BE_REPO`/`secrets.BE_REPO_TOKEN`
-are configured, since the checker needs a checkout of the separate backend repo.
+addition, not a bug fix. Also wired a contract-drift checker into CI — currently a documented no-op
+until the backend-repo checkout credentials are configured, since the checker needs a checkout of
+the separate backend repo.
 
 ### 🆕 Added — local zod validation for `automation.*` and `resource.upload`/`.remove`
 
@@ -326,17 +425,17 @@ standard, ~small footprint; this package was never actually "dependency-free" - 
 now — extend the same way (verify every field against the real backend handler first) rather than
 schema-ifying everything speculatively.
 
-### 🛠️ Added — `scripts/check-contract.mjs`, a BE↔SDK namespace drift checker
+### 🛠️ Added — a BE↔SDK namespace drift checker
 
-A best-effort static scanner (`npm run check:contract -- --be-path <path-to-be-repo>`) that
+A best-effort static scanner that
 cross-references every `this.call('namespace.method', ...)` in `SDKClient.ts` against every real
-`PluginBridge.sdkFunction`/`.sdkMethods`/`.sdkStreamFunction` registration in the backend repo, and
+registration in the backend repo, and
 reports namespace/method names that exist on only one side. Catches the "SDKClient.ts calls
 something the backend doesn't register" class of bug going forward (a `namespace.method` STRING
 existing on both sides) — it does **not** check param shapes, so it would not have caught the
 `automation.createJob` field-name bug on its own; the zod schemas above are the shape-level guard.
 Not wired into CI yet (needs a checkout of the backend repo to run against); run it manually after
-any change to `SDKClient.ts` or when the backend's `PluginBridge` registrations change.
+any change to `SDKClient.ts` or when the backend's registrations change.
 
 ### 📝 Improved — storage namespace guidance (`store`/`datastore`/`mongo`/`redis`)
 
@@ -351,7 +450,7 @@ for their specific niches (porting Mongo-shaped logic; ephemeral cache/counters)
 
 A previous audit pass typed these against a guessed-at generic "cron job" shape
 (`{ name, schedule, logic }`) that never matched the real backend and was never actually verified
-against it — the real `JobRequest`/`JobListRequest` (`AutomationDTO.ts`) use `mission`/`prompt`
+against it — the real request/response shapes use `mission`/`prompt`
 (what the job does — there is no `logic`/code-string field at all) and `schedule_condition` (a
 natural-language description the backend parses itself, not a raw cron string). Using the old
 documented shape would silently create a job with the wrong mission/schedule (or, for `agent_id`,
@@ -364,8 +463,8 @@ server-side rate limit (10 calls/5min, shared between `createJob` and mission/sc
 ### 🆕 Resolved — `resource.upload`'s previously-hedged uncertainties
 
 `docs/sdk/resource.md` had several "presumably"/"not confirmed" hedges around `file`'s accepted
-shape and `is_public`/`temp`'s actual effect. Traced through the backend's real `toBuffer()`
-normalizer and `FSIO.ts` and resolved all of them: `file` accepts exactly a base64 string, a
+shape and `is_public`/`temp`'s actual effect. Traced through the backend's real normalizer and
+resolved all of them: `file` accepts exactly a base64 string, a
 `{type:'Buffer',data:number[]}` object, or a `number[]` (a raw `Buffer` does not survive the JSON
 round-trip on its own); `temp`/`is_public` behave as guessed. Added a real `ResourceMeta` return
 type (was `Promise<any>`) and an undocumented `workspace_id` param.
@@ -373,8 +472,8 @@ type (was `Promise<any>`) and an undocumented `workspace_id` param.
 ### 🆕 Resolved — `session.newSession` vs `session.create`'s actual relationship
 
 `docs/sdk/session.md` previously said the difference between these two was unverified. Traced
-through the backend's real `SessionService`: `create()` is the higher-level call (auto-resolves a
-default workspace, builds a full session record via `buildSessionDTO`) which internally calls
+through the backend's real implementation: `create()` is the higher-level call (auto-resolves a
+default workspace, builds a full session record) which internally calls
 `newSession()` — the lower-level primitive, which is idempotent by `id` (touches `last_updated` and
 returns the existing record rather than duplicating if that `id` already has a session). Documented
 when to reach for each.
@@ -394,24 +493,24 @@ own mission; `sessionId` is accepted only as a self-check against that same tena
 cancel another tenant's mission (see security fix below). `browser.run()`'s result now also carries
 `data.session_id` so it can be passed back later. See [sdk/browser.md](./sdk/browser.md).
 
-### 🔒 Fixed — cross-tenant `browser.cancel` DoS + SSRF blocklist gaps (backend, `be` repo)
+### 🔒 Fixed — cross-tenant `browser.cancel` DoS + SSRF blocklist gaps (backend)
 
 Backend-side hardening alongside the new `browser.cancel`:
 
 - `browser.cancel`'s first draft trusted a caller-supplied `session_id` outright — any tenant could
   cancel another tenant's running mission. Fixed to always resolve the tenant from the caller's own
   context; `session_id` is now rejected unless it matches that tenant.
-- `AIBrowserService`'s SSRF hostname blocklist missed IPv4-mapped IPv6 (`::ffff:127.0.0.1`), the
-  `fd00::/8` half of the IPv6 ULA range, and CGNAT `100.64.0.0/10` (which covers Alibaba Cloud's
-  metadata IP). Rewrote it to parse real IP bytes (`net.isIP`) instead of matching hostname strings.
-- Added a DNS-rebinding backstop: `setupAdvancedPage` now checks each response's actual
-  `remoteAddress()` (the IP really connected to, not a separately-resolved one) and aborts the
+- The AI Browser service's SSRF hostname blocklist had gaps around a few non-obvious private-address
+  encodings, letting a specially-formed target slip past a hostname-string check. Rewrote it to
+  parse real IP bytes instead of matching hostname strings, closing that class of bypass generally.
+- Added a DNS-rebinding backstop: the browser session setup now checks each response's actual
+  resolved remote address (the IP really connected to, not a separately-resolved one) and aborts the
   mission if it lands on a private/internal address — closes the TOCTOU window a hostname-only
   check can't.
 
 ### 🆕 Added — SDK surface audit: wired up backend RPCs that had no client-side sugar
 
-Cross-checked every `PluginBridge.sdkFunction`/`sdkMethods` registration on the backend against
+Cross-checked every backend registration against
 `SDKClient.ts`'s sugar objects and added the ones that were missing (previously only reachable via
 the generic `call('namespace.method', ...)` escape hatch):
 
@@ -421,7 +520,8 @@ the generic `call('namespace.method', ...)` escape hatch):
 - `workspace`: `updatePlugin`
 - `agent`: `processMessage`, `resolveHil`
 - `attachment`: `upload`, and a new `extract` method (raw extracted chunks of an attachment, no AI
-  summarization — reads back what the backend's extract-engine already produced during `upload`)
+  summarization — reads back what the backend's extraction pipeline already produced during
+  `upload`)
 - `datastore`: `rollback`, `getAllTables`, `getTableStats`, `countRows`, `exportTable`,
   `deduplicateTable`, `backfillColumn`, `formatRowsForContext` (previously only reachable via the
   HTTP/UI route, not the SDK)
@@ -432,9 +532,8 @@ the generic `call('namespace.method', ...)` escape hatch):
 - New `code` namespace: `executeLogic`
 
 `storage.*`/`queue.scheduleJob`/`realtime.publish` were initially suspected dead (no
-`PluginBridge.sdkFunction` registration found) but turned out to be registered via the separate
-`PluginBridge.sdkMethods(...)` bulk-bind helper in `PluginStorageService.ts` — confirmed working,
-no changes needed there.
+matching registration found) but turned out to be registered via a separate
+bulk-bind helper on the backend — confirmed working, no changes needed there.
 
 ## [1.0.1] - 2026-07-27
 
@@ -455,8 +554,8 @@ from that description in one step - instead of `aivin create` followed by a sepa
   filename is fixed - the runtime always loads exactly `src/main.ts` - `service.ts` is just this
   project's own convention for where the logic lives, not a platform requirement.
 
-Achieved without any backend code-generation changes: the existing `/code/generate` endpoint
-already branches its prompt based on `target_file` (a "MAIN ENTRY POINT, must return
+Achieved without any backend code-generation changes: the existing generation endpoint
+already branches its prompt based on the target file (a "MAIN ENTRY POINT, must return
 PluginResponse" branch for `src/main.ts`, a generic "utility file" branch for anything else) -
 `aivin init` targets `src/service.ts` (the generic branch) for the AI-generated part, and writes
 `src/main.ts` itself, deterministically, client-side.
@@ -478,24 +577,24 @@ remain for scripted/CI use where the config isn't a file on disk yet.
 
 ### 🐛 Fixed — plugin-to-plugin calls (`ctx.sdk.call('other_plugin_id', params)`) never actually worked
 
-The AI code generator's own instructions (`CodeGenerationHelper.ts` on the backend) told every
+The AI code generator's own instructions told every
 generated plugin to reuse an existing plugin via `ctx.sdk.call('plugin_id', params)` when one
 matched the task. This was false for this SDK's Docker/gRPC runtime: the inbound dispatcher
-(`GrpcSDKServer.Invoke` → `PluginBridge.call()`) only ever looked up registered host methods
+only ever looked up registered host methods
 (`ai.*`, `agent.*`, `datastore.*`, ...) and threw `SDK_FUNCTION_NOT_FOUND` for anything else - the
-plugin-to-plugin fallback (`PluginBridge.trigger()`) existed on the backend but was only wired into
-`InProcessTransportAdapter`, a different (LITE/in-process) plugin runtime. Any AI-generated plugin
-that followed the platform's own advice and called another plugin would crash at runtime. Fixed by
-adding the same fallback to `PluginBridge.call()` - verified live that the failure mode changed
+plugin-to-plugin fallback existed on the backend but was only wired into a different (LITE/in-process)
+plugin runtime. Any AI-generated plugin that followed the platform's own advice and called another
+plugin would crash at runtime. Fixed by adding the same fallback to the Docker-runtime dispatch path
+- verified live that the failure mode changed
 from `SDK_FUNCTION_NOT_FOUND` to a (correctly) deeper-stage error once the target is an actual
 Docker-runtime plugin, which this sandbox's bare-metal backend can't fully reach for the same
 Docker-networking reason noted above.
 
 ### 🆕 Added — `aivin plugin search <query>`
 
-Search the platform's plugin ecosystem before writing new logic - wraps the backend's existing
-`GET /plugins/search` (the same relevance-ranked lookup the platform's own agent uses to
-auto-select a plugin for a mission; newly opened up to API-key auth via `@AllowApiKey()` so the CLI
+Search the platform's plugin ecosystem before writing new logic - wraps a backend search route
+(the same relevance-ranked lookup the platform's own agent uses to
+auto-select a plugin for a mission; newly opened up to API-key auth so the CLI
 can reach it, not just a browser session). `--workspace <id>` narrows scope, `--limit <n>` caps
 results. Verified live - found a real previously-deployed plugin by name.
 
@@ -509,7 +608,7 @@ results. Verified live - found a real previously-deployed plugin by name.
   when to actually reach for `ctx.sdk`, `aivin plugin search` for reuse-before-rewrite, and the
   handful of CLI commands you'll actually run day to day.
 - `docs/SDK.md` and the backend's own AI code-generation instructions/template
-  (`CodeGenerationHelper.ts`) now both lead with the top-level `import` style as the default,
+  now both lead with the top-level `import` style as the default,
   explaining `ctx.sdk` exists specifically (and only) for code that isn't guaranteed to run inside
   `main()`'s async context - not as a beginner-friendly alternative. Verified live: a fresh
   `aivin plugin make` generation now produces `import { ai } from '@aivin-labs/sdk'` code instead of
@@ -522,18 +621,18 @@ results. Verified live - found a real previously-deployed plugin by name.
 Set up a genuinely fresh project (`aivin create`, real `npm install` from the public registry now
 that `@aivin-labs/sdk` is published) and deployed it for real - built Docker image, ran the
 container, invoked it - to verify the whole chain actually works, not just the SDK in isolation.
-Found and fixed two real bugs on the backend (`c:\Project\be`), both severe enough to block
+Found and fixed two real bugs on the backend, both severe enough to block
 *every* freshly-scaffolded plugin, not just this test:
 
 1. **The AI security scan didn't know the platform's own SDK is first-party.** A completely
    unmodified `aivin create` scaffold got blocked at deploy with `"@aivin-labs/sdk": "Unknown
    third-party dependency may contain malicious code"` and `"aivin start": "could execute arbitrary
    operations"` - the scanner had zero awareness that these are the platform's own required
-   conventions, not arbitrary third-party code. Fixed in `CodeSecurityHelper.ts`: added a
-   `KNOWN_SAFE_PLATFORM_CONVENTIONS` block, and - prompted by a sharp catch mid-review - restructured
-   the whole call so the task instructions go through `AIEngine.prompt()`'s `instructions` option
+   conventions, not arbitrary third-party code. Fixed on the backend by allow-listing known safe
+   platform conventions, and - prompted by a sharp catch mid-review - restructuring
+   the whole call so the task instructions go through the model's dedicated instructions channel
    (trusted, system-level) instead of being concatenated into the same string as the file content
-   being analyzed (untrusted, now relies on `AIEngine`'s existing `<user_input>` auto-wrapping for a
+   being analyzed (untrusted, now relies on the backend's existing auto-wrapping for a
    real instruction/data boundary - the old concatenated-string version had no such boundary, an
    actual prompt-injection gap a malicious plugin's code could have exploited to talk its way past
    the scanner).
@@ -555,8 +654,8 @@ container over gRPC - could not be verified in this specific sandbox: plugin con
 own isolated Docker network per deployment, and the backend here runs bare-metal (not itself
 containerized on that network), so it can't reach the container's IP or resolve its Docker-internal
 DNS name. This is a property of how this sandbox runs the backend for testing, not a code defect -
-production backend deployments run containerized on the shared Docker network stack, per the
-already-running `aivin-be` service confirmed alongside this test.
+production backend deployments run containerized on the shared Docker network stack, confirmed
+alongside this test.
 
 ### 🐛 Fixed — `aivin create --json`/`--stdin` never told you to `cd` into the new project
 
@@ -578,14 +677,11 @@ First published release (`npm install @aivin-labs/sdk`).
   of deltas as the model generates them, and `text` is a `Promise<string>` resolving to the full
   response once the stream ends. `text` resolves correctly even if `textStream` is never iterated.
 - Required a new server-streaming RPC end to end: `InvokeStream` added to
-  `sdk_transport.proto` (kept in sync with the backend's copy at
-  `src/base/sdk/proto/sdk_transport.proto`); backend registers `ai.promptStream` as a
-  streaming-capable route (`PluginBridge.sdkStreamFunction`) that forwards `AIEngine.prompt`'s
-  existing driver-level `onUpdate` chunks straight through to the plugin, instead of buffering the
-  whole response server-side first like `ai.prompt` does. `GrpcSDKServer.InvokeStream` shares the
-  exact same auth/capability-resolution path as `Invoke` (extracted to
-  `authenticateAndResolveContext`, not duplicated) so the two RPCs can't drift apart on tenant
-  isolation.
+  `sdk_transport.proto` (kept in sync with the backend's copy); backend registers `ai.promptStream`
+  as a streaming-capable route that forwards the existing driver-level `onUpdate` chunks straight
+  through to the plugin, instead of buffering the whole response server-side first like `ai.prompt`
+  does. The streaming RPC shares the exact same auth/capability-resolution path as the unary one
+  (not duplicated) so the two RPCs can't drift apart on tenant isolation.
 - Verified live end-to-end against a real backend: 9 real token chunks streamed in for a live LLM
   call, concatenated chunks matched the final aggregated text exactly.
 - Fixed a real crash found while verifying this: a rejected `final` promise that nobody
@@ -616,18 +712,18 @@ First published release (`npm install @aivin-labs/sdk`).
 
 ### 🔄 Changed — structured-output self-healing (LangChain `OutputFixingParser`-style)
 
-- When a caller passes `schema` to `AIEngine.prompt()` and the model's response can't be parsed
-  into valid JSON (the driver-level `repairAndParseJSON` already tries `jsonrepair` + regex
-  extraction, then falls back to returning the raw string), the engine now makes **one** corrective
-  follow-up call before giving up: sends the malformed output + the schema back to the same model
-  and asks for a corrected JSON-only response. Bounded to one attempt (`_isSelfHealAttempt` flag)
-  to avoid infinite recursion if the model keeps failing to format correctly; falls back to the
-  original raw-string behavior (unchanged) if the correction attempt also fails.
-- Motivated directly by a real bug fixed earlier this session: the `openllm` provider (a
-  multi-model gateway) doesn't reliably honor `response_format: json_schema` guided decoding for
-  every model behind it, so a text-instruction safety net was added - this self-heal is the second,
-  complementary layer: even if the instruction-level nudge isn't enough, one corrective round trip
-  usually recovers a well-formed response instead of surfacing a hard failure to the caller.
+- When a caller passes `schema` to `ai.prompt()` and the model's response can't be parsed
+  into valid JSON (the backend's driver-level repair step already tries a JSON-repair pass plus
+  regex extraction, then falls back to returning the raw string), the engine now makes **one**
+  corrective follow-up call before giving up: sends the malformed output + the schema back to the
+  same model and asks for a corrected JSON-only response. Bounded to one attempt to avoid infinite
+  recursion if the model keeps failing to format correctly; falls back to the original raw-string
+  behavior (unchanged) if the correction attempt also fails.
+- Motivated directly by a real bug fixed earlier this session: one of the multi-model gateway
+  providers doesn't reliably honor structured-output guided decoding for every model behind it, so
+  a text-instruction safety net was added - this self-heal is the second, complementary layer: even
+  if the instruction-level nudge isn't enough, one corrective round trip usually recovers a
+  well-formed response instead of surfacing a hard failure to the caller.
 
 ### 🔄 Changed — retry/backoff, observability, and test coverage for the gRPC transport
 
@@ -651,13 +747,12 @@ First published release (`npm install @aivin-labs/sdk`).
 ### 🆕 Added — `aivin plugin trigger`
 
 Invoke an already-deployed plugin directly from the CLI and print the result - the same
-`POST /plugins/execute` the platform's browser Playground ("Thử nghiệm" tab) uses
-(`PluginExecutionService.executePlugin` on the backend), so it's the real execution path, not a
-simulation.
+backend execution route the platform's browser Playground ("Thử nghiệm" tab) uses, so it's the real
+execution path, not a simulation.
 
 - Direct mode: `aivin plugin trigger "<mission>" '<input JSON>'`.
 - Auto mode: `aivin plugin trigger -a "<natural-language prompt>"` - sends the prompt as `raw_text`
-  instead of structured input; the backend's own `mapDataToSchema` maps it onto `manifest.json`'s
+  instead of structured input; the backend maps it onto `manifest.json`'s
   `input` schema for you (the same mechanism the Playground's chat-style tester uses). `<input>` can
   still be passed alongside `-a` to force specific fields - explicit values win over auto-mapped
   ones.
@@ -665,7 +760,7 @@ simulation.
 - Prints the backend's `processing_log` (mapping/execution stage messages) and, in auto mode,
   `mapped_arguments` (what the prompt got mapped to), then the real `status`/`message`/`data`.
 - Real-time log streaming like the browser Playground's live panel isn't available here - that goes
-  over a Socket.IO channel that only authenticates browser session JWTs, not a CLI API key. This
+  over a channel that only authenticates browser session JWTs, not a CLI API key. This
   only has what the HTTP response itself carries, printed once the call completes - not the
   plugin's own internal `console.log()` output either, just the backend's own orchestration steps.
 
@@ -679,7 +774,7 @@ common case (wrapping a tool) from 6 flags down to 3-4.
 ### 🆕 Added — `aivin plugin convert`
 
 Turn a project you already have into a plugin without writing the wrapper by hand. Same AI code
-generator as `plugin make` (`POST /code/generate`), but instead of a plain-language description it
+generator as `plugin make`, but instead of a plain-language description it
 reads the current directory as context (same exclusions as `aivin deploy`, plus a size cap) and asks
 the AI to adapt the project's real, existing logic into `main(mission, input, ctx)` - preserving
 behavior, not stubbing it out. No `aivin create` needed first - infers a starting `manifest.json`
@@ -688,15 +783,15 @@ on the exportInvoice function"`.
 
 ### 📝 Docs — sharper field descriptions, wording pass
 
-- `depend_on`: now correctly describes the real mechanism (`DependencyResolverHelper` on the
-  backend) - the dependency is scheduled into an earlier execution stage, not just "called first".
+- `depend_on`: now correctly describes the real mechanism (the backend's own dependency scheduler) -
+  the dependency is scheduled into an earlier execution stage, not just "called first".
 - `input`/`output`: no longer reference `main()` specifically (misleading for multi-function
   plugins). `input` now notes it supports nested structures and is read by the planner's
   auto-mapping; `output` now notes it's read during audit/replanning and for mapping this plugin's
   result into a later stage's input.
 - `version`/`author`/`email`/`license`/`repository_url` split into individual table rows instead of
   being crammed together.
-- Fixed the marketing site link (`aivin.app` → `aivin.cloud`, matching the real `api.`/`brain.`
+- Fixed the marketing site link (`aivin.app` → `aivin.cloud`, matching the real production
   subdomains).
 - General wording pass on README.md for a more dev-convenience-first tone (Environment variables,
   Turn anything into a plugin, a few "Why the SDK" bullets).
@@ -722,7 +817,7 @@ just `{ data: '...' }`, matching `aivin mcp create`'s manifest and every doc exa
 ### 🆕 Added — multi-function plugins
 
 - **Entry point moved**: `handler.ts` at the project root is now `src/main.ts`. `aivin create`
-  scaffolds it there; `PluginServer.loadPlugin()` reads it from there.
+  scaffolds it there; the plugin loader reads it from there.
 - **Multi-function manifests**: `manifest.json` can now be `{ ...commonFields, plugins: [...] }` -
   fields shared by every function (`version`, `connection_id`, ...) written once, plus a `plugins`
   array where each entry is a full manifest plus a `func` field naming which export of the shared
@@ -736,48 +831,45 @@ just `{ data: '...' }`, matching `aivin mcp create`'s manifest and every doc exa
   `src/types/PluginTypes.ts`.
 - `aivin deploy`/`aivin test` now accept a multi-function manifest directly: the request omits the
   top-level `id` and includes `files` unless every entry is a proxy plugin.
-- **Backend: real one-container-many-functions deploy path.** The array-manifest branch of
-  `deployUnified()` previously only registered manifest rows in the DB (no `files` handling at all,
+- **Backend: real one-container-many-functions deploy path.** The array-manifest branch of the
+  deploy pipeline previously only registered manifest rows in the DB (no `files` handling at all,
   no Docker build) - a multi-function deploy looked like it succeeded but had no code behind it and
-  could never actually be invoked. `PluginDeploymentService.deployMultiFunctionBatch()` now runs the
-  security check/Docker build once for the shared code and registers all N entries with
-  `proxy_config: { type: 'docker', code_id: <shared group id> }`. `PluginRunner.handleDockerRuntime`
-  now addresses the container by `code_id` instead of `manifest.id` - these were never actually the
-  same value even for a single-function plugin (`prepareDeployManifest` sets `code_id: plugin.id`
-  but then reassigns `manifest.id` to a freshly-generated one on every deploy), so this wasn't just a
-  multi-function fix: the previous `manifest.id`-keyed addressing never matched the real community
-  directory or docker-compose service name for any Docker-runtime plugin. Also now passes each
-  entry's `func` to the container explicitly via `context.metadata.func`, so `PluginServer` no longer
-  has to guess the target function from `mission` (which is just a human-readable reason string, not
-  a routable id) for a real host-triggered invocation - see `src/PluginServer.ts`'s
-  `resolveTargetFunction()`. Mission-based matching against the local array manifest remains as a
-  fallback, used only by `aivin start`'s local dev/curl testing.
-- **Backend: fixed several `DeveloperPluginManifest` fields that were silently dropped on save.**
+  could never actually be invoked. The backend now runs the security check/Docker build once for the
+  shared code and registers all N entries sharing that same underlying build. The host now
+  addresses the running container by the shared build's own id instead of the per-entry manifest id
+  - these were never actually the same value even for a single-function plugin, so this wasn't just
+  a multi-function fix: the previous addressing scheme never matched the real container/service name
+  for any Docker-runtime plugin. Also now passes each entry's `func` to the container explicitly, so
+  `PluginServer` no longer has to guess the target function from `mission` (which is just a
+  human-readable reason string, not a routable id) for a real host-triggered invocation - see
+  `src/PluginServer.ts`'s `resolveTargetFunction()`. Mission-based matching against the local array
+  manifest remains as a fallback, used only by `aivin start`'s local dev/curl testing.
+- **Backend: fixed several manifest fields that were silently dropped on save.**
   `sdk_scopes`, `timeout_ms`, `circuit_breaker`, `stacks`, `side_effect`, `requires_human`, `rate_limit`,
   `network_config`, and the new `func` were read all over the plugin execution code but never
-  declared on `PluginModel`'s (strict-mode) Mongoose schema, so Mongoose stripped them before every
+  declared on the backend's (strict-mode) schema, so they were stripped before every
   save/update - they never actually persisted regardless of what was set in `manifest.json`.
-  `sdk_scopes` in particular has always silently no-op'd (`PluginBridge.enforceSdkScope` always saw
+  `sdk_scopes` in particular has always silently no-op'd (enforcement always saw
   `undefined` and fell back to full access) despite being documented as enforced. Fixed on the
   backend regardless of the SDK's own decision below to no longer surface `sdk_scopes` as a
   developer-facing manifest field - the persistence bug applies to any manifest that sets it, from
   any source, not just this SDK.
 - **Backend: `rate_limit` and `network_config` had the exact same undeclared-schema bug** -
   automatic plugin rate limiting has never actually applied to anything, and an admin's network
-  access approval/revocation (`AdminPluginService.updatePluginNetworkConfig`) never actually
-  persisted either. Also closed a related gap: `network_config.is_network_approved` was never
-  stripped from a developer's own submitted manifest, and `DockerHelper` reads it from the
-  in-memory manifest *before* any DB round-trip - so a manifest simply declaring
-  `"network_config":{"is_network_approved":true}` granted itself real internet egress with no admin
-  review at all. Deploy now always ignores what's submitted and carries forward whatever's already
-  admin-approved for that plugin instead (by `code_id`, so approval survives redeploys).
-- **Backend: fixed the deployed plugin id never being reported back correctly.** `prepareDeployManifest`
-  reassigns `manifest.id` via `generateId()` on every single-plugin deploy (never equal to what was
+  access approval/revocation never actually persisted either. Also closed a related gap:
+  `network_config.is_network_approved` was never stripped from a developer's own submitted
+  manifest, and the deploy pipeline reads it from the in-memory manifest *before* any DB round-trip
+  - so a manifest simply declaring `"network_config":{"is_network_approved":true}` granted itself
+  real internet egress with no admin review at all. Deploy now always ignores what's submitted and
+  carries forward whatever's already admin-approved for that plugin instead (by its build id, so
+  approval survives redeploys).
+- **Backend: fixed the deployed plugin id never being reported back correctly.** The deploy pipeline
+  reassigns the manifest's id on every single-plugin deploy (never equal to what was
   submitted), but the deploy response only ever echoed back the submitted id - so the CLI (and any
   other caller) had no way to learn the real, queryable id a freshly-deployed plugin was actually
   saved under, breaking every subsequent `/plugins/execute` call by id. Fixed for both the JSON and
   ZIP single-plugin deploy paths; the CLI now writes back the correct id.
-- **Backend: closed a privilege-escalation path in `@AllowApiKey()`'s fallback auth.** It never
+- **Backend: closed a privilege-escalation path in the API-key fallback auth.** It never
   checked the API key's `scopes`, so a workspace-scoped key (`scopes: ['mcp']`, meant to restrict a
   low-trust third party to exactly one workspace) could use these routes to list every workspace on
   the account or execute a plugin in an arbitrary workspace the key owner administers. Now requires
@@ -806,14 +898,13 @@ just `{ data: '...' }`, matching `aivin mcp create`'s manifest and every doc exa
 ### 🗑️ Removed — `is_public` / `aivin deploy public`
 
 `manifest.is_public` and the `aivin deploy [personal|public]` scope argument are gone. The field was
-dead on the backend: `PluginModel`'s schema never declared it (silently stripped on save, so it was
-always `undefined` after a round-trip regardless of what was deployed), and nothing in
-`PluginStoreService`/`PluginDeploymentService` ever read it for any real gating - setting it never
-actually submitted a plugin to the public store. The real "public store" visibility check
-(`PUBLIC_STORE_FILTER`) is based on `verification_status`/`is_official`/the plugin's `client`, none
-of which a CLI deploy can set. The only actual "submit for community review" path today is the
-browser CodeEditor's `publish_scope: 'community'` flow (`/code/publish`), which this CLI has no
-equivalent of. `aivin deploy` is now unconditionally private to your org.
+dead on the backend: the schema never declared it (silently stripped on save, so it was
+always `undefined` after a round-trip regardless of what was deployed), and nothing on the backend
+ever read it for any real gating - setting it never actually submitted a plugin to the public store.
+The real "public store" visibility check is based on `verification_status`/`is_official`/the
+plugin's `client`, none of which a CLI deploy can set. The only actual "submit for community review"
+path today is the browser CodeEditor's community-publish flow, which this CLI has no equivalent of.
+`aivin deploy` is now unconditionally private to your org.
 
 ### 🔄 Changed — simplified environment variables
 
@@ -831,21 +922,21 @@ equivalent of. `aivin deploy` is now unconditionally private to your org.
 
 - **New CLI command**: `aivin mcp create <name>` scaffolds a manifest-only plugin (`proxy_config`)
   that proxies straight to an external MCP server's tool/resource/prompt — no `src/main.ts`/code
-  needed. Matches the backend's `McpProxyConfig` (`src/plugins/dto/proxy/McpProxyConfig.ts`)
-  field-for-field.
+  needed. Matches the backend's own proxy-config shape field-for-field.
 - **New manifest field**: `proxy_config` (typed via the new `PluginProxyConfig`/`McpProxyConfig`
-  exports), mirroring `DeveloperPluginManifest.proxy_config` on the backend.
+  exports), mirroring the backend's own manifest shape.
 - `aivin deploy`/`aivin test` now detect `proxy_config` automatically and send the manifest alone —
   the `files` key is omitted entirely (not sent empty) so the backend's manifest-only deploy branch
   is actually reached.
 
 ### 🔍 Fixed — SDK client audited against the real backend implementation
 
-Every `ctx.sdk.*` param shape was re-verified against the backend's real `src/base/SDK.ts` (not
-just `CodeSDK.d.ts`, which turned out to diverge from the live implementation in several places).
-Fixed: `ai.getEmbeddings`/`ai.rerank` param shapes, `saveConnection`, `a2a`'s auto-resolution of a
-search query to an agent ID, `task.update/getById/delete`, `notification.push/sendMail`,
-`message.save`, `datastore.updateRow/deleteRow/smartQuery/batchUpdateByAI/batchDeleteRows`,
+Every `ctx.sdk.*` param shape was re-verified against the backend's real implementation (not
+just the SDK's own type declarations, which turned out to diverge from the live implementation in
+several places). Fixed: `ai.getEmbeddings`/`ai.rerank` param shapes, `saveConnection`, `a2a`'s
+auto-resolution of a search query to an agent ID, `task.update/getById/delete`,
+`notification.push/sendMail`, `message.save`,
+`datastore.updateRow/deleteRow/smartQuery/batchUpdateByAI/batchDeleteRows`,
 `store.transaction`'s per-operation `table_id`, and `mongo.model(name)`'s Mongoose-style shape.
 Removed sugar methods that don't actually exist on the real SDK (`ai.tts/stt/getModels/calculateTokens`,
 `knowledge.store/get/del/reinforce`, `agent.ask/hil`, `task.gen/addComment/requestSupport`, the
@@ -854,29 +945,28 @@ standalone `think` namespace — replaced by `causality.think/absorb`). Docs (`d
 
 ### 💥 Breaking — full rewrite of the transport layer and CLI
 
-The SDK previously talked to the backend over Redis Pub/Sub (`RedisIO`, `PubSubIO`, `ContextIO`,
-`LLMIO`, `MongoIO`, `BullIO`) — a protocol the live backend no longer implements at all. Verified
-against the real backend (`src/base/sdk/`, `src/plugins/`) and rewrote to match:
+The SDK previously talked to the backend over an older pubsub-based protocol that the live backend
+no longer implements at all. Verified against the real backend and rewrote to match:
 
 - **New transport**: gRPC (`SdkTransportService.Invoke`, `src/proto/sdk_transport.proto`), the same
   proto used both directions — plugin → host (`ctx.sdk.*`) and host → plugin (running `main()`).
-- **New client**: `SDKClient` (`ctx.sdk`) — full parity with the backend's own `CodeSDK.d.ts`
+- **New client**: `SDKClient` (`ctx.sdk`) — full parity with the backend's own plugin-contract type
   (`ai`, `vector`, `knowledge`, `task`, `store`, `redis`, `mongo`, `workspace`, `agent`, `realtime`,
-  `queue`, and more). Removed `RedisIO`/`PubSubIO`/`ContextIO`/`LLMIO`/`MongoIO`/`BullIO` and their
+  `queue`, and more). Removed the old pubsub-protocol client modules and their
   DTOs entirely — nothing left that talks to the old protocol.
-- **New `PluginServer`**: a real gRPC server (was a Bull-queue worker pulling jobs — the opposite
+- **New `PluginServer`**: a real gRPC server (was a queue-worker pulling jobs — the opposite
   direction from how the backend actually invokes Docker-runtime plugins).
-- **New `manifest.json` schema**: mirrors the backend's `DeveloperPluginManifest` field-for-field
+- **New `manifest.json` schema**: mirrors the backend's own manifest shape field-for-field
   (`sdk_scopes`, `connection_id`, `timeout_ms`, `initable`, ...).
-- **New CLI commands**: `aivin plugin make "<description>"` (AI codegen via the real `/code/generate`
+- **New CLI commands**: `aivin plugin make "<description>"` (AI codegen via the real generation
   endpoint, prompted to target this SDK's conventions), `aivin test` (deploy to a non-production
-  test instance via `/plugins/test/deploy`), `aivin deploy` (real `/plugins/deploy`, always private
+  test instance), `aivin deploy` (real deploy endpoint, always private
   to your org).
 - **Removed**: the old "stacks" concept (`AI_LLM`/`REDIS_CACHE`/`MONGODB`/`BACKGROUND_JOBS`) and the
   docker-compose sidecar generation it drove — storage/realtime/queue are now host-mediated via
   `ctx.sdk`, so plugins never receive raw database credentials.
 - Also fixed along the way: `aivin deploy`'s broken `axios.post` call (Authorization header was
-  never actually sent), an event-listener leak in the old Bull-based job tracking, and several
+  never actually sent), an event-listener leak in the old queue-based job tracking, and several
   stale/duplicated doc pages describing an architecture that no longer existed.
 - **Removed** the named `import { sdk } from '@aivin-labs/sdk'` export — it was a redundant spelling of
   the default import (`import SDK from '@aivin-labs/sdk'`). Use the default import, per-namespace
@@ -886,20 +976,20 @@ against the real backend (`src/base/sdk/`, `src/plugins/`) and rewrote to match:
 
 ### 🔧 Fixed
 
-- **Khởi tạo trùng lặp**: Sửa lỗi `RedisIO.init()` được gọi 2 lần (trong `index.ts` và `PubSubIO.init()`)
-- **PubSubIO**: Loại bỏ việc gọi `RedisIO.init()` trong `PubSubIO.init()` để tránh khởi tạo trùng lặp
+- **Khởi tạo trùng lặp**: Sửa lỗi Redis client được khởi tạo 2 lần khi module import
+- **PubSub init**: Loại bỏ việc gọi khởi tạo Redis trùng lặp trong module pubsub
 
 ### 🆕 Added
 
-- **BullIO Types**: Thêm các types mới vào exports
+- **Job queue types**: Thêm các types mới vào exports
   - `JobFailedError`: Error handler cho job thất bại
   - `JobHandler`: Type definition cho job handler functions
   - `JobProcessor`: Interface cho job processor configuration
 - **Context Types**: Cập nhật ContextDTO để đồng bộ với source DTOs
-  - `User`: Thêm các fields mới từ UserDTO (`name`, `email`, `phone`, `gender`, etc.)
-  - `Task`: Cập nhật từ TodoModel với đầy đủ fields (`order`, `key`, `step`, `handler_history`, etc.)
+  - `User`: Thêm các fields mới (`name`, `email`, `phone`, `gender`, etc.)
+  - `Task`: Cập nhật với đầy đủ fields (`order`, `key`, `step`, `handler_history`, etc.)
   - `HandlerHistory`: Interface mới cho lịch sử xử lý task
-  - `Workspace`, `Project`, `Message`, `Session`: Các interfaces mới từ DTOs tương ứng
+  - `Workspace`, `Project`, `Message`, `Session`: Các interfaces mới tương ứng
 - **GenderType**: Enum mới cho giới tính (`MALE`, `FEMALE`, `OTHER`)
 
 ### 🧹 Cleaned
@@ -916,12 +1006,12 @@ against the real backend (`src/base/sdk/`, `src/plugins/`) and rewrote to match:
 
 - **DATA_STRUCTURES.md**: Cập nhật toàn bộ types documentation
   - Thêm phần Context Types với examples
-  - Thêm phần BullIO Types với advanced usage
+  - Thêm phần job queue Types với advanced usage
   - Cập nhật import statements
 - **README.md**: Cập nhật hướng dẫn khởi tạo
   - Thêm cảnh báo về tự động khởi tạo
   - Cập nhật environment variables
-- **PubSubIO.md**: Cập nhật phần khởi tạo để phản ánh fix
+- **Pub/Sub docs**: Cập nhật phần khởi tạo để phản ánh fix
 
 ### 🔄 Changed
 

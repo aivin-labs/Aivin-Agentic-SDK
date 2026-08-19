@@ -1,8 +1,11 @@
 # 🧰 SDK Reference
 
 Every call your plugin makes to the Aivin platform goes through the same client — mirrors the
-platform's own SDK contract (`CodeSDK.d.ts`), so anything documented here works exactly the same
-for every plugin.
+platform's own SDK contract, so anything documented here works exactly the same
+for every plugin. Writing a plugin (deployed via `aivin` CLI) is the recommended default — see the
+[root README](../README.md) — but everything below applies just as well to a third-party
+application calling the SDK directly with no plugin/container involved at all; see [Standalone use
+(third-party applications)](#standalone-use-third-party-applications) below for that path.
 
 **Preferred style: import just the namespaces you use.**
 
@@ -53,22 +56,65 @@ Its one remaining niche: the imports only resolve while a `main()` invocation is
 window, so code that isn't guaranteed to run inside `main()`'s async context still needs the
 `ctx.sdk` reference handed to it.
 
+## Standalone use (third-party applications)
+
+Everything above assumes your code runs inside `main()`, invoked by a real plugin container the
+platform host spawned — that's what gives it a `secret`/`cap` automatically. A genuine third-party
+application — a script, a backend service, anything that isn't a plugin container at all but still
+wants to call `ai.prompt`, `store.set`, etc. against your Aivin infrastructure directly — uses
+`connectStandalone()` instead:
+
+```typescript
+import { connectStandalone, ai } from '@aivin-labs/sdk';
+
+await connectStandalone(async () => {
+  const summary = await ai.prompt('Summarize this for me');
+  console.log(summary);
+}, { workspaceId: 'ws_123' });
+```
+
+Authentication resolves from one of two sources, in priority order:
+
+1. **`AIVIN_APIKEY` env var** (+ optional `AIVIN_BASE_URL`, same default as everywhere else in this
+   SDK) — the explicit way to hand a long-lived process (a server, a CI job) its identity.
+2. **`~/.aivin/credentials`** — the same file `aivin login` already writes for the CLI. If
+   `AIVIN_APIKEY` isn't set, a local script picks up whatever `aivin login` session is already
+   active on the machine, zero extra setup.
+
+Either way, the key needs `full_access` scope (the same bar `aivin login`'s key already has).
+`connectStandalone()` exchanges it for a real `cap`+`secret` pair via `POST /plugins/sdk/session`
+— the same mechanism a plugin container gets automatically at startup — then runs your function
+with that identity bound as the ambient invocation, so the normal `import { ai } from
+'@aivin-labs/sdk'` style resolves exactly like it does inside `main()`.
+
+Each `connectStandalone()` call mints its own short-lived cap (capped at 1 hour server-side, 5
+minutes if you don't pass `ttlSec`) — there's no automatic background refresh, so a long-running
+process should call it again once its current session's work is done rather than trying to reuse
+one indefinitely. Lower-level building blocks (`resolveApiKeyIdentity()`, `mintStandaloneSession()`)
+are exported too, for callers that want to manage the `SDKClient`/ambient binding themselves.
+
 ## AI & LLM — `ai`
 
 Full reference: [sdk/ai.md](./sdk/ai.md).
 
-All four verified against the backend's real `get ai()` (`src/base/SDK.ts`) - `getEmbeddings` and
-`rerank` in particular take different shapes than the old (wrong) docs implied.
+Verified against the backend's real implementation and registration -
+`getEmbeddings` and `rerank` in particular take different shapes than the old (wrong) docs
+implied, and `ocr`/`image`/`video` are real, backend-implemented RPCs this SDK didn't wire up until
+recently.
 
 | Method                          | Description                                                                                                                          |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `prompt(quest, opts?)`            | Generate text / run LLM logic. `opts`: `model`, `temperature`, `max_tokens`, `schema` (force JSON output), `reasoning`, `websearch`. |
+| `prompt(quest, opts?, driver?)`   | Generate text / run LLM logic; `driver` (3rd param) switches to streaming (`Writable` or `MessageListener`). `opts`: `tier` (prefer over `model`), `temperature`, `max_tokens`, `schema` (force JSON output), `reasoning`, `websearch`. |
+| `promptStream(quest, opts?)`      | Pull-based (`AsyncIterable`) counterpart of `prompt()`'s streaming mode.                                                              |
+| `cancel(requestId)`               | Cancels an in-flight `prompt()`/`promptStream()` call by `opts.request_id`, from anywhere.                                           |
 | `getEmbedding(text, opts?)`       | Single embedding vector. `text` may be a string or a string array.                                                                    |
 | `getEmbeddings(texts, opts?)`     | Batch embeddings — faster than looping `getEmbedding`. `texts` is a plain array, not wrapped in an object.                          |
 | `rerank(query, docs, opts?)`      | Re-rank a list of documents by relevance to `query`.                                                                                 |
 | `tts(text, opts?)` / `stt(audio, opts?)` | Text-to-speech / speech-to-text.                                                                                              |
 | `getModels(provider?)`            | List available models, optionally filtered by provider.                                                                              |
 | `calculateTokens(data)`           | Estimate token usage for a prompt/payload without a real LLM call.                                                                    |
+| `ocr(image)`                      | Extract text from an image.                                                                                                           |
+| `image(prompt, opts?)` / `video(prompt, opts?)` | Generate an image/video from a text prompt — set `opts.max_cost_usd` unless cost is a non-concern. |
 
 ## Knowledge & Vector (RAG) — `knowledge`, `vector`
 
@@ -196,7 +242,7 @@ Full reference: [sdk/file.md](./sdk/file.md), [sdk/resource.md](./sdk/resource.m
 | `usage.checkBalance()` / `.getUsage()`                                                                   | Billing/quota info.                                                      |
 | `automation.createJob/.updateJob/.getJobs/.deleteJob/.executeById`                                       | Cron-style automation jobs — a job is `mission`/`prompt` (what) + `schedule_condition` (when, natural language), not `name`/`schedule`/`logic`. See [sdk/automation.md](./sdk/automation.md). |
 | `datasource.getSources/.getDomains/.learn`                                                               | Training data source management.                                         |
-| `browser.run(mission, opts?)` / `.cancel(sessionId?)`                                                    | Trigger a full AI Browser mission (multi-step, self-correcting, slower) / request cooperative cancellation. |
+| `browser.run(mission, opts?)` / `.cancel(sessionId?)` / `.runStream(mission, opts?)`                     | Trigger a full AI Browser mission (multi-step, self-correcting, slower) / request cooperative cancellation / same mission with live step-progress streaming. |
 | `causality.think(query, opts?)` / `.absorb(causalities, opts?)` / `.search(query, opts?)`                | Deep causal reasoning over accumulated context, feeding new causal facts back in, and direct graph search. |
 | `attachment.search/.upload/.deepResearch/.evaluate/.queryTabularData/.queryMediaTimestamp/.extract`       | Attachment analysis helpers.                                             |
 | `message.init/.stream`                                                                                    | Init a placeholder message record / low-level streaming push into chat.  |
@@ -287,8 +333,8 @@ interface TraceEvent {       // = CallTrace + ordering/timestamp
 
 **Consumers today**: `PluginServer.ts` (Docker-runtime plugins - tracing on by default, including
 in production, since an intermittent-in-production failure is exactly the kind of thing a
-local-only trace would never catch) and, on the host side, `c:\Project\be\src\code\helper\bootstrapper.js`
-(BE's native/`PROMOTED_CODE` plugin runtime - added the same day `withTrace` was fixed to actually
+local-only trace would never catch) and, on the host side, the backend's native/`PROMOTED_CODE`
+plugin runtime (added the same day `withTrace` was fixed to actually
 be exported from this package's top level, see the `[1.0.3]` changelog entry). Guard against
 `typeof withTrace === 'function'` before relying on it if your code might run against an older
 installed version of this package - the export was missing entirely before `1.0.3`.

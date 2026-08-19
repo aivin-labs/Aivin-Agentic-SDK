@@ -24,6 +24,8 @@ export { withTrace, getCurrentTrace, formatTraceForConsole } from './sdk/trace';
 export type { InvocationTrace, TraceEvent, CapturedLog, CapturedLogLevel } from './sdk/trace';
 export { ContextBuilder } from './sdk/ContextBuilder';
 export type { ContextBuilderHandle } from './sdk/ContextBuilder';
+export { connectStandalone, mintStandaloneSession, resolveApiKeyIdentity } from './sdk/standalone';
+export type { ApiKeyIdentity, StandaloneSession, StandaloneSessionOptions } from './sdk/standalone';
 
 export * from './types/PluginTypes';
 export * from './types/SDKTypes';

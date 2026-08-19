@@ -206,7 +206,7 @@ export async function main(mission, input, ctx) {
 ## Notes & caveats
 
 - `updateRow`/`deleteRow`/`smartQuery`/`batchUpdateByAI` signatures are fixed to match the real,
-  simpler backend signatures in `src/base/SDK.ts`'s `get table()` — they do **not** take
+  simpler backend signatures — they do **not** take
   `workspace_id`/`project_id`/`ctx`; those are resolved server-side from the caller's identity, not
   passed by the client. Do not add them even if other `table` methods require them.
 - `ensureTable` and `getRow` are confirmed in the real backend but were previously missing from this
@@ -222,7 +222,7 @@ export async function main(mission, input, ctx) {
   through the SDK — `deduplicateTable`/`batchDeleteRows`/`batchUpdateByAI` return a `snapshot_id` you
   can now pass to `rollback` to undo them.
 - Named `table`, not `datastore` — the export was renamed to match the real wire namespace
-  (`table.*`, see `DatastoreSDK.ts` on the backend) in SDK `1.0.4`. `import { datastore } from
+  (`table.*` on the backend) in SDK `1.0.4`. `import { datastore } from
   '@aivin-labs/sdk'` no longer resolves to anything; use `table`.
 
 ## See also

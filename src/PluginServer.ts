@@ -18,18 +18,18 @@ import { PluginWorkerHost } from './worker/PluginWorkerHost';
 export interface PluginServerConfig {
   plugins_path?: string;
   /** gRPC bind address. Defaults to SDK_GRPC_SERVER_BIND env or '0.0.0.0:50051' (the port the
-   * host's DockerHelper/PluginRunner expects at `${pluginId}:50051` inside the container network). */
+   * host expects at `${pluginId}:50051` inside the container network). */
   bind_address?: string;
 }
 
 /**
- * Plugin Server - the gRPC counterpart of the backend's GrpcSDKServer/GrpcTransportAdapter.
+ * Plugin Server - the gRPC counterpart of the backend's own inbound call handler.
  *
- * The host calls INTO this server (see PluginRunner.handleDockerRuntime on the backend) using
- * the SAME `SdkTransportService.Invoke` RPC that this SDK's own SDKClient uses to call OUT to the
- * host - one proto, two directions. `namespace` on an inbound call is just the human-readable
- * "mission" (why this run was triggered), never a function name or plugin id - the host resolves
- * which manifest entry is being invoked long before it ever reaches this container.
+ * The host calls INTO this server using the SAME `SdkTransportService.Invoke` RPC that this SDK's
+ * own SDKClient uses to call OUT to the host - one proto, two directions. `namespace` on an inbound
+ * call is just the human-readable "mission" (why this run was triggered), never a function name or
+ * plugin id - the host resolves which manifest entry is being invoked long before it ever reaches
+ * this container.
  *
  * Entry point resolution:
  * - **Single-function plugin** (`manifest.json` is one object): always resolves the same entry
@@ -37,8 +37,8 @@ export interface PluginServerConfig {
  * - **Multi-function plugin** (`manifest.json` is `{ ...commonFields, plugins: [...] }`, several
  *   entries sharing one container): a real invocation from the host carries the specific entry's
  *   `func` explicitly in
- *   `context.metadata.func` (the host already knows exactly which manifest/plugin id was targeted -
- *   see PluginRunner.handleDockerRuntime on the backend) - this server just calls that named export
+ *   `context.metadata.func` (the host already knows exactly which manifest/plugin id was targeted)
+ *   - this server just calls that named export
  *   directly, no local matching needed. `mission`-based matching against the local array manifest's
  *   `id`/`func` only kicks in as a fallback, for `aivin start`'s local dev/curl testing where
  *   there's no real host in the loop to supply an explicit `func`.
@@ -49,8 +49,8 @@ export interface PluginServerConfig {
  * filesystem/child_process/worker access restricted via Node's Permission Model. Every `ctx.sdk.*`
  * call the plugin makes is relayed back to THIS class (`PluginWorkerHost`) over `postMessage`,
  * which is the only thing that ever calls the real `invokeHost`/`invokeHostStream` with the real
- * secret. See `docs/draft/plugins/worker-sandbox.md` for the full design and
- * `docs/SECURITY.md` for why this exists. Off by default - identical behavior to before when unset.
+ * secret. See `docs/draft/plugins/worker-sandbox.md` for the full design and motivation. Off by
+ * default - identical behavior to before when unset.
  */
 export class PluginServer extends EventEmitter {
   private readonly config: Required<PluginServerConfig>;
@@ -247,12 +247,12 @@ export class PluginServer extends EventEmitter {
       };
 
       // Thread the host-minted capability through to any outbound sdk.call() the handler makes
-      // during this invocation - see GrpcCapabilityStore on the backend for why this matters.
+      // during this invocation - resolved server-side, not trusted from anything this process claims.
       const cap = hostContext?.metadata?.['_cap'];
 
       // Multi-function plugin: the host already resolved exactly which manifest entry this
-      // invocation targets and tells us its `func` directly - see PluginRunner.handleDockerRuntime
-      // on the backend. Absent for a single-function plugin (and for `aivin start`'s local testing).
+      // invocation targets and tells us its `func` directly.
+      // Absent for a single-function plugin (and for `aivin start`'s local testing).
       const explicitFunc: string | undefined = hostContext?.metadata?.['func'];
 
       await this.ensureLoaded();

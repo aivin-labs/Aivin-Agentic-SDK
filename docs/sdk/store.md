@@ -264,7 +264,7 @@ export async function main(mission, input, ctx) {
 
 ## Notes & caveats
 
-- Data is scoped to this plugin + tenant on the host side (per `CodeSDK.d.ts`'s `store` contract) —
+- Data is scoped to this plugin + tenant on the host side —
   you cannot read or write another plugin's or tenant's rows through `store`.
 - Every method sends `table` as `table_id` on the wire (`store.set` → `{ table_id: table, ... }`,
   etc.) — a naming detail only, transparent when using the sugar methods.

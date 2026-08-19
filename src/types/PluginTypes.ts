@@ -1,8 +1,8 @@
 /**
  * Plugin manifest type definitions.
  *
- * Mirrored from the backend's `DeveloperPluginManifest`/`PluginManifest`
- * (`src/plugins/dto/PluginDTO.ts`) - only the fields a plugin author actually
+ * Mirrored from the backend's own `DeveloperPluginManifest`/`PluginManifest`
+ * types - only the fields a plugin author actually
  * sets in `manifest.json` are included here. Fields the platform assigns
  * itself (`id`, `is_verified`, `is_official`, `client`, `store_status`,
  * `verification_status`, `network_config`, `checksum`, `rate_limit`, ...)
@@ -19,7 +19,7 @@ export interface PluginManifest {
   email?: string;
   /**
    * URL to an image representing this plugin (shown in plugin listings/pickers) - a plain string
-   * field on the real backend schema (`PluginModel.ts`'s `avatar`), not previously typed here.
+   * field on the real backend schema (`avatar`), not previously typed here.
    * Omit it and the platform falls back to the publishing user's own avatar. Host the image
    * yourself first (e.g. `resource.upload({ file, is_public: true })` - see docs/sdk/resource.md -
    * or any public URL) and put the resulting URL here; this field does not accept raw image bytes.
@@ -62,7 +62,7 @@ export interface PluginManifest {
 
   /** Namespace for a shared connection - plugins with the same connection_id share credentials. */
   connection_id?: string;
-  /** Execution timeout in ms (host also caps this - see PluginRunner.MAX_DOCKER_TIMEOUT_MS). */
+  /** Execution timeout in ms (host also enforces its own hard cap). */
   timeout_ms?: number;
   /** Per-plugin override of the platform's default circuit breaker (opens after repeated
    *  failures to stop retrying a broken plugin). Omitted = system default thresholds. */
@@ -193,7 +193,7 @@ export function flattenManifestFile(
 
 /**
  * Plain object + union type instead of `enum` - see the note on `TriggerType` below for why.
- * Mirrors the backend's `PluginProxyType` (`src/plugins/dto/PluginDTO.ts`) exactly.
+ * Mirrors the backend's own `PluginProxyType` exactly.
  */
 export const PluginProxyType = {
   MCP: 'mcp',

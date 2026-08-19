@@ -119,12 +119,12 @@ Historically, streaming that text into the user's chat as it generates required 
 - the (Docker-runtime-only) `realtime.publish` side channel, which is fire-and-forget, not
   persisted, and not rendered as a chat message by default (the frontend has to know to listen for
   your specific event name and do something with it), or
-- for in-process/official plugins only, manually wiring `AIEngine.prompt(quest, opts, driver)` with
-  a `{ ctx, listener }` driver built from the host's internal `MessageService` — not reachable from
-  plugin code at all (`AIEngine` isn't part of the SDK surface), so in practice nobody could do this
-  outside the platform's own agent orchestration code.
+- for in-process/official plugins only, manually wiring the backend's own prompt+stream-into-chat
+  mechanism with a driver built from the host's internal message-persistence layer — not reachable
+  from plugin code at all, so in practice nobody could do this outside the platform's own agent
+  orchestration code.
 
-`agent.reply` is that exact internal mechanism (the same one `AgentService` uses for its own
+`agent.reply` is that exact internal mechanism (the same one the backend's own agent service uses for its own
 feedback messages), exposed as a one-line SDK call. It's on `agent`, not `ai`, because it's
 inherently about *this invocation's chat session* (creates a real, persisted message, buffered/
 flushed the same way the platform's own replies are) — not a generic model-inference primitive.
@@ -214,7 +214,7 @@ export async function main(mission, input, ctx) {
   plugin manifest's `workflow_data`. This is the shape to reach for whenever the flow was designed
   visually and you just need to *run* it from code (a webhook handler, a scheduled check, a manual
   trigger) without publishing it as its own plugin first. The backend
-  (`WorkflowPluginService.buildStages`) converts it into executable stages and throws a specific
+  converts it into executable stages and throws a specific
   error naming the offending node if something's malformed — nothing is silently ignored.
 - **`FlowStage[]`** — an already-built list of stages, for building/generating a flow programmatically
   (e.g. constructing steps from data rather than a canvas) instead of hand-authoring a node graph.
@@ -437,7 +437,7 @@ progress narration, a formatted report — that nobody needs to click on.
 
 ## Notes & caveats
 
-- **`agent.ask`/`agent.hil` do not exist** on the real backend's `get agent()` (`src/base/SDK.ts`).
+- **`agent.ask`/`agent.hil` do not exist** on the real backend's `get agent()`.
   Only the standalone top-level `ask(question, schema?)` and `hil(key, prompt, options?)` functions
   are real — call those directly instead of looking for a namespaced variant.
 - `agent.delegate` itself isn't defined on the real backend's `get agent()` either — only the

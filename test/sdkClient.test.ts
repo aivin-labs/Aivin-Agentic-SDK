@@ -20,16 +20,29 @@ function makeClient(
   return new SDKClient(identity, { cap: 'cap-token', invoke });
 }
 
-/** Fake StreamHandle backing a promptStream() test - yields `deltas` then resolves `final` to
- *  their concatenation, without touching the real gRPC transport. */
-function fakeStreamHandle(deltas: string[]): StreamHandle<string> {
-  async function* chunks(): AsyncGenerator<string, void, void> {
-    for (const d of deltas) yield d;
+/** Fake StreamHandle backing a promptStream()/prompt(listener) test - yields `deltas` (plus
+ *  optional `lines`/`rawLines`/`reasoning`) then resolves `final` to their concatenation, without
+ *  touching the real gRPC transport. */
+function fakeStreamHandle(
+  deltas: string[],
+  extra: { lines?: import('../src/types/SDKTypes').ParsedLine[]; rawLines?: string[]; reasoning?: string[]; final?: Promise<string> } = {},
+): StreamHandle<string> {
+  async function* toGen<V>(items: V[]): AsyncGenerator<V, void, void> {
+    for (const item of items) yield item;
   }
-  return { chunks: chunks(), final: Promise.resolve(deltas.join('')) };
+  return {
+    chunks: toGen(deltas),
+    final: extra.final ?? Promise.resolve(deltas.join('')),
+    lines: toGen(extra.lines ?? []),
+    rawLines: toGen(extra.rawLines ?? []),
+    reasoning: toGen(extra.reasoning ?? []),
+  };
 }
 
-function makeStreamingClient(invokeStream: (request: InvokeRequest) => StreamHandle<any>) {
+function makeStreamingClient(
+  invokeStream: (request: InvokeRequest) => StreamHandle<any>,
+  invoke: (request: InvokeRequest) => Promise<any> = async () => ({}),
+) {
   const identity: PluginIdentity = {
     user: { id: 'u1' } as any,
     workspace: { id: 'w1' } as any,
@@ -39,7 +52,7 @@ function makeStreamingClient(invokeStream: (request: InvokeRequest) => StreamHan
     config: {},
     metadata: {},
   } as PluginIdentity;
-  return new SDKClient(identity, { cap: 'cap-token', invoke: async () => ({}), invokeStream });
+  return new SDKClient(identity, { cap: 'cap-token', invoke, invokeStream });
 }
 
 test('looksLikeAgentId accepts short hex/UUID-like strings, rejects natural language', () => {
@@ -182,6 +195,256 @@ test('ai.promptStream() text resolves even when textStream is never iterated', a
   const client = makeStreamingClient(() => fakeStreamHandle(['ignored', ' chunks']));
   const result = client.ai.promptStream('say hello');
   assert.equal(await result.text, 'ignored chunks');
+});
+
+test('ai.prompt() with no listener uses the plain unary call, never touches invokeStream', async () => {
+  const invokeCalls: InvokeRequest[] = [];
+  const client = makeStreamingClient(
+    () => { throw new Error('should not open a stream'); },
+    async (req) => { invokeCalls.push(req); return 'a plain reply'; },
+  );
+
+  const result = await client.ai.prompt('say hello', { temperature: 0.2 });
+
+  assert.equal(result, 'a plain reply');
+  assert.equal(invokeCalls.length, 1);
+  assert.equal(invokeCalls[0].namespace, 'ai.prompt');
+});
+
+test('ai.prompt() unary path forwards opts.signal to invoke() and strips it out of the wire opts', async () => {
+  const invokeCalls: InvokeRequest[] = [];
+  const client = makeStreamingClient(
+    () => { throw new Error('should not open a stream'); },
+    async (req) => { invokeCalls.push(req); return 'a plain reply'; },
+  );
+  const controller = new AbortController();
+
+  await client.ai.prompt('q', { temperature: 0.2, signal: controller.signal });
+
+  assert.equal(invokeCalls.length, 1);
+  assert.equal(invokeCalls[0].signal, controller.signal);
+  assert.deepEqual(invokeCalls[0].params, { quest: 'q', opts: { temperature: 0.2 } }, 'signal must not leak into the wire opts');
+});
+
+test('ai.prompt() streaming path forwards opts.signal to invokeStream() and strips it out of the wire opts', () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeStreamingClient((req) => { requests.push(req); return fakeStreamHandle([]); });
+  const controller = new AbortController();
+
+  client.ai.prompt('q', { temperature: 0.2, signal: controller.signal }, { onUpdate: () => {} });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].signal, controller.signal);
+  assert.deepEqual(requests[0].params, {
+    quest: 'q',
+    opts: { temperature: 0.2 },
+    wantsRawLine: false,
+    wantsReasoning: false,
+  });
+});
+
+test('ai.prompt() with a MessageListener (even one with only onCompleted) streams, not the unary call', async () => {
+  const invokeCalls: InvokeRequest[] = [];
+  const streamCalls: InvokeRequest[] = [];
+  const client = makeStreamingClient(
+    (req) => { streamCalls.push(req); return fakeStreamHandle(['a', ' streamed', ' reply']); },
+    async (req) => { invokeCalls.push(req); return 'should not be used'; },
+  );
+
+  let completed: any;
+  const result = await client.ai.prompt('say hello', undefined, { onCompleted: () => { completed = true; } });
+
+  assert.equal(result, 'a streamed reply');
+  assert.equal(streamCalls.length, 1, 'any 3rd arg (Writable or MessageListener) must trigger the streaming RPC');
+  assert.equal(invokeCalls.length, 0);
+  assert.equal(completed, true);
+});
+
+test('ai.prompt() with a Writable-shaped 3rd arg (.write/.end) pipes text deltas into it and calls .end()', async () => {
+  const client = makeStreamingClient(() => fakeStreamHandle(['Hel', 'lo', ' world']));
+  const written: string[] = [];
+  let ended = false;
+  const fakeWritable = {
+    write: (chunk: string) => { written.push(chunk); return true; },
+    end: () => { ended = true; },
+  };
+
+  const result = await client.ai.prompt('say hello', undefined, fakeWritable as any);
+
+  assert.deepEqual(written, ['Hel', 'lo', ' world']);
+  assert.equal(ended, true);
+  assert.equal(result, 'Hello world');
+});
+
+test('ai.prompt() Writable adapter respects real backpressure - waits for "drain" before writing the next chunk', async () => {
+  const client = makeStreamingClient(() => fakeStreamHandle(['a', 'b', 'c']));
+  const written: string[] = [];
+  const drainListeners: Array<() => void> = [];
+  let writeCallCount = 0;
+  const fakeWritable = {
+    write: (chunk: string) => {
+      written.push(chunk);
+      writeCallCount++;
+      return writeCallCount !== 1; // simulate the buffer being full after the 1st write only
+    },
+    end: () => {},
+    once: (event: string, cb: () => void) => { if (event === 'drain') drainListeners.push(cb); },
+  };
+
+  const promise = client.ai.prompt('q', undefined, fakeWritable as any);
+
+  // Let the drain loop run far enough to write chunk 1 and get stuck awaiting 'drain'.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(written, ['a'], 'must not write the 2nd chunk until "drain" fires for the 1st');
+  assert.equal(drainListeners.length, 1);
+
+  drainListeners[0](); // simulate the writable actually draining
+  await promise;
+
+  assert.deepEqual(written, ['a', 'b', 'c']);
+});
+
+test('ai.prompt() with a Writable-shaped 3rd arg calls .destroy(err) instead of .end() when the stream fails', async () => {
+  const client = makeStreamingClient(() => fakeStreamHandle(['partial'], { final: Promise.reject(new Error('boom')) }));
+  let destroyErr: any;
+  let ended = false;
+  const fakeWritable = {
+    write: () => true,
+    end: () => { ended = true; },
+    destroy: (err: any) => { destroyErr = err; },
+  };
+
+  await assert.rejects(client.ai.prompt('say hello', undefined, fakeWritable as any), /boom/);
+
+  assert.equal(ended, false);
+  assert.equal(destroyErr?.message, 'boom');
+});
+
+test('ai.prompt() with onUpdate streams chunks in order and resolves to the aggregated result', async () => {
+  const client = makeStreamingClient(() => fakeStreamHandle(['Hel', 'lo', ' world']));
+  const collected: string[] = [];
+  let completed = false;
+
+  const result = await client.ai.prompt('say hello', undefined, {
+    onUpdate: (delta) => collected.push(delta),
+    onCompleted: () => { completed = true; },
+  });
+
+  assert.deepEqual(collected, ['Hel', 'lo', ' world']);
+  assert.equal(result, 'Hello world');
+  assert.equal(completed, true);
+});
+
+test('ai.prompt() sets wantsRawLine/wantsReasoning in params based on which callbacks the listener declares', () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeStreamingClient((req) => {
+    requests.push(req);
+    return fakeStreamHandle([]);
+  });
+
+  client.ai.prompt('q', undefined, { onUpdate: () => {} });
+  client.ai.prompt('q', undefined, { onUpdate: () => {}, onLine: () => {} });
+  client.ai.prompt('q', undefined, { onUpdate: () => {}, onReasoning: () => {} });
+
+  assert.deepEqual(requests[0].params, { quest: 'q', opts: {}, wantsRawLine: false, wantsReasoning: false });
+  assert.deepEqual(requests[1].params, { quest: 'q', opts: {}, wantsRawLine: true, wantsReasoning: false });
+  assert.deepEqual(requests[2].params, { quest: 'q', opts: {}, wantsRawLine: false, wantsReasoning: true });
+});
+
+test('ai.prompt() onParsedLine/onLine/onReasoning receive events from their respective streams', async () => {
+  const client = makeStreamingClient(() =>
+    fakeStreamHandle(['ignored text'], {
+      lines: [{ form: 'NODE', fields: { id: 'a' } }],
+      rawLines: ['raw line 1'],
+      reasoning: ['thinking...'],
+    }),
+  );
+
+  const parsedLines: any[] = [];
+  const rawLines: string[] = [];
+  const reasoningChunks: string[] = [];
+
+  await client.ai.prompt('q', { lineSchema: 'NODE [id:string - id]' }, {
+    onParsedLine: (parsed, index) => parsedLines.push({ parsed, index }),
+    onLine: (line) => rawLines.push(line),
+    onReasoning: (text) => reasoningChunks.push(text),
+  });
+
+  assert.deepEqual(parsedLines, [{ parsed: { form: 'NODE', fields: { id: 'a' } }, index: 0 }]);
+  assert.deepEqual(rawLines, ['raw line 1']);
+  assert.deepEqual(reasoningChunks, ['thinking...']);
+});
+
+test('ai.prompt() calls onError (not onCompleted) when the stream fails, and rejects for the caller', async () => {
+  const client = makeStreamingClient(() =>
+    fakeStreamHandle(['partial'], { final: Promise.reject(new Error('transport blew up')) }),
+  );
+
+  let completedFired = false;
+  let errorSeen: any;
+
+  await assert.rejects(
+    client.ai.prompt('q', undefined, {
+      onUpdate: () => {},
+      onCompleted: () => { completedFired = true; },
+      onError: (err) => { errorSeen = err; },
+    }),
+    /transport blew up/,
+  );
+
+  assert.equal(completedFired, false);
+  assert.equal(errorSeen?.message, 'transport blew up');
+});
+
+test('ai.prompt() a throwing onUpdate is caught and logged, not left to silently drop the rest of the stream', async () => {
+  const originalConsoleError = console.error;
+  const loggedErrors: any[] = [];
+  console.error = (...args: any[]) => { loggedErrors.push(args); };
+  try {
+    const client = makeStreamingClient(() => fakeStreamHandle(['a', 'b', 'c']));
+    const seen: string[] = [];
+
+    const result = await client.ai.prompt('q', undefined, {
+      onUpdate: (delta) => {
+        seen.push(delta);
+        if (delta === 'b') throw new Error('boom from a buggy plugin callback');
+      },
+    });
+
+    // 'a' and 'c' still got through despite 'b' throwing - the bug didn't truncate the stream.
+    assert.deepEqual(seen, ['a', 'b', 'c']);
+    assert.equal(result, 'abc');
+    assert.ok(loggedErrors.some((args) => String(args[1]?.message ?? args[1]).includes('boom from a buggy plugin callback')));
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
+
+test('ai.cancel() calls the ai.cancel namespace with unique_request_id', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { cancelled_locally: true };
+  });
+
+  const result = await client.ai.cancel('req-123');
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].namespace, 'ai.cancel');
+  assert.deepEqual(requests[0].params, { unique_request_id: 'req-123' });
+  assert.deepEqual(result, { cancelled_locally: true });
+});
+
+test('ai.prompt() translates opts.request_id to the wire field unique_request_id (unlike opts.signal, it is NOT stripped)', async () => {
+  const invokeCalls: InvokeRequest[] = [];
+  const client = makeStreamingClient(
+    () => { throw new Error('should not open a stream'); },
+    async (req) => { invokeCalls.push(req); return 'a plain reply'; },
+  );
+
+  await client.ai.prompt('q', { request_id: 'req-456' });
+
+  assert.deepEqual(invokeCalls[0].params, { quest: 'q', opts: { unique_request_id: 'req-456' } });
 });
 
 test('browser.run() calls browser.run with mission and opts nested under data', async () => {

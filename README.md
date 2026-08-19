@@ -47,8 +47,28 @@ export async function main(
 }
 ```
 
+## Plugin vs. standalone: which should you use?
+
+The snippet above is a **plugin** — the recommended path, and what the rest of this README walks
+through. But the same `@aivin-labs/sdk` package works two ways:
+
+- **Aivin Plugin (recommended default).** Your code runs as a container the platform builds,
+  deploys, and manages for you — `aivin create` → `aivin deploy`, no server to provision, no infra
+  to operate, and every plugin becomes automatically discoverable/callable by any AI Staff agent in
+  the workspace. Pick this whenever you're building something new, or whenever you want Aivin's
+  DevOps handled for you instead of running it yourself.
+- **Standalone, inside an application you already run.** Already have your own backend/script/CI
+  job and just want to call Aivin's infrastructure — AI, vector search, storage, tasks, and more —
+  directly from it, without deploying anything through Aivin at all? Use `connectStandalone()`
+  instead of `main()` — see
+  [docs/SDK.md#standalone-use-third-party-applications](docs/SDK.md#standalone-use-third-party-applications).
+  You trade away the zero-ops container hosting and AI Staff auto-discovery the plugin path gives
+  you for free, but there's nothing to deploy on Aivin's side either — the right fit when your app
+  already has its own home and just needs Aivin's backend capabilities.
+
 ## Table of Contents
 
+- [Plugin vs. standalone: which should you use?](#plugin-vs-standalone-which-should-you-use)
 - [Why the Aivin SDK](#why-the-aivin-sdk)
 - [Requirements](#requirements)
 - [Getting Started](#getting-started)
@@ -447,6 +467,7 @@ machine — there's no per-project credential to manage.
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `SDK_ENDPOINT` | Backend gRPC endpoint for the SDK's outbound calls | `sdk.aivin.cloud:443` |
+| `AIVIN_APIKEY` | API key for a **standalone third-party app** (not a plugin container) calling the SDK directly via `connectStandalone()` — see [docs/SDK.md#standalone-use-third-party-applications](docs/SDK.md#standalone-use-third-party-applications) | none — falls back to `~/.aivin/credentials` (`aivin login`) |
 | `AIVIN_BASE_URL` | Aivin API base URL (only for a self-hosted/staging instance) | `https://api.aivin.cloud` |
 | `AIVIN_WEB_URL` | Platform web app URL, used by `aivin login`'s browser flow | `https://brain.aivin.cloud` |
 | `LOCAL_TEST_PORT` | Port for the local HTTP test shim (`POST /invoke`) | `4001` |
@@ -533,12 +554,11 @@ Full reference, including the `sse` transport for remote MCP servers:
 
 ## Documentation
 
-- 🧰 **[SDK Reference](docs/SDK.md)** — every namespace: AI, vector/knowledge, tasks, storage, realtime, and more
+- 🧰 **[SDK Reference](docs/SDK.md)** — every namespace: AI, vector/knowledge, tasks, storage, realtime, and more (including [standalone use](docs/SDK.md#standalone-use-third-party-applications) for a third-party app calling the SDK directly, no plugin)
 - 📋 **[Manifest Reference](docs/MANIFEST.md)** — every `manifest.json` field, including MCP proxy plugins
 - 🪪 **[Plugin Context](docs/CONTEXT.md)** — every field of `ctx`, the runtime identity your handler receives
 - 📖 **[Plugin Development Guide](docs/PLUGIN_DEVELOPMENT_GUIDE.md)** — writing/testing a handler, best practices
 - 🏗️ **[Architecture](docs/ARCHITECTURE.md)** — how the gRPC transport and container model work
-- 🔒 **[Security](docs/SECURITY.md)** — auth model (`cap`/`secret`), threat boundaries, `configureTransport`/`configureMtls`
 - 📚 **[Examples](docs/EXAMPLES.md)** — real, complete plugins across common use cases
 - 📊 **[Data Structures](docs/DATA_STRUCTURES.md)** — `User`, `Workspace`, `Task`, `PluginManifest`, and friends
 - 📝 **[Changelog](docs/CHANGELOG.md)** — release history

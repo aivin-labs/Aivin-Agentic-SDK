@@ -37,8 +37,8 @@ export async function main(mission, input, ctx) {
 
 ## Notes & caveats
 
-- `search`/`store`/`reinforce` are confirmed against `BrainSDK.ts`'s `registerKnowledgeHandlers()`
-  on the backend. `get`/`del` (from `CodeSDK.d.ts`) have no confirmed real implementation on the
+- `search`/`store`/`reinforce` are confirmed against the backend's real registration handlers.
+  `get`/`del` (from the SDK's own declared contract) have no confirmed real implementation on the
   sugar object — use `call('knowledge.batchGetKnowledge', ...)` / `call('knowledge.batchDeleteKnowledge', ...)`
   directly if you need them.
 - `store`'s `client`/`orgId`/`workspaceId` are always resolved server-side from the caller's `ctx` —

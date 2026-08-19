@@ -18,8 +18,8 @@ if (fs.existsSync(globalCredentialsPath)) {
 
 /**
  * Plugin Server Entry Point
- * Starts the gRPC server the Aivin host calls into (see PluginRunner.handleDockerRuntime on the
- * backend) to trigger this plugin's `main()`. Bound on port 50051 inside the plugin's container.
+ * Starts the gRPC server the Aivin host calls into to trigger this plugin's `main()`.
+ * Bound on port 50051 inside the plugin's container.
  */
 async function startPluginServer() {
   try {
@@ -41,11 +41,11 @@ async function startPluginServer() {
     const displayVersion = manifest.version || entries[0]?.version || '0.0.0';
 
     // Real deployed containers never set NODE_ENV=production - verified against the backend's own
-    // DockerHelper.createDockerCompose: it writes PLUGIN_ID/SDK_ENDPOINT/SDK_SECRET_FILE/etc, but no
+    // deploy pipeline: it writes PLUGIN_ID/SDK_ENDPOINT/SDK_SECRET_FILE/etc, but no
     // NODE_ENV, and the generated Dockerfile has no `ENV NODE_ENV=production` either (`node:24-alpine`
     // doesn't set it, and `npm ci --only=production` only skips devDependencies at install time - it
     // doesn't touch the runtime env var). So NODE_ENV alone can't tell local dev apart from a real
-    // container. `SDK_SECRET_FILE` is a much more reliable signal: DockerHelper sets it on every
+    // container. `SDK_SECRET_FILE` is a much more reliable signal: the host sets it on every
     // Docker-runtime deploy (bind-mounted `.secrets.env`, see GrpcInvoker.ts's resolveSdkSecret()),
     // and `aivin start` never does - that file/relationship only exists once the platform actually
     // deployed this container. NODE_ENV is kept as a secondary OR in case a future deploy path (or a
