@@ -263,6 +263,77 @@ Imported the same way as the namespaces: `import { ask, hil, a2a, log, wait, con
 | `user(id)`                   | Public profile for a user in the current tenant.         |
 | `getCachedUser(id)`          | Redis-cached variant of `user(id)` - for high-traffic channels. |
 
+`plugin.*` (calling/discovering other plugins) has its own section right below - not listed in the
+table above since it's a namespace object, not a bare top-level function.
+
+## Calling another plugin - `plugin.trigger`
+
+Full reference: [sdk/plugin.md](./sdk/plugin.md).
+
+```typescript
+import { plugin } from '@aivin-labs/sdk';
+
+const result = await plugin.trigger(
+  'official.comprehensive_audit',      // plugin id
+  'Audit the Q3 report for compliance', // mission - shown in the target plugin's own logs/telemetry
+  { content: reportText, audit_scope: ['finance'] }, // arguments - matches the target plugin's input schema
+);
+```
+
+Do **not** use the generic `call('pluginId.purpose', params)` escape hatch to invoke another
+plugin - `call()`'s `namespace` argument is split on the *first* dot, which breaks for the vast
+majority of real plugin ids (`official.xxx`, `analyst.xxx`, ...) since the id itself already
+contains one. `plugin.trigger()` takes `pluginId` and `mission` as two separate arguments
+specifically to avoid that ambiguity - `call()` stays reserved for host namespaces (`ai.*`,
+`table.*`, ...), which never contain dots in the id portion.
+
+By default the target plugin runs in the same workspace/agent/session as the caller (ambient,
+same identity `call()` uses). `opts` lets you redirect a specific invocation elsewhere:
+
+| `opts` field  | Effect                                                                 |
+| ------------- | ----------------------------------------------------------------------- |
+| `workspaceId` | Run the target plugin in a different workspace. The host re-verifies the *caller's real identity* (from the cap token, not this field) has admin access to that workspace before running anything - passing an arbitrary id you don't have access to fails, it does not silently impersonate. |
+| `agentId`     | Run under a specific agent's context (creates a real agent session) instead of the caller's own. |
+| `sessionId`   | Reuse an existing session instead of creating a new one - only meaningful together with `agentId`. |
+| `timeoutMs` / `signal` | Same as `call()`. |
+
+## Discovering plugins - `plugin.info` / `plugin.search` / `plugin.fit` / `plugin.infoBatch` / `plugin.status`
+
+Read-only - no execution, no side effects. Tenant scoping (which plugins are visible) is always
+resolved from the caller's own identity server-side, not a field you pass.
+
+```typescript
+import { plugin } from '@aivin-labs/sdk';
+
+const manifest = await plugin.info('official.comprehensive_audit'); // null if not found/visible
+
+const candidates = await plugin.search('audit a financial report', { limit: 5, threshold: 0.5 });
+// PluginManifest[], ranked by relevance
+
+const best = await plugin.fit('audit this quarter\'s numbers'); // PluginManifest | null
+if (best) {
+  await plugin.trigger(best.id, 'Audit the numbers', { content: reportText });
+}
+```
+
+| Method | Description |
+| ------ | ------------ |
+| `plugin.info(pluginId)` | Fetch one plugin's manifest (name, description, input/output schema) by id. `null` if it doesn't exist or isn't visible to this tenant. |
+| `plugin.search(query, opts?)` | Semantic search over the plugin store (this tenant's installed plugins + the public global store). Returns a ranked list - use when you want several candidates to choose from. `opts.limit`/`opts.threshold` (0-1) tune result count/quality. |
+| `plugin.fit(query, opts?)` | Picks the single BEST-fitting plugin for a described task, or `null` if nothing clears the confidence bar - same selection logic the platform's own agent uses to decide whether a request should route to a plugin at all. Prefer this over `search()` when you want one clear answer rather than a list. `opts.allowedPluginIds` restricts candidates to a given allowlist. |
+| `plugin.infoBatch(pluginIds)` | Fetch several manifests at once - saves N round trips vs `info()` in a loop. |
+| `plugin.status(pluginId)` | `{ allowed, state }` - checks circuit-breaker health without triggering. `state: 'open'` means recent failures tripped the breaker; check before `trigger()` to fail fast instead of waiting on a plugin already known to be failing. |
+
+`search`/`fit` take a moment to run (embeddings + vector search) - don't call them on every single
+invocation if you already know the target plugin id; go straight to `plugin.trigger()` instead.
+
+```typescript
+const result = await plugin.trigger('official.task_report', 'Weekly report for Marketing', { period: 'weekly' }, {
+  workspaceId: 'ws_marketing',
+  agentId: 'agent_reporting_bot',
+});
+```
+
 ## Testing
 
 Not runtime helpers for inside `main()` — these are for `test/*.test.ts`, to unit-test your plugin

@@ -292,11 +292,13 @@ Every namespace below is importable on its own — `import { ai, store } from '@
 | `causality` | Deep causal reasoning over accumulated context | [docs/sdk/causality.md](docs/sdk/causality.md) |
 | `attachment` | Search, upload, deep-research, evaluate, and extract raw content from attached documents | [docs/sdk/attachment.md](docs/sdk/attachment.md) |
 | `code` | Execute AI-generated/cached business logic with sandboxed args | [docs/sdk/code.md](docs/sdk/code.md) |
+| `plugin` | Call another plugin by id (`trigger`), or discover one (`info`/`infoBatch`/`search`/`fit`/`status`) | [docs/sdk/plugin.md](docs/sdk/plugin.md) |
 
 A few top-level functions round out the surface, imported the same way: `ask(...)`/`hil(...)` for
-human-in-the-loop input, `a2a(...)` for agent delegation, `user(id)`/`getCachedUser(id)` for a
-user's public profile, `log(...)`/`wait(...)`, and `config()` for this plugin's saved workspace
-config.
+human-in-the-loop input, `a2a(...)` for agent delegation, `plugin.trigger(pluginId, mission,
+params?, opts?)`/`plugin.info(pluginId)`/`plugin.search(query, opts?)`/`plugin.fit(query, opts?)`
+for calling and discovering other plugins, `user(id)`/`getCachedUser(id)` for a user's public
+profile, `log(...)`/`wait(...)`, and `config()` for this plugin's saved workspace config.
 
 Every method is scoped to this plugin and the invoking tenant on the host side — your container
 never receives a raw database credential. Full method-by-method reference with parameter shapes:

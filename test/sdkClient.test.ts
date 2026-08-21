@@ -80,6 +80,119 @@ test('call() sends namespace/params and merges cap into context.metadata', async
   assert.equal((requests[0].context as any).metadata.trace, 'abc');
 });
 
+test('triggerPlugin() dispatches through the plugin.trigger namespace with pluginId/mission as separate fields, not concatenated', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { status: 'success', data: { ok: true } };
+  });
+
+  const result = await client.triggerPlugin('official.comprehensive_audit', 'Audit Q3 report', { content: 'x' });
+
+  assert.deepEqual(result, { status: 'success', data: { ok: true } });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].namespace, 'plugin.trigger');
+  // plugin_id must stay intact (including its own dots) - never split like call('id.purpose', ...) would.
+  assert.deepEqual(requests[0].params, {
+    plugin_id: 'official.comprehensive_audit',
+    mission: 'Audit Q3 report',
+    arguments: { content: 'x' },
+    workspace_id: undefined,
+    agent_id: undefined,
+    session_id: undefined,
+  });
+});
+
+test('triggerPlugin() forwards opts.workspaceId/agentId/sessionId/timeoutMs as target-override fields', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return {};
+  });
+
+  await client.triggerPlugin('official.task_report', 'Weekly report', { period: 'weekly' }, {
+    workspaceId: 'ws_marketing',
+    agentId: 'agent_reporting_bot',
+    sessionId: 'sess_1',
+    timeoutMs: 5000,
+  });
+
+  assert.equal(requests[0].params.workspace_id, 'ws_marketing');
+  assert.equal(requests[0].params.agent_id, 'agent_reporting_bot');
+  assert.equal(requests[0].params.session_id, 'sess_1');
+  assert.equal(requests[0].timeoutMs, 5000);
+});
+
+test('pluginInfo() calls plugin.info with plugin_id', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { id: 'official.comprehensive_audit', name: 'Audit' };
+  });
+
+  const result = await client.pluginInfo('official.comprehensive_audit');
+
+  assert.deepEqual(result, { id: 'official.comprehensive_audit', name: 'Audit' });
+  assert.equal(requests[0].namespace, 'plugin.info');
+  assert.deepEqual(requests[0].params, { plugin_id: 'official.comprehensive_audit' });
+});
+
+test('pluginSearch() calls plugin.search with query/limit/threshold', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return [{ id: 'official.a' }, { id: 'official.b' }];
+  });
+
+  const result = await client.pluginSearch('audit a report', { limit: 5, threshold: 0.5 });
+
+  assert.equal(result.length, 2);
+  assert.equal(requests[0].namespace, 'plugin.search');
+  assert.deepEqual(requests[0].params, { query: 'audit a report', limit: 5, threshold: 0.5 });
+});
+
+test('pluginFit() calls plugin.fit with query/allowed_plugin_ids and can resolve null', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return null;
+  });
+
+  const result = await client.pluginFit('audit a report', { allowedPluginIds: ['official.a', 'official.b'] });
+
+  assert.equal(result, null);
+  assert.equal(requests[0].namespace, 'plugin.fit');
+  assert.deepEqual(requests[0].params, { query: 'audit a report', allowed_plugin_ids: ['official.a', 'official.b'] });
+});
+
+test('pluginInfoBatch() calls plugin.infoBatch with plugin_ids', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return [{ id: 'official.a' }, { id: 'official.b' }];
+  });
+
+  const result = await client.pluginInfoBatch(['official.a', 'official.b']);
+
+  assert.equal(result.length, 2);
+  assert.equal(requests[0].namespace, 'plugin.infoBatch');
+  assert.deepEqual(requests[0].params, { plugin_ids: ['official.a', 'official.b'] });
+});
+
+test('pluginStatus() calls plugin.status with plugin_id and returns allowed/state', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { allowed: false, state: 'open' };
+  });
+
+  const result = await client.pluginStatus('official.comprehensive_audit');
+
+  assert.deepEqual(result, { allowed: false, state: 'open' });
+  assert.equal(requests[0].namespace, 'plugin.status');
+  assert.deepEqual(requests[0].params, { plugin_id: 'official.comprehensive_audit' });
+});
+
 test('a2a() calls agent.delegate directly when target already looks like an agent id', async () => {
   const requests: InvokeRequest[] = [];
   const client = makeClient(async (req) => {

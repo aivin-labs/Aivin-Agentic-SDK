@@ -2,6 +2,86 @@
 
 ## Unreleased
 
+### 🆕 Added — `ai.prompt()`/`ai.promptStream()` opts gain `price_rate`
+
+```typescript
+import { ai } from '@aivin-labs/sdk';
+
+const tags = await ai.prompt('Suggest 3 short tags for this note', {
+  tier: 'nano',
+  price_rate: 0,
+});
+```
+
+`price_rate: 0` makes the host pick a zero-cost (`price_rate === 0`) candidate within the requested
+`tier` instead of its normal price-ranked pick, so the call never bills the org — useful for
+auxiliary/non-critical generations you don't want counted against spend. Falls back to the normal
+`tier` resolution (which may bill) if no free candidate in that tier is currently online; not a hard
+guarantee. Only `0` is supported today.
+
+### 🆕 Added — `plugin.trigger(pluginId, mission, params?, opts?)` calls another plugin by id
+
+```typescript
+import { plugin } from '@aivin-labs/sdk';
+
+const result = await plugin.trigger(
+  'official.comprehensive_audit',
+  'Audit the Q3 report for compliance',
+  { content: reportText, audit_scope: ['finance'] },
+);
+```
+
+Replaces the previously-documented `call('pluginId.purpose', params)` pattern for this use case:
+`call()`'s `namespace` argument splits on the *first* dot, which silently picks the wrong target
+for any plugin id that itself contains a dot (`official.xxx`, `analyst.xxx`, ... - the vast
+majority of real ids). `plugin.trigger()` takes `pluginId` and `mission` as separate arguments, so
+there's no string to split. `call()` remains correct for host namespaces (`ai.*`, `table.*`, ...),
+which never contain dots in the id portion themselves.
+
+Note: `plugin` here is a hand-written export, not `bindNamespace('plugin')` like the other
+namespace objects (`ai`, `table`, ...) - `SDKClient` already has an unrelated `@internal` field
+also named `plugin` (plugin-marketplace catalog ops, gated to a privileged internal caller), so
+this is backed directly by the new public `SDKClient.triggerPlugin()` method instead, sidestepping
+that name entirely.
+
+`opts.workspaceId`/`agentId`/`sessionId` optionally redirect the invocation to a different
+workspace/agent/session than the caller's own (ambient by default, same identity `call()` uses).
+See [docs/SDK.md#calling-another-plugin---plugintrigger](SDK.md#calling-another-plugin---plugintrigger).
+
+### 🆕 Added — `plugin.info`/`plugin.search`/`plugin.fit` for discovering plugins (read-only)
+
+```typescript
+const manifest = await plugin.info('official.comprehensive_audit');
+const candidates = await plugin.search('audit a financial report', { limit: 5 });
+const best = await plugin.fit('audit this quarter\'s numbers'); // PluginManifest | null
+```
+
+Same `plugin` namespace object `plugin.trigger` lives on (see entry above). `info` fetches one
+manifest by id; `search` returns a ranked list of candidates; `fit` picks a single best match (or
+`null`) using the same selection logic the platform's own agent uses to decide whether a request
+should route to a plugin at all. All 3 are read-only (no execution) and tenant-scoped from the
+caller's real identity server-side, same as everything else in this SDK - no tenant/client field to
+pass. See [docs/sdk/plugin.md](sdk/plugin.md).
+
+Backend: new SDK host route `plugin.trigger`, re-verifying the caller's real identity (from the cap
+token, never trusting `opts.workspaceId` as-is) against the target workspace before running
+anything.
+
+### 🆕 Added — `plugin.infoBatch`/`plugin.status` round out plugin discovery
+
+```typescript
+const manifests = await plugin.infoBatch(['official.a', 'official.b']); // saves N round trips
+const health = await plugin.status('official.comprehensive_audit'); // { allowed, state }
+if (!health.allowed) { /* circuit open - skip or fall back instead of calling trigger() */ }
+```
+
+`infoBatch` mirrors `workspace.getByIds` vs `workspace.get` (batch counterpart of `plugin.info`).
+`status` surfaces the plugin's existing circuit-breaker state (already enforced automatically on
+every real `trigger()` call) as a cheap read-only check you can make *before* triggering, to fail
+fast instead of waiting on a plugin already known to be failing repeatedly. There is intentionally
+no `plugin.cancel(...)` - the platform has no cancellation mechanism for an in-flight `trigger()`
+call today. See [docs/sdk/plugin.md](sdk/plugin.md).
+
 ### 🆕 Added — `connectStandalone()` lets a third-party app call the SDK directly, no plugin container
 
 ```typescript

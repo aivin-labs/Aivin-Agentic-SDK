@@ -257,6 +257,13 @@ export interface LLMPromptOptions {
    *  (0-5, mapped to each model's configured `price_rate`; lower = cheaper). Omit to let the tier's
    *  own declared candidate order decide. Verified against the backend's real behavior. */
   quality?: number;
+  /** Only meaningful alongside `tier`, and only `0` is currently supported - forces the host to pick
+   *  a zero-cost (`price_rate === 0`) candidate within that tier instead of its normal price-ranked
+   *  pick, so this call never bills the org. Falls back to the normal `tier` resolution (which may
+   *  bill) if no free candidate in that tier is currently online - it's a cost preference, not a hard
+   *  guarantee. Useful for auxiliary/non-critical generations (e.g. UI sample data) you don't want
+   *  counted against the org's spend. */
+  price_rate?: 0;
   /** Processing priority relative to other in-flight requests - doesn't change which model gets
    *  picked, only queuing order under load. Verified against the backend's real behavior. */
   priority?: 'high' | 'normal' | 'low';

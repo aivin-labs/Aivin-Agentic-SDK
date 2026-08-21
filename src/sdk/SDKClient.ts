@@ -69,6 +69,7 @@ import type {
   Workspace,
   WorkflowGraph,
 } from '../types/SDKTypes';
+import type { PluginManifest } from '../types/PluginTypes';
 
 export interface SDKClientOptions {
   /** Per-invocation capability token minted by the host (context.metadata._cap on the inbound Invoke). */
@@ -185,6 +186,78 @@ export class SDKClient {
       timeoutMs: timeoutMs ?? this.defaultTimeoutMs,
       signal,
     });
+  }
+
+  /**
+   * Gọi 1 plugin khác theo id thật, KHÔNG qua cách ghép chuỗi "pluginId.purpose" mà `call()` dùng
+   * cho namespace host (`ai.prompt`, `table.createTable`...) - `plugin_id` trong hệ thống này
+   * thường tự chứa dấu chấm (`official.xxx`, `analyst.xxx`), nên ghép mission vào cùng string sẽ
+   * tách sai. `mission`/`params`/`opts` đi qua field JSON riêng, dispatch qua route cố định
+   * `plugin.trigger` phía host (xem `PluginTriggerSDK.ts`).
+   *
+   * `opts.workspaceId`/`agentId`/`sessionId` là optional target override - không truyền thì chạy
+   * đúng workspace/agent/session hiện tại (ambient, y hệt `call()`). Có truyền thì host tự verify
+   * lại quyền của danh tính THẬT (từ cap token, không phải tham số này) trên workspace target
+   * trước khi cho chạy - không có cách nào tự khai `ctx` để giả mạo quyền qua tham số.
+   */
+  async triggerPlugin<T = any>(
+    pluginId: string,
+    mission: string,
+    params?: Record<string, any>,
+    opts?: { workspaceId?: string; agentId?: string; sessionId?: string; timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<T> {
+    return this.call<T>(
+      'plugin.trigger',
+      {
+        plugin_id: pluginId,
+        mission,
+        arguments: params,
+        workspace_id: opts?.workspaceId,
+        agent_id: opts?.agentId,
+        session_id: opts?.sessionId,
+      },
+      opts?.timeoutMs,
+      opts?.signal,
+    );
+  }
+
+  /** Fetch 1 plugin's manifest by id (name, description, input/output schema, ...) - read-only,
+   *  scoped to the caller's own tenant automatically (host resolves it from the cap token, no
+   *  tenant field to pass here). `null` if the id doesn't exist or isn't visible to this tenant. */
+  async pluginInfo(pluginId: string): Promise<PluginManifest | null> {
+    return this.call<PluginManifest | null>('plugin.info', { plugin_id: pluginId });
+  }
+
+  /** Semantic search over the plugin store (this tenant's installed plugins + the public global
+   *  store) for plugins matching `query` - useful for discovering what's available before calling
+   *  `triggerPlugin()`. Ranked by relevance; `opts.threshold` (0-1) filters out weak matches. */
+  async pluginSearch(query: string, opts?: { limit?: number; threshold?: number }): Promise<PluginManifest[]> {
+    return this.call<PluginManifest[]>('plugin.search', { query, limit: opts?.limit, threshold: opts?.threshold });
+  }
+
+  /** Picks the single BEST-fitting plugin for a described task (`query`), or `null` if nothing
+   *  clears the confidence bar - same selection logic the platform's own agent uses to decide
+   *  whether a user request should route to a plugin at all. Prefer this over `pluginSearch()`
+   *  when you want one clear answer ("does a plugin fit this?") rather than a ranked list to
+   *  choose from yourself. `opts.allowedPluginIds` restricts candidates to a given allowlist. */
+  async pluginFit(query: string, opts?: { allowedPluginIds?: string[] }): Promise<PluginManifest | null> {
+    return this.call<PluginManifest | null>('plugin.fit', { query, allowed_plugin_ids: opts?.allowedPluginIds });
+  }
+
+  /** Fetch several plugins' manifests at once by id - saves N round trips vs calling `pluginInfo()`
+   *  in a loop. Mirrors `workspace.getByIds` vs `workspace.get`. Ids that don't exist or aren't
+   *  visible to this tenant are simply omitted from the result (not `null` placeholders). */
+  async pluginInfoBatch(pluginIds: string[]): Promise<PluginManifest[]> {
+    return this.call<PluginManifest[]>('plugin.infoBatch', { plugin_ids: pluginIds });
+  }
+
+  /** Checks whether a plugin's circuit breaker currently allows execution, without actually
+   *  triggering it - useful to check before `triggerPlugin()` if you want to fail fast/fall back
+   *  instead of waiting on a plugin already known to be failing repeatedly. `state` is `'closed'`
+   *  (healthy, executes normally) or `'open'` (recent failures tripped the breaker; `allowed` will
+   *  be `false` until it resets). */
+  async pluginStatus(pluginId: string): Promise<{ allowed: boolean; state: 'closed' | 'open' }> {
+    return this.call('plugin.status', { plugin_id: pluginId });
   }
 
   /**

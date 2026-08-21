@@ -73,6 +73,41 @@ export const mongo = bindNamespace('mongo');
 export function call(func: string, params?: any, timeoutMs?: number) {
   return getCurrentSDK().call(func, params, timeoutMs);
 }
+/**
+ * `plugin.trigger/info/search/fit(...)` - call and discover other plugins. A hand-written object,
+ * NOT `bindNamespace()` like the namespaces above: `bindNamespace()` proxies straight to a
+ * same-named field on `SDKClient` (`getCurrentSDK()['plugin']`), which is already taken by an
+ * unrelated `@internal` field (plugin-marketplace catalog ops, gated to a privileged internal
+ * caller - see its own doc comment in `SDKClient.ts`). Defining `plugin` here directly, backed by
+ * the public `SDKClient.triggerPlugin()`/`pluginInfo()`/`pluginSearch()`/`pluginFit()` methods
+ * instead, sidesteps that entirely - no collision, because this object is never reachable through
+ * `getCurrentSDK().plugin`.
+ */
+export const plugin = {
+  trigger<T = any>(
+    pluginId: string,
+    mission: string,
+    params?: Record<string, any>,
+    opts?: { workspaceId?: string; agentId?: string; sessionId?: string; timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<T> {
+    return getCurrentSDK().triggerPlugin<T>(pluginId, mission, params, opts);
+  },
+  info(pluginId: string) {
+    return getCurrentSDK().pluginInfo(pluginId);
+  },
+  search(query: string, opts?: { limit?: number; threshold?: number }) {
+    return getCurrentSDK().pluginSearch(query, opts);
+  },
+  fit(query: string, opts?: { allowedPluginIds?: string[] }) {
+    return getCurrentSDK().pluginFit(query, opts);
+  },
+  infoBatch(pluginIds: string[]) {
+    return getCurrentSDK().pluginInfoBatch(pluginIds);
+  },
+  status(pluginId: string) {
+    return getCurrentSDK().pluginStatus(pluginId);
+  },
+};
 export function ask(question: string, schema?: Record<string, any>) {
   return getCurrentSDK().ask(question, schema);
 }
