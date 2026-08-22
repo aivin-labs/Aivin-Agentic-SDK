@@ -80,6 +80,60 @@ test('call() sends namespace/params and merges cap into context.metadata', async
   assert.equal((requests[0].context as any).metadata.trace, 'abc');
 });
 
+// ── Regression tests for the task.* field-name drift fixed 2026-08-21 ──────────────────────────
+// `content`/`assignee_id`/`due_date` looked plausible and matched this SDK's own (also-wrong)
+// Task type, but the real backend (TaskService._sanitizeCreateTaskInput/UpdateTaskDTO/
+// TaskFilterRequest) only ever accepted `description`/`assign_id`/`from_date`+`to_date` - every
+// other field here was silently dropped server-side. Pinning the exact wire shape so this can't
+// silently drift back.
+test('task.create() sends description/assign_id/from_date/to_date - not content/assignee_id/due_date', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { id: 't1' };
+  });
+
+  await client.task.create({ title: 'Fix login bug', description: 'Users cannot log in on Safari', assign_id: 'u2', workspace_id: 'w1', to_date: '2026-09-01' });
+
+  assert.equal(requests[0].namespace, 'task.createTask');
+  assert.deepEqual(requests[0].params, {
+    title: 'Fix login bug',
+    description: 'Users cannot log in on Safari',
+    assign_id: 'u2',
+    workspace_id: 'w1',
+    to_date: '2026-09-01',
+  });
+  assert.ok(!('content' in (requests[0].params as any)));
+  assert.ok(!('assignee_id' in (requests[0].params as any)));
+  assert.ok(!('due_date' in (requests[0].params as any)));
+});
+
+test('task.update() sends description, not content, alongside task_id', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return { id: 't1' };
+  });
+
+  await client.task.update('t1', { status: 'doing', description: 'Updated details' });
+
+  assert.equal(requests[0].namespace, 'task.updateTask');
+  assert.deepEqual(requests[0].params, { task_id: 't1', status: 'doing', description: 'Updated details' });
+});
+
+test('task.list() filters by assign_id, not assignee_id', async () => {
+  const requests: InvokeRequest[] = [];
+  const client = makeClient(async (req) => {
+    requests.push(req);
+    return [];
+  });
+
+  await client.task.list({ workspace_id: 'w1', assign_id: 'u2' });
+
+  assert.equal(requests[0].namespace, 'task.getTasks');
+  assert.deepEqual(requests[0].params, { workspace_id: 'w1', assign_id: 'u2' });
+});
+
 test('triggerPlugin() dispatches through the plugin.trigger namespace with pluginId/mission as separate fields, not concatenated', async () => {
   const requests: InvokeRequest[] = [];
   const client = makeClient(async (req) => {

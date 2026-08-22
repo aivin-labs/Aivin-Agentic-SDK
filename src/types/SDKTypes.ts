@@ -45,12 +45,21 @@ export interface MessageSession {
 export interface Task {
   id: string;
   title: string;
-  content?: string;
+  // ✅ FIX (2026-08-21): this file's own header says these types are "mirrored from the backend's
+  // own plugin-contract type declaration... kept in sync manually" - they had drifted from it.
+  // Cross-checked against the backend's real task create/update/filter code (TaskService.
+  // _sanitizeCreateTaskInput's field whitelist, UpdateTaskDTO, TaskFilterRequest): the actual field
+  // names are `description`/`assign_id`/`from_date`+`to_date`, not `content`/`assignee_id`/
+  // `due_date` - the latter were silently dropped by the backend (Mongoose schema strictness /
+  // DTO whitelist) whenever anyone (a plugin author, or this SDK's own CLI) sent them, exactly as
+  // documented here. Same fix applied to the backend's own CodeSDK.d.ts (the source this mirrors).
+  description?: string;
   status: 'todo' | 'doing' | 'done' | 'backlog' | 'cancel';
   priority?: 'low' | 'medium' | 'high' | 'urgent';
-  assignee_id?: string;
+  assign_id?: string;
   workspace_id: string;
-  due_date?: string;
+  from_date?: string;
+  to_date?: string;
 }
 
 export interface Agent {

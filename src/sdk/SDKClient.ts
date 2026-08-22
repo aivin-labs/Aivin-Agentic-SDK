@@ -1243,22 +1243,30 @@ export class SDKClient {
    * `get task()`) - they previously sent `id`, which the real `task.updateTask`/`getTaskById`/
    * `deleteTask` handlers don't read, so those calls were silently broken. `gen`/`addComment`/
    * `requestSupport` confirmed against the backend's real implementation.
+   *
+   * ✅ FIX (2026-08-21): `create`/`update`/`list` params renamed `content`→`description`,
+   * `assignee_id`→`assign_id`, `due_date`→`from_date`/`to_date` - same drift as `Task` in
+   * SDKTypes.ts (see that file's comment), confirmed against the backend's real
+   * TaskService._sanitizeCreateTaskInput whitelist/UpdateTaskDTO/TaskFilterRequest. The old names
+   * were silently dropped server-side on every call - `create` never actually set a description,
+   * `list`'s assignee filter never actually filtered.
    */
   readonly task = {
     create: (params: {
       title: string;
-      content?: string;
-      assignee_id?: string;
+      description?: string;
+      assign_id?: string;
       workspace_id: string;
-      due_date?: string;
+      from_date?: string;
+      to_date?: string;
     }): Promise<Task> => this.call('task.createTask', params),
-    update: (taskId: string, data: { status?: string; content?: string }): Promise<Task> =>
+    update: (taskId: string, data: { status?: string; description?: string }): Promise<Task> =>
       this.call('task.updateTask', { task_id: taskId, ...data }),
     getById: (taskId: string): Promise<Task> => this.call('task.getTaskById', { task_id: taskId }),
     list: (params: {
       workspace_id: string;
       status?: string;
-      assignee_id?: string;
+      assign_id?: string;
       limit?: number;
     }): Promise<Task[]> => this.call('task.getTasks', params),
     delete: (taskId: string): Promise<any> => this.call('task.deleteTask', { task_id: taskId }),
